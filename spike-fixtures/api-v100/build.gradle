@@ -1,0 +1,47 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = providers.gradleProperty('api_group').get()
+version = '1.0.0'
+
+base {
+    archivesName = providers.gradleProperty('api_artifact').get()
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+    options.compilerArgs.addAll(['-Xlint:all', '-Werror'])
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes(
+                'Automatic-Module-Name': 'com.cybersammy.bugreport.api',
+                'Implementation-Title': 'Bug Report API',
+                'Implementation-Version': project.version
+        )
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            artifactId = providers.gradleProperty('api_artifact').get()
+        }
+    }
+    repositories {
+        maven {
+            name = 'spike'
+            url = rootProject.layout.buildDirectory.dir('spike-maven')
+        }
+    }
+}

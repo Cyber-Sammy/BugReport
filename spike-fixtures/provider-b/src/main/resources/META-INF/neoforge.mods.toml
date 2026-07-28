@@ -1,0 +1,23 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="bugreport_provider_b"
+version="${version}"
+displayName="Bug Report Provider Fixture B"
+description='''Provider fixture compiled only against Bug Report API 0.2.0.'''
+
+[[dependencies.bugreport_provider_b]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.227,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.bugreport_provider_b]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="BOTH"

@@ -1,0 +1,69 @@
+plugins {
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+neoForge {
+    version = providers.gradleProperty('neo_version').get()
+
+    runs {
+        providerOnly {
+            server()
+            gameDirectory = file('run/provider-only')
+            programArgument '--nogui'
+            systemProperty 'bugreport.spike.marker',
+                    rootProject.layout.buildDirectory.file(
+                            'spike-results/provider-only.marker').get().asFile.absolutePath
+            systemProperty 'bugreport.spike.exitOwner', 'bugreport_provider_a'
+        }
+
+        bugReportOnly {
+            server()
+            gameDirectory = file('run/bugreport-only')
+            programArgument '--nogui'
+            systemProperty 'bugreport.spike.marker',
+                    rootProject.layout.buildDirectory.file(
+                            'spike-results/bugreport-only.marker').get().asFile.absolutePath
+            systemProperty 'bugreport.spike.exitOwner', 'bugreport'
+        }
+
+        compatible {
+            server()
+            gameDirectory = file('run/compatible')
+            programArgument '--nogui'
+            systemProperty 'bugreport.spike.marker',
+                    rootProject.layout.buildDirectory.file(
+                            'spike-results/compatible.marker').get().asFile.absolutePath
+            systemProperty 'bugreport.spike.exitOwner', 'bugreport_provider_a'
+        }
+
+        incompatible {
+            server()
+            gameDirectory = file('run/incompatible')
+            programArgument '--nogui'
+            systemProperty 'bugreport.spike.marker',
+                    rootProject.layout.buildDirectory.file(
+                            'spike-results/incompatible.marker').get().asFile.absolutePath
+            systemProperty 'bugreport.spike.exitOwner', 'bugreport'
+        }
+    }
+}
+
+tasks.named('runProviderOnly') {
+    dependsOn rootProject.tasks.named('prepareProviderOnly')
+}
+
+tasks.named('runBugReportOnly') {
+    dependsOn rootProject.tasks.named('prepareBugReportOnly')
+}
+
+tasks.named('runCompatible') {
+    dependsOn rootProject.tasks.named('prepareCompatible')
+}
+
+tasks.named('runIncompatible') {
+    dependsOn rootProject.tasks.named('prepareIncompatible')
+}

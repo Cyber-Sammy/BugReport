@@ -1,0 +1,17 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url = 'https://maven.neoforged.net/releases' }
+    }
+}
+
+rootProject.name = 'bug-report'
+
+include 'bugreport-api'
+include 'bugreport-neoforge'
+include 'spike-fixtures:api-v010'
+include 'spike-fixtures:api-v100'
+include 'spike-fixtures:provider-a'
+include 'spike-fixtures:provider-b'
+include 'spike-fixtures:provider-incompatible'
+include 'spike-runtime'

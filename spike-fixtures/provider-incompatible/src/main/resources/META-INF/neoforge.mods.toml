@@ -1,0 +1,23 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="bugreport_provider_incompatible"
+version="${version}"
+displayName="Bug Report Incompatible Provider Fixture"
+description='''Negative fixture requiring Bug Report API 1.x.'''
+
+[[dependencies.bugreport_provider_incompatible]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.227,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.bugreport_provider_incompatible]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="BOTH"

@@ -1,0 +1,50 @@
+plugins {
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+group = 'com.cybersammy.bugreport.fixtures'
+version = '0.0.1-spike'
+
+base {
+    archivesName = 'bugreport-provider-b'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+neoForge {
+    version = providers.gradleProperty('neo_version').get()
+    mods {
+        bugreport_provider_b {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+dependencies {
+    jarJar(implementation("${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.2.0")) {
+        version {
+            strictly '[0.2.0,1.0.0)'
+            prefer '0.2.0'
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand version: project.version
+    }
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes 'Automatic-Module-Name': 'com.cybersammy.bugreport.fixture.provider.b'
+    }
+}

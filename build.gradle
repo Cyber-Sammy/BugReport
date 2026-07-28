@@ -1,0 +1,287 @@
+plugins {
+    id 'base'
+}
+
+allprojects {
+    repositories {
+        maven {
+            name = 'spikeApi'
+            url = rootProject.layout.buildDirectory.dir('spike-maven')
+            content {
+                includeGroup providers.gradleProperty('api_group').get()
+            }
+        }
+        mavenCentral()
+    }
+}
+
+def apiProjects = [
+        project(':bugreport-api'),
+        project(':spike-fixtures:api-v010'),
+        project(':spike-fixtures:api-v100')
+]
+
+def consumerProjects = [
+        project(':bugreport-neoforge'),
+        project(':spike-fixtures:provider-a'),
+        project(':spike-fixtures:provider-b'),
+        project(':spike-fixtures:provider-incompatible')
+]
+
+tasks.register('publishSpikeApis') {
+    group = 'verification'
+    description = 'Publishes all API compatibility variants to the isolated spike repository.'
+    dependsOn apiProjects.collect {
+        "${it.path}:publishMavenJavaPublicationToSpikeRepository"
+    }
+}
+
+consumerProjects.each { consumer ->
+    consumer.tasks.configureEach { task ->
+        if (task.name in ['compileJava', 'jarJar']) {
+            task.dependsOn rootProject.tasks.named('publishSpikeApis')
+        }
+    }
+}
+
+tasks.register('buildSpikeArtifacts', GradleBuild) {
+    group = 'verification'
+    description = 'Builds the API and all production-like Jar-in-Jar fixture mods.'
+    dependsOn rootProject.tasks.named('publishSpikeApis')
+    dir = rootProject.projectDir
+    tasks = consumerProjects.collect { "${it.path}:jar".toString() }
+}
+
+def scenarios = [
+        providerOnly : [
+                directory: 'provider-only',
+                artifacts: [project(':spike-fixtures:provider-a')],
+                exitOwner: 'bugreport_provider_a'
+        ],
+        bugReportOnly: [
+                directory: 'bugreport-only',
+                artifacts: [project(':bugreport-neoforge')],
+                exitOwner: 'bugreport'
+        ],
+        compatible   : [
+                directory: 'compatible',
+                artifacts: [
+                        project(':bugreport-neoforge'),
+                        project(':spike-fixtures:provider-a'),
+                        project(':spike-fixtures:provider-b')
+                ],
+                exitOwner: 'bugreport_provider_a'
+        ],
+        incompatible : [
+                directory: 'incompatible',
+                artifacts: [
+                        project(':bugreport-neoforge'),
+                        project(':spike-fixtures:provider-incompatible')
+                ],
+                exitOwner: 'bugreport'
+        ]
+]
+
+scenarios.each { scenarioName, scenario ->
+    def capitalized = scenarioName.capitalize()
+    tasks.register("prepare${capitalized}", Sync) {
+        group = 'verification'
+        description = "Prepares the ${scenarioName} production-like NeoForge runtime."
+        dependsOn rootProject.tasks.named('buildSpikeArtifacts')
+
+        into layout.projectDirectory.dir("spike-runtime/run/${scenario.directory}/mods")
+        from {
+            scenario.artifacts.collect {
+                it.tasks.named('jar').get().archiveFile.get().asFile
+            }
+        }
+
+        doFirst {
+            delete layout.buildDirectory.file("spike-results/${scenario.directory}.marker")
+        }
+        doLast {
+            def gameDirectory = layout.projectDirectory.dir(
+                    "spike-runtime/run/${scenario.directory}").asFile
+            gameDirectory.mkdirs()
+            new File(gameDirectory, 'eula.txt').setText('eula=true\n', 'UTF-8')
+            new File(gameDirectory, 'server.properties').setText(
+                    'online-mode=false\nserver-port=0\n', 'UTF-8')
+        }
+    }
+}
+
+def verifyMarker = { String taskName, String scenarioDirectory, List<String> roles,
+                     String expectedVersion, boolean singleSource ->
+    tasks.register(taskName) {
+        group = 'verification'
+        dependsOn ":spike-runtime:run${taskName - 'verify'}"
+        doLast {
+            def marker = layout.buildDirectory.file(
+                    "spike-results/${scenarioDirectory}.marker").get().asFile
+            if (!marker.isFile()) {
+                throw new GradleException("Missing runtime marker: ${marker}")
+            }
+
+            def started = marker.readLines('UTF-8').findAll {
+                it.startsWith('phase=STARTED')
+            }
+            roles.each { role ->
+                if (!started.any { it.contains("role=${role} ") }) {
+                    throw new GradleException(
+                            "Scenario ${scenarioDirectory} did not start role ${role}: ${started}")
+                }
+            }
+            if (started.any { !it.contains(" api=${expectedVersion} ") }) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} selected an unexpected API: ${started}")
+            }
+
+            if (singleSource) {
+                def sources = started.collect {
+                    (it =~ / source=([^ ]+) loader=/)[0][1]
+                }.toSet()
+                if (sources.size() != 1) {
+                    throw new GradleException(
+                            "Scenario ${scenarioDirectory} loaded multiple API sources: ${sources}")
+                }
+            }
+        }
+    }
+}
+
+verifyMarker(
+        'verifyProviderOnly',
+        'provider-only',
+        ['bugreport_provider_a'],
+        '0.1.0',
+        true)
+verifyMarker(
+        'verifyBugReportOnly',
+        'bugreport-only',
+        ['bugreport'],
+        '0.2.0',
+        true)
+verifyMarker(
+        'verifyCompatible',
+        'compatible',
+        ['bugreport', 'bugreport_provider_a', 'bugreport_provider_b'],
+        '0.2.0',
+        true)
+
+tasks.register('verifyPositiveRuntimeScenarios') {
+    group = 'verification'
+    description = 'Runs and verifies all successful API packaging scenarios.'
+    dependsOn 'verifyProviderOnly', 'verifyBugReportOnly', 'verifyCompatible'
+}
+
+tasks.register('verifyIncompatible') {
+    group = 'verification'
+    description = 'Verifies that incompatible embedded API ranges fail deterministically.'
+    dependsOn ':spike-runtime:runIncompatible'
+
+    doLast {
+        def gameDirectory = layout.projectDirectory.dir(
+                'spike-runtime/run/incompatible').asFile
+        def latestLog = new File(gameDirectory, 'logs/latest.log')
+        if (!latestLog.isFile()) {
+            throw new GradleException("Missing incompatible scenario log: ${latestLog}")
+        }
+
+        def logText = latestLog.getText('UTF-8')
+        def expectedFragments = [
+                'conflicting versions of: com.cybersammy.bugreport:bugreport-api',
+                'bugreport - [0.1.0,1.0.0) - 0.2.0',
+                'bugreport_provider_incompatible - [1.0.0,2.0.0) - 1.0.0'
+        ]
+        expectedFragments.each { fragment ->
+            if (!logText.contains(fragment)) {
+                throw new GradleException(
+                        "Missing expected conflict detail '${fragment}' in ${latestLog}")
+            }
+        }
+
+        def marker = layout.buildDirectory.file(
+                'spike-results/incompatible.marker').get().asFile
+        if (marker.exists()) {
+            throw new GradleException(
+                    "Incompatible providers reached mod construction unexpectedly: ${marker}")
+        }
+    }
+}
+
+tasks.register('verifyJarJarMetadata') {
+    group = 'verification'
+    description = 'Validates API artifact isolation and Jar-in-Jar negotiation metadata.'
+    dependsOn tasks.named('buildSpikeArtifacts')
+
+    doLast {
+        def apiJar = project(':bugreport-api').tasks.named('jar').get().archiveFile.get().asFile
+        def apiArchive = new java.util.jar.JarFile(apiJar)
+        try {
+            def moduleName = apiArchive.manifest.mainAttributes.getValue('Automatic-Module-Name')
+            if (moduleName != 'com.cybersammy.bugreport.api') {
+                throw new GradleException("Unexpected API module name: ${moduleName}")
+            }
+            def forbiddenEntries = apiArchive.entries().findAll {
+                it.name.startsWith('net/neoforged/')
+                        || it.name.startsWith('com/cybersammy/bugreport/neoforge/')
+            }
+            if (!forbiddenEntries.isEmpty()) {
+                throw new GradleException('The standalone API JAR contains loader implementation classes.')
+            }
+        } finally {
+            apiArchive.close()
+        }
+
+        def expectations = [
+                [project: project(':bugreport-neoforge'), range: '[0.1.0,1.0.0)',
+                 version: '0.2.0'],
+                [project: project(':spike-fixtures:provider-a'), range: '[0.1.0,0.3.0)',
+                 version: '0.1.0'],
+                [project: project(':spike-fixtures:provider-b'), range: '[0.2.0,1.0.0)',
+                 version: '0.2.0'],
+                [project: project(':spike-fixtures:provider-incompatible'),
+                 range: '[1.0.0,2.0.0)', version: '1.0.0']
+        ]
+
+        expectations.each { expectation ->
+            def archiveFile =
+                    expectation.project.tasks.named('jar').get().archiveFile.get().asFile
+            def archive = new java.util.zip.ZipFile(archiveFile)
+            try {
+                def metadataEntry = archive.getEntry('META-INF/jarjar/metadata.json')
+                if (metadataEntry == null) {
+                    throw new GradleException("Missing Jar-in-Jar metadata in ${archiveFile}")
+                }
+                def metadata = new groovy.json.JsonSlurper().parse(
+                        archive.getInputStream(metadataEntry))
+                if (metadata.jars.size() != 1) {
+                    throw new GradleException(
+                            "Expected one embedded API in ${archiveFile}: ${metadata}")
+                }
+                def embedded = metadata.jars[0]
+                if (embedded.identifier.group !=
+                        providers.gradleProperty('api_group').get()
+                        || embedded.identifier.artifact !=
+                        providers.gradleProperty('api_artifact').get()
+                        || embedded.version.range != expectation.range
+                        || embedded.version.artifactVersion != expectation.version) {
+                    throw new GradleException(
+                            "Unexpected Jar-in-Jar metadata in ${archiveFile}: ${embedded}")
+                }
+                if (archive.getEntry(embedded.path) == null) {
+                    throw new GradleException(
+                            "Embedded API path is absent in ${archiveFile}: ${embedded.path}")
+                }
+            } finally {
+                archive.close()
+            }
+        }
+    }
+}
+
+tasks.register('verifyApiPackagingSpike') {
+    group = 'verification'
+    description = 'Runs every static and production-like API packaging verification.'
+    dependsOn 'verifyJarJarMetadata', 'verifyPositiveRuntimeScenarios', 'verifyIncompatible'
+}

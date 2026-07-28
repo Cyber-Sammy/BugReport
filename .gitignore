@@ -25,3 +25,13 @@ replay_pid*
 
 # Local project documentation
 /docs/
+
+# Gradle and local spike output
+.gradle/
+build/
+**/build/
+run/
+**/run/
+
+# Gradle Wrapper is required even though distributable JARs are ignored.
+!gradle/wrapper/gradle-wrapper.jar
