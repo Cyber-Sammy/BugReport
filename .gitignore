@@ -25,6 +25,7 @@ replay_pid*
 
 # Local project documentation
 /docs/
+AGENTS.md
 
 # Gradle and local spike output
 .gradle/
