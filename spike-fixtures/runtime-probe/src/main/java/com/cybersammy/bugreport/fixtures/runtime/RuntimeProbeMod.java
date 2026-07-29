@@ -85,6 +85,8 @@ public final class RuntimeProbeMod {
     private static BugReportProvider instantiateProvider(String modId) {
         String className = PROVIDER_CLASSES.get(modId);
         try {
+            // Fixture @Mod classes deliberately have side-effect-free constructors.
+            // Re-instantiation is limited to exercising binary linkage against the selected API.
             Object instance = Class.forName(className).getDeclaredConstructor().newInstance();
             if (instance instanceof BugReportProvider provider) {
                 return provider;
