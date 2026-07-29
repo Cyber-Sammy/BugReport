@@ -8,6 +8,11 @@ version="${version}"
 displayName="Bug Report Provider Fixture A"
 description='''Provider fixture compiled only against Bug Report API 0.1.0.'''
 
+[modproperties.bugreport_provider_a]
+bugreportProviders=[
+    "com.cybersammy.bugreport.fixtures.providera.ProviderAMod"
+]
+
 [[dependencies.bugreport_provider_a]]
 modId="neoforge"
 type="required"

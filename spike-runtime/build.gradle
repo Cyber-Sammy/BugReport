@@ -44,6 +44,13 @@ neoForge {
                     'spike-runtime/incompatible').get().asFile
             programArgument '--nogui'
         }
+
+        discoveryComparison {
+            server()
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/discovery-comparison').get().asFile
+            programArgument '--nogui'
+        }
     }
 }
 
@@ -65,4 +72,8 @@ tasks.named('runCompatible') {
 
 tasks.named('runIncompatible') {
     dependsOn rootProject.tasks.named('prepareIncompatible')
+}
+
+tasks.named('runDiscoveryComparison') {
+    dependsOn rootProject.tasks.named('prepareDiscoveryComparison')
 }

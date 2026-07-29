@@ -26,6 +26,7 @@ def consumerProjects = [
         project(':spike-fixtures:provider-a'),
         project(':spike-fixtures:provider-b'),
         project(':spike-fixtures:provider-incompatible'),
+        project(':spike-fixtures:discovery-probe'),
         project(':spike-fixtures:runtime-probe')
 ]
 
@@ -240,6 +241,86 @@ tasks.register('verifyIncompatible') {
     }
 }
 
+tasks.register('prepareDiscoveryComparison', Sync) {
+    group = 'verification'
+    description = 'Prepares the provider discovery comparison runtime.'
+    dependsOn rootProject.tasks.named('buildSpikeArtifacts')
+
+    def gameDirectory = layout.buildDirectory.dir('spike-runtime/discovery-comparison')
+    into gameDirectory.map { it.dir('mods') }
+    from {
+        [
+                project(':spike-fixtures:provider-a'),
+                project(':spike-fixtures:provider-b'),
+                project(':spike-fixtures:discovery-probe')
+        ].collect {
+            it.tasks.named('jar').get().archiveFile.get().asFile
+        }
+    }
+
+    doFirst {
+        delete gameDirectory
+    }
+    doLast {
+        def gameDirectoryFile = gameDirectory.get().asFile
+        gameDirectoryFile.mkdirs()
+        new File(gameDirectoryFile, 'eula.txt').setText('eula=true\n', 'UTF-8')
+        new File(gameDirectoryFile, 'server.properties').setText(
+                'online-mode=false\nserver-port=0\n', 'UTF-8')
+    }
+}
+
+tasks.register('verifyProviderDiscoverySpike') {
+    group = 'verification'
+    description = 'Compares service and NeoForge metadata provider discovery.'
+    dependsOn ':spike-runtime:runDiscoveryComparison'
+
+    doLast {
+        def marker = layout.buildDirectory.file(
+                'spike-runtime/discovery-comparison/bugreport-discovery.marker')
+                .get().asFile
+        if (!marker.isFile()) {
+            throw new GradleException("Missing provider discovery marker: ${marker}")
+        }
+
+        def markerData = marker.readLines('UTF-8').collectEntries { line ->
+            int separator = line.indexOf('=')
+            if (separator < 1) {
+                throw new GradleException(
+                        "Malformed provider discovery marker line: ${line}")
+            }
+            [(line.substring(0, separator)): line.substring(separator + 1)]
+        }
+        def expectedServiceFailures = [
+                'duplicate:bugreport_provider_a',
+                'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider'
+        ].join(',')
+        def expectedMetadataFailures = [
+                'duplicate:bugreport_provider_a',
+                'invalid:java.lang.String',
+                'load:com.cybersammy.bugreport.fixtures.providerb.MissingProvider',
+                'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider'
+        ].join(',')
+        def expectations = [
+                phase: 'STARTED',
+                selected: 'mod_metadata',
+                serviceProviders: 'bugreport_provider_b',
+                serviceFailures: expectedServiceFailures,
+                metadataProviders: 'bugreport_provider_b',
+                metadataFailures: expectedMetadataFailures,
+                api: '0.2.0',
+                loader: 'cpw.mods.cl.ModuleClassLoader'
+        ]
+        expectations.each { key, expected ->
+            if (markerData[key] != expected) {
+                throw new GradleException(
+                        "Unexpected discovery result ${key}=${markerData[key]}, "
+                                + "expected ${expected}")
+            }
+        }
+    }
+}
+
 tasks.register('verifyJarJarMetadata') {
     group = 'verification'
     description = 'Validates API artifact isolation and Jar-in-Jar negotiation metadata.'
@@ -331,7 +412,8 @@ tasks.register('verifyJarJarMetadata') {
 tasks.register('verifyApiPackagingSpike') {
     group = 'verification'
     description = 'Runs every static and production-like API packaging verification.'
-    dependsOn 'verifyJarJarMetadata', 'verifyPositiveRuntimeScenarios', 'verifyIncompatible'
+    dependsOn 'verifyJarJarMetadata', 'verifyPositiveRuntimeScenarios',
+            'verifyIncompatible', 'verifyProviderDiscoverySpike'
 }
 
 tasks.named('check') {
