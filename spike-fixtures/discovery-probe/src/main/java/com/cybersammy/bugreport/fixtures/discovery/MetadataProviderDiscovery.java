@@ -73,6 +73,10 @@ final class MetadataProviderDiscovery {
             failures.add("invalid:" + className);
             return;
         }
+        if (!Modifier.isPublic(type.getModifiers())) {
+            failures.add("access:" + className);
+            return;
+        }
         if (type.isInterface() || Modifier.isAbstract(type.getModifiers())) {
             failures.add("abstract:" + className);
             return;

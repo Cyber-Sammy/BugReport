@@ -297,6 +297,7 @@ tasks.register('verifyProviderDiscoverySpike') {
                 'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider'
         ].join(',')
         def expectedMetadataFailures = [
+                'access:com.cybersammy.bugreport.fixtures.providerb.PackagePrivateProvider',
                 'constructor:com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider',
                 'duplicate:bugreport_provider_a',
                 'invalid:com.cybersammy.bugreport.fixtures.providerb.NotAProvider',
