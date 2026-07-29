@@ -12,42 +12,30 @@ neoForge {
     runs {
         providerOnly {
             server()
-            gameDirectory = file('run/provider-only')
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/provider-only').get().asFile
             programArgument '--nogui'
-            systemProperty 'bugreport.spike.marker',
-                    rootProject.layout.buildDirectory.file(
-                            'spike-results/provider-only.marker').get().asFile.absolutePath
-            systemProperty 'bugreport.spike.exitOwner', 'bugreport_provider_a'
         }
 
         bugReportOnly {
             server()
-            gameDirectory = file('run/bugreport-only')
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/bugreport-only').get().asFile
             programArgument '--nogui'
-            systemProperty 'bugreport.spike.marker',
-                    rootProject.layout.buildDirectory.file(
-                            'spike-results/bugreport-only.marker').get().asFile.absolutePath
-            systemProperty 'bugreport.spike.exitOwner', 'bugreport'
         }
 
         compatible {
             server()
-            gameDirectory = file('run/compatible')
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/compatible').get().asFile
             programArgument '--nogui'
-            systemProperty 'bugreport.spike.marker',
-                    rootProject.layout.buildDirectory.file(
-                            'spike-results/compatible.marker').get().asFile.absolutePath
-            systemProperty 'bugreport.spike.exitOwner', 'bugreport_provider_a'
         }
 
         incompatible {
             server()
-            gameDirectory = file('run/incompatible')
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/incompatible').get().asFile
             programArgument '--nogui'
-            systemProperty 'bugreport.spike.marker',
-                    rootProject.layout.buildDirectory.file(
-                            'spike-results/incompatible.marker').get().asFile.absolutePath
-            systemProperty 'bugreport.spike.exitOwner', 'bugreport'
         }
     }
 }

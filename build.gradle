@@ -25,7 +25,8 @@ def consumerProjects = [
         project(':bugreport-neoforge'),
         project(':spike-fixtures:provider-a'),
         project(':spike-fixtures:provider-b'),
-        project(':spike-fixtures:provider-incompatible')
+        project(':spike-fixtures:provider-incompatible'),
+        project(':spike-fixtures:runtime-probe')
 ]
 
 tasks.register('publishSpikeApis') {
@@ -52,33 +53,32 @@ tasks.register('buildSpikeArtifacts', GradleBuild) {
     tasks = consumerProjects.collect { "${it.path}:jar".toString() }
 }
 
+def runtimeProbe = project(':spike-fixtures:runtime-probe')
 def scenarios = [
         providerOnly : [
                 directory: 'provider-only',
-                artifacts: [project(':spike-fixtures:provider-a')],
-                exitOwner: 'bugreport_provider_a'
+                artifacts: [project(':spike-fixtures:provider-a'), runtimeProbe]
         ],
         bugReportOnly: [
                 directory: 'bugreport-only',
-                artifacts: [project(':bugreport-neoforge')],
-                exitOwner: 'bugreport'
+                artifacts: [project(':bugreport-neoforge'), runtimeProbe]
         ],
         compatible   : [
                 directory: 'compatible',
                 artifacts: [
                         project(':bugreport-neoforge'),
                         project(':spike-fixtures:provider-a'),
-                        project(':spike-fixtures:provider-b')
-                ],
-                exitOwner: 'bugreport_provider_a'
+                        project(':spike-fixtures:provider-b'),
+                        runtimeProbe
+                ]
         ],
         incompatible : [
                 directory: 'incompatible',
                 artifacts: [
                         project(':bugreport-neoforge'),
-                        project(':spike-fixtures:provider-incompatible')
-                ],
-                exitOwner: 'bugreport'
+                        project(':spike-fixtures:provider-incompatible'),
+                        runtimeProbe
+                ]
         ]
 ]
 
@@ -89,7 +89,9 @@ scenarios.each { scenarioName, scenario ->
         description = "Prepares the ${scenarioName} production-like NeoForge runtime."
         dependsOn rootProject.tasks.named('buildSpikeArtifacts')
 
-        into layout.projectDirectory.dir("spike-runtime/run/${scenario.directory}/mods")
+        def gameDirectory =
+                layout.buildDirectory.dir("spike-runtime/${scenario.directory}")
+        into gameDirectory.map { it.dir('mods') }
         from {
             scenario.artifacts.collect {
                 it.tasks.named('jar').get().archiveFile.get().asFile
@@ -97,53 +99,59 @@ scenarios.each { scenarioName, scenario ->
         }
 
         doFirst {
-            delete layout.buildDirectory.file("spike-results/${scenario.directory}.marker")
+            delete gameDirectory
         }
         doLast {
-            def gameDirectory = layout.projectDirectory.dir(
-                    "spike-runtime/run/${scenario.directory}").asFile
-            gameDirectory.mkdirs()
-            new File(gameDirectory, 'eula.txt').setText('eula=true\n', 'UTF-8')
-            new File(gameDirectory, 'server.properties').setText(
+            def gameDirectoryFile = gameDirectory.get().asFile
+            gameDirectoryFile.mkdirs()
+            new File(gameDirectoryFile, 'eula.txt').setText('eula=true\n', 'UTF-8')
+            new File(gameDirectoryFile, 'server.properties').setText(
                     'online-mode=false\nserver-port=0\n', 'UTF-8')
         }
     }
 }
 
 def verifyMarker = { String taskName, String scenarioDirectory, List<String> roles,
-                     String expectedVersion, boolean singleSource ->
+                     String expectedVersion ->
     tasks.register(taskName) {
         group = 'verification'
         dependsOn ":spike-runtime:run${taskName - 'verify'}"
         doLast {
             def marker = layout.buildDirectory.file(
-                    "spike-results/${scenarioDirectory}.marker").get().asFile
+                    "spike-runtime/${scenarioDirectory}/bugreport-spike.marker").get().asFile
             if (!marker.isFile()) {
                 throw new GradleException("Missing runtime marker: ${marker}")
             }
 
-            def started = marker.readLines('UTF-8').findAll {
-                it.startsWith('phase=STARTED')
-            }
-            roles.each { role ->
-                if (!started.any { it.contains("role=${role} ") }) {
+            def markerData = marker.readLines('UTF-8').collectEntries { line ->
+                int separator = line.indexOf('=')
+                if (separator < 1) {
                     throw new GradleException(
-                            "Scenario ${scenarioDirectory} did not start role ${role}: ${started}")
+                            "Malformed runtime marker line in ${marker}: ${line}")
                 }
+                [(line.substring(0, separator)): line.substring(separator + 1)]
             }
-            if (started.any { !it.contains(" api=${expectedVersion} ") }) {
+            if (markerData.phase != 'STARTED') {
                 throw new GradleException(
-                        "Scenario ${scenarioDirectory} selected an unexpected API: ${started}")
+                        "Scenario ${scenarioDirectory} did not reach server start: ${markerData}")
             }
-
-            if (singleSource) {
-                def sources = started.collect {
-                    (it =~ / source=([^ ]+) loader=/)[0][1]
-                }.toSet()
-                if (sources.size() != 1) {
-                    throw new GradleException(
-                            "Scenario ${scenarioDirectory} loaded multiple API sources: ${sources}")
-                }
+            def observedRoles = markerData.roles ? markerData.roles.split(',').toList() : []
+            if (observedRoles != roles.sort()) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} loaded unexpected roles: ${observedRoles}")
+            }
+            if (markerData.api != expectedVersion) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} selected API ${markerData.api}, "
+                                + "expected ${expectedVersion}")
+            }
+            if (!markerData.source?.contains("bugreport-api-${expectedVersion}.jar")) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} selected an unexpected API source")
+            }
+            if (!markerData.loader) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} did not report the API class loader")
             }
         }
     }
@@ -153,20 +161,17 @@ verifyMarker(
         'verifyProviderOnly',
         'provider-only',
         ['bugreport_provider_a'],
-        '0.1.0',
-        true)
+        '0.1.0')
 verifyMarker(
         'verifyBugReportOnly',
         'bugreport-only',
         ['bugreport'],
-        '0.2.0',
-        true)
+        '0.2.0')
 verifyMarker(
         'verifyCompatible',
         'compatible',
         ['bugreport', 'bugreport_provider_a', 'bugreport_provider_b'],
-        '0.2.0',
-        true)
+        '0.2.0')
 
 tasks.register('verifyPositiveRuntimeScenarios') {
     group = 'verification'
@@ -180,8 +185,8 @@ tasks.register('verifyIncompatible') {
     dependsOn ':spike-runtime:runIncompatible'
 
     doLast {
-        def gameDirectory = layout.projectDirectory.dir(
-                'spike-runtime/run/incompatible').asFile
+        def gameDirectory =
+                layout.buildDirectory.dir('spike-runtime/incompatible').get().asFile
         def latestLog = new File(gameDirectory, 'logs/latest.log')
         if (!latestLog.isFile()) {
             throw new GradleException("Missing incompatible scenario log: ${latestLog}")
@@ -201,7 +206,7 @@ tasks.register('verifyIncompatible') {
         }
 
         def marker = layout.buildDirectory.file(
-                'spike-results/incompatible.marker').get().asFile
+                'spike-runtime/incompatible/bugreport-spike.marker').get().asFile
         if (marker.exists()) {
             throw new GradleException(
                     "Incompatible providers reached mod construction unexpectedly: ${marker}")
@@ -225,12 +230,29 @@ tasks.register('verifyJarJarMetadata') {
             def forbiddenEntries = apiArchive.entries().findAll {
                 it.name.startsWith('net/neoforged/')
                         || it.name.startsWith('com/cybersammy/bugreport/neoforge/')
+                        || it.name == 'com/cybersammy/bugreport/api/ApiRuntime.class'
             }
             if (!forbiddenEntries.isEmpty()) {
-                throw new GradleException('The standalone API JAR contains loader implementation classes.')
+                throw new GradleException(
+                        "The standalone API JAR contains forbidden classes: ${forbiddenEntries}")
             }
         } finally {
             apiArchive.close()
+        }
+
+        def productionModJar =
+                project(':bugreport-neoforge').tasks.named('jar').get().archiveFile.get().asFile
+        def productionModArchive = new java.util.zip.ZipFile(productionModJar)
+        try {
+            def fixtureEntries = productionModArchive.entries().findAll {
+                it.name.startsWith('com/cybersammy/bugreport/fixtures/')
+            }
+            if (!fixtureEntries.isEmpty()) {
+                throw new GradleException(
+                        "The production mod JAR contains test fixtures: ${fixtureEntries}")
+            }
+        } finally {
+            productionModArchive.close()
         }
 
         def expectations = [
@@ -284,4 +306,8 @@ tasks.register('verifyApiPackagingSpike') {
     group = 'verification'
     description = 'Runs every static and production-like API packaging verification.'
     dependsOn 'verifyJarJarMetadata', 'verifyPositiveRuntimeScenarios', 'verifyIncompatible'
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyApiPackagingSpike')
 }
