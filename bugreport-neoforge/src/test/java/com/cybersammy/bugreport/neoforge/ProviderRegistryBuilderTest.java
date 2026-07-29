@@ -1,6 +1,7 @@
 package com.cybersammy.bugreport.neoforge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
 import java.lang.reflect.Constructor;
@@ -16,11 +17,11 @@ final class ProviderRegistryBuilderTest {
                         .build(
                                 List.of(
                                         candidate("mod_a", DuplicateA.class),
-                                        candidate("mod_b", DuplicateB.class),
-                                        candidate("mod_c", Independent.class)),
+                                        candidate("mod_a", DuplicateB.class),
+                                        candidate("mod_b", Independent.class)),
                                 List.of());
 
-        assertEquals(List.of("independent"), snapshot.providerIds());
+        assertEquals(List.of("mod_b"), snapshot.providerIds());
         assertEquals(
                 List.of(
                         ProviderDiagnosticCode.DUPLICATE_PROVIDER_ID,
@@ -29,10 +30,29 @@ final class ProviderRegistryBuilderTest {
                         .map(ProviderDiagnostic::code)
                         .toList());
         assertEquals(
-                List.of("duplicate", "duplicate"),
+                List.of("mod_a:duplicate", "mod_a:duplicate"),
                 snapshot.diagnostics().stream()
                         .map(ProviderDiagnostic::providerId)
                         .toList());
+    }
+
+    @Test
+    void rejectsForeignNamespaceWhileRetainingItsOwner()
+            throws NoSuchMethodException {
+        ProviderDiscoverySnapshot snapshot =
+                new ProviderRegistryBuilder()
+                        .build(
+                                List.of(
+                                        candidate("mod_a", ForeignNamespace.class),
+                                        candidate("mod_b", Independent.class)),
+                                List.of());
+
+        assertEquals(List.of("mod_b"), snapshot.providerIds());
+        assertEquals(1, snapshot.diagnostics().size());
+        assertEquals(
+                ProviderDiagnosticCode.INVALID_PROVIDER_ID,
+                snapshot.diagnostics().getFirst().code());
+        assertNull(snapshot.diagnostics().getFirst().providerId());
     }
 
     private static ProviderCandidate candidate(
@@ -52,7 +72,7 @@ final class ProviderRegistryBuilderTest {
 
         @Override
         public String providerId() {
-            return "duplicate";
+            return "mod_a:duplicate";
         }
     }
 
@@ -61,7 +81,7 @@ final class ProviderRegistryBuilderTest {
 
         @Override
         public String providerId() {
-            return "duplicate";
+            return "mod_a:duplicate";
         }
     }
 
@@ -70,7 +90,16 @@ final class ProviderRegistryBuilderTest {
 
         @Override
         public String providerId() {
-            return "independent";
+            return "mod_b";
+        }
+    }
+
+    public static final class ForeignNamespace implements BugReportProvider {
+        public ForeignNamespace() {}
+
+        @Override
+        public String providerId() {
+            return "mod_b";
         }
     }
 }

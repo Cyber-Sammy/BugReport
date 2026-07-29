@@ -12,6 +12,8 @@ description='''Provider fixture compiled only against Bug Report API 0.2.0.'''
 bugreportProviders=[
     "com.cybersammy.bugreport.fixtures.providerb.ProviderBMod",
     "com.cybersammy.bugreport.fixtures.providerb.DuplicateProvider",
+    "com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderA",
+    "com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderB",
     "com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider",
     "com.cybersammy.bugreport.fixtures.providerb.NotAProvider",
     "com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider",

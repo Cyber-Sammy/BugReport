@@ -161,7 +161,7 @@ The provider contract currently requires:
 
 - a public, concrete provider class;
 - a public no-argument constructor;
-- a stable, non-blank provider ID;
+- a stable provider ID owned by the declaring mod;
 - a class belonging to the JAR/module that declares it;
 - class initialization and construction safe on both physical sides;
 - a cheap, side-effect-free constructor with no event registration, file I/O,
@@ -169,6 +169,24 @@ The provider contract currently requires:
 
 Keep the NeoForge `@Mod` entrypoint separate from the provider implementation.
 Bug Report constructs the provider itself during discovery.
+
+The default provider ID is the declaring NeoForge mod ID:
+
+```text
+my_mod
+```
+
+Additional providers from the same mod use:
+
+```text
+my_mod:client
+```
+
+The mod ID component contains 2–64 lowercase ASCII letters, digits, or
+underscores and starts with a letter. The optional local component contains
+1–64 characters under the same rule. Bug Report rejects uppercase, whitespace,
+Unicode, punctuation, extra separators, and IDs owned by another mod; it does
+not silently normalize them.
 
 ### 4. Declare the provider in NeoForge metadata
 

@@ -68,7 +68,9 @@ final class ProviderRegistryBuilder {
             diagnostics.add(invalidProviderId(candidate));
             return;
         }
-        if (providerId == null || providerId.isBlank()) {
+        if (!ProviderIdPolicy.isValidForOwner(
+                providerId,
+                candidate.ownerModId())) {
             diagnostics.add(invalidProviderId(candidate));
             return;
         }

@@ -11,7 +11,15 @@ package com.cybersammy.bugreport.api;
  * side-specific diagnostics belong in callbacks invoked after discovery.
  */
 public interface BugReportProvider {
-    /** Returns the stable provider identifier. */
+    /**
+     * Returns the stable provider identifier.
+     *
+     * <p>A mod's default provider uses its declaring NeoForge mod ID. Additional
+     * providers use {@code <mod_id>:<local_name>}. Both components use
+     * lowercase ASCII letters, digits, and underscores, start with a letter,
+     * and contain at most 64 characters. The namespace must equal the declaring
+     * mod ID.
+     */
     String providerId();
 
     /** Returns the provider version when it is available. */
