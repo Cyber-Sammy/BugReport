@@ -13,7 +13,9 @@ bugreportProviders=[
     "com.cybersammy.bugreport.fixtures.providerb.ProviderBMod",
     "com.cybersammy.bugreport.fixtures.providerb.DuplicateProvider",
     "com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider",
-    "java.lang.String",
+    "com.cybersammy.bugreport.fixtures.providerb.NotAProvider",
+    "com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider",
+    "com.cybersammy.bugreport.fixtures.providera.ProviderAMod",
     "com.cybersammy.bugreport.fixtures.providerb.MissingProvider"
 ]
 

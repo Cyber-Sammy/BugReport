@@ -292,24 +292,33 @@ tasks.register('verifyProviderDiscoverySpike') {
             [(line.substring(0, separator)): line.substring(separator + 1)]
         }
         def expectedServiceFailures = [
+                'descriptor:service',
                 'duplicate:bugreport_provider_a',
                 'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider'
         ].join(',')
         def expectedMetadataFailures = [
+                'constructor:com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider',
                 'duplicate:bugreport_provider_a',
-                'invalid:java.lang.String',
-                'load:com.cybersammy.bugreport.fixtures.providerb.MissingProvider',
-                'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider'
+                'invalid:com.cybersammy.bugreport.fixtures.providerb.NotAProvider',
+                'load:com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider',
+                'missing:com.cybersammy.bugreport.fixtures.providerb.MissingProvider',
+                'ownership:com.cybersammy.bugreport.fixtures.providera.ProviderAMod'
         ].join(',')
         def expectations = [
                 phase: 'STARTED',
-                selected: 'mod_metadata',
+                decision: 'mod_metadata',
                 serviceProviders: 'bugreport_provider_b',
                 serviceFailures: expectedServiceFailures,
                 metadataProviders: 'bugreport_provider_b',
                 metadataFailures: expectedMetadataFailures,
                 api: '0.2.0',
-                loader: 'cpw.mods.cl.ModuleClassLoader'
+                apiLoader: 'cpw.mods.cl.ModuleClassLoader',
+                metadataLoaders: 'cpw.mods.modlauncher.TransformingClassLoader',
+                metadataLoadersShareApiIdentity: 'false',
+                metadataModules: [
+                        'bugreport_provider_a',
+                        'bugreport_provider_b'
+                ].join(',')
         ]
         expectations.each { key, expected ->
             if (markerData[key] != expected) {

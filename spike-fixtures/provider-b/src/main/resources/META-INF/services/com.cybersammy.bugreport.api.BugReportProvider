@@ -1,3 +1,4 @@
 com.cybersammy.bugreport.fixtures.providerb.ProviderBMod
+com.cybersammy.bugreport.fixtures.providerb.MissingServiceProvider
 com.cybersammy.bugreport.fixtures.providerb.DuplicateProvider
 com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider
