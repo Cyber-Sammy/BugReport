@@ -215,17 +215,22 @@ Provider IDs must be globally unique. If multiple providers return the same
 ID, every registration for that ID is rejected. An invalid or throwing provider
 does not prevent unrelated valid providers from loading.
 
-## Side-safety rules
+## Direct source-level side boundaries
 
 `bugreport-api` and common production code must not reference physical-client
 Minecraft classes, NeoForge client classes, rendering classes, or LWJGL.
 Future client-only implementation belongs under an explicit `client` package.
 
-The build enforces this boundary:
+The build enforces direct source-level client namespace boundaries:
 
 ```powershell
 .\gradlew.bat verifyCommonSideBoundaries
 ```
+
+This M0 check is intentionally a lightweight source scanner, not a complete
+bytecode dependency-graph analysis. A separate source set, client module, or
+bytecode-level verification may replace it when the first client implementation
+is introduced.
 
 Remote dedicated-server logs, configs, worlds, and generated diagnostics are
 outside the 1.0 client boundary. Supporting them requires a separately designed

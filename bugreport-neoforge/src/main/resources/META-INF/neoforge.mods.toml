@@ -6,7 +6,7 @@ license="Apache-2.0"
 modId="bugreport"
 version="${version}"
 displayName="Bug Report"
-description='''Minimal M0 provider discovery client prototype.'''
+description='''M0 provider discovery and side-boundary prototype.'''
 
 [[dependencies.bugreport]]
 modId="neoforge"

@@ -534,7 +534,7 @@ tasks.register('verifyCommonSideBoundaries') {
     group = 'verification'
     description = 'Rejects physical-client references from API and common production code.'
 
-    def clientOnlyNamespaces = [
+    def physicalClientNamespaces = [
             'com.mojang.blaze3d.',
             'net.minecraft.client.',
             'net.neoforged.neoforge.client.',
@@ -543,12 +543,16 @@ tasks.register('verifyCommonSideBoundaries') {
     def boundaries = [
             [
                     name: 'bugreport-api',
+                    forbiddenNamespaces: physicalClientNamespaces,
                     sources: fileTree('bugreport-api/src/main/java') {
                         include '**/*.java'
                     }
             ],
             [
                     name: 'bugreport-neoforge common',
+                    forbiddenNamespaces: physicalClientNamespaces + [
+                            'com.cybersammy.bugreport.neoforge.client.'
+                    ],
                     sources: fileTree('bugreport-neoforge/src/main/java') {
                         include '**/*.java'
                         exclude '**/client/**'
@@ -556,6 +560,9 @@ tasks.register('verifyCommonSideBoundaries') {
             ],
             [
                     name: 'example-mod common',
+                    forbiddenNamespaces: physicalClientNamespaces + [
+                            'com.cybersammy.bugreport.example.client.'
+                    ],
                     sources: fileTree('example-mod/src/main/java') {
                         include '**/*.java'
                         exclude '**/client/**'
@@ -570,7 +577,9 @@ tasks.register('verifyCommonSideBoundaries') {
         boundaries.each { boundary ->
             boundary.sources.files.sort().each { sourceFile ->
                 def source = sourceFile.getText('UTF-8')
-                clientOnlyNamespaces.findAll { source.contains(it) }.each { namespace ->
+                boundary.forbiddenNamespaces
+                        .findAll { source.contains(it) }
+                        .each { namespace ->
                     def relativePath = projectDir.toPath()
                             .relativize(sourceFile.toPath())
                             .toString()
