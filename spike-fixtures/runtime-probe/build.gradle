@@ -23,7 +23,7 @@ neoForge {
 }
 
 dependencies {
-    compileOnly "${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.1.0"
+    compileOnly "${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.2.0"
 }
 
 tasks.withType(JavaCompile).configureEach {

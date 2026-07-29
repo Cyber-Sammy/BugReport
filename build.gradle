@@ -63,6 +63,14 @@ def scenarios = [
                 directory: 'bugreport-only',
                 artifacts: [project(':bugreport-neoforge'), runtimeProbe]
         ],
+        providersOnlyCompatible: [
+                directory: 'providers-only-compatible',
+                artifacts: [
+                        project(':spike-fixtures:provider-a'),
+                        project(':spike-fixtures:provider-b'),
+                        runtimeProbe
+                ]
+        ],
         compatible   : [
                 directory: 'compatible',
                 artifacts: [
@@ -112,7 +120,7 @@ scenarios.each { scenarioName, scenario ->
 }
 
 def verifyMarker = { String taskName, String scenarioDirectory, List<String> roles,
-                     String expectedVersion ->
+                     String expectedVersion, List<String> expectedProviderVersions ->
     tasks.register(taskName) {
         group = 'verification'
         dependsOn ":spike-runtime:run${taskName - 'verify'}"
@@ -145,6 +153,14 @@ def verifyMarker = { String taskName, String scenarioDirectory, List<String> rol
                         "Scenario ${scenarioDirectory} selected API ${markerData.api}, "
                                 + "expected ${expectedVersion}")
             }
+            def observedProviderVersions = markerData.providerVersions
+                    ? markerData.providerVersions.split(',').toList()
+                    : []
+            if (observedProviderVersions != expectedProviderVersions.sort()) {
+                throw new GradleException(
+                        "Scenario ${scenarioDirectory} observed unexpected provider versions: "
+                                + observedProviderVersions)
+            }
             if (!markerData.source?.contains("bugreport-api-${expectedVersion}.jar")) {
                 throw new GradleException(
                         "Scenario ${scenarioDirectory} selected an unexpected API source")
@@ -161,22 +177,32 @@ verifyMarker(
         'verifyProviderOnly',
         'provider-only',
         ['bugreport_provider_a'],
-        '0.1.0')
+        '0.1.0',
+        [])
 verifyMarker(
         'verifyBugReportOnly',
         'bugreport-only',
         ['bugreport'],
-        '0.2.0')
+        '0.2.0',
+        [])
+verifyMarker(
+        'verifyProvidersOnlyCompatible',
+        'providers-only-compatible',
+        ['bugreport_provider_a', 'bugreport_provider_b'],
+        '0.2.0',
+        ['bugreport_provider_a:unknown', 'bugreport_provider_b:unknown'])
 verifyMarker(
         'verifyCompatible',
         'compatible',
         ['bugreport', 'bugreport_provider_a', 'bugreport_provider_b'],
-        '0.2.0')
+        '0.2.0',
+        ['bugreport_provider_a:unknown', 'bugreport_provider_b:unknown'])
 
 tasks.register('verifyPositiveRuntimeScenarios') {
     group = 'verification'
     description = 'Runs and verifies all successful API packaging scenarios.'
-    dependsOn 'verifyProviderOnly', 'verifyBugReportOnly', 'verifyCompatible'
+    dependsOn 'verifyProviderOnly', 'verifyBugReportOnly',
+            'verifyProvidersOnlyCompatible', 'verifyCompatible'
 }
 
 tasks.register('verifyIncompatible') {

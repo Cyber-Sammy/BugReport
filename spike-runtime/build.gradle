@@ -24,6 +24,13 @@ neoForge {
             programArgument '--nogui'
         }
 
+        providersOnlyCompatible {
+            server()
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/providers-only-compatible').get().asFile
+            programArgument '--nogui'
+        }
+
         compatible {
             server()
             gameDirectory = rootProject.layout.buildDirectory.dir(
@@ -46,6 +53,10 @@ tasks.named('runProviderOnly') {
 
 tasks.named('runBugReportOnly') {
     dependsOn rootProject.tasks.named('prepareBugReportOnly')
+}
+
+tasks.named('runProvidersOnlyCompatible') {
+    dependsOn rootProject.tasks.named('prepareProvidersOnlyCompatible')
 }
 
 tasks.named('runCompatible') {
