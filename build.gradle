@@ -291,7 +291,7 @@ verifyDiscoveryLog(
                 'duplicate|bugreport_provider_a|',
                 'invalid|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.NotAProvider',
-                'load|bugreport_provider_b|'
+                'instantiation|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider',
                 'missing|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.MissingProvider',

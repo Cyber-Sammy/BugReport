@@ -6,10 +6,14 @@ import java.util.Objects;
 
 record ProviderDiscoverySnapshot(
         List<ProviderRegistration> providers,
-        List<String> diagnostics) {
+        List<ProviderDiagnostic> diagnostics) {
     ProviderDiscoverySnapshot {
         providers = List.copyOf(providers);
         diagnostics = List.copyOf(diagnostics);
+    }
+
+    static ProviderDiscoverySnapshot empty() {
+        return new ProviderDiscoverySnapshot(List.of(), List.of());
     }
 
     List<String> providerIds() {

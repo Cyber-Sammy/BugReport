@@ -10,16 +10,23 @@ import org.slf4j.Logger;
 public final class BugReportMod {
     public static final String MOD_ID = "bugreport";
     private static final Logger LOGGER = LogUtils.getLogger();
+    private final BugReportRuntime runtime;
 
     public BugReportMod(IEventBus modEventBus) {
+        runtime = new BugReportRuntime();
         modEventBus.addListener(this::onCommonSetup);
     }
 
     private void onCommonSetup(FMLCommonSetupEvent event) {
-        ProviderDiscoverySnapshot snapshot = NeoForgeProviderDiscovery.discover();
+        runtime.initializeProviders();
+        ProviderDiscoverySnapshot snapshot = runtime.providers();
         LOGGER.info(
                 "Bug Report provider discovery completed: providers={}, diagnostics={}",
                 snapshot.providerIds(),
                 snapshot.diagnostics());
+    }
+
+    BugReportRuntime runtime() {
+        return runtime;
     }
 }
