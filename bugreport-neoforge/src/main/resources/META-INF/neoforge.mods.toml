@@ -5,8 +5,8 @@ license="Apache-2.0"
 [[mods]]
 modId="bugreport"
 version="${version}"
-displayName="Bug Report API Packaging Spike"
-description='''M0 prototype for optional API Jar-in-Jar packaging.'''
+displayName="Bug Report"
+description='''Minimal M0 provider discovery client prototype.'''
 
 [[dependencies.bugreport]]
 modId="neoforge"

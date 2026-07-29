@@ -22,10 +22,15 @@ public final class RuntimeProbeMod {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String PROVIDER_A = "bugreport_provider_a";
     private static final String PROVIDER_B = "bugreport_provider_b";
-    private static final List<String> OBSERVED_MODS = List.of("bugreport", PROVIDER_A, PROVIDER_B);
-    private static final List<String> OBSERVED_PROVIDERS = List.of(PROVIDER_A, PROVIDER_B);
+    private static final String EXAMPLE_PROVIDER = "bugreport_example";
+    private static final List<String> OBSERVED_MODS =
+            List.of("bugreport", EXAMPLE_PROVIDER, PROVIDER_A, PROVIDER_B);
+    private static final List<String> OBSERVED_PROVIDERS =
+            List.of(EXAMPLE_PROVIDER, PROVIDER_A, PROVIDER_B);
     private static final Map<String, String> PROVIDER_CLASSES =
             Map.of(
+                    EXAMPLE_PROVIDER,
+                    "com.cybersammy.bugreport.example.ExampleBugReportProvider",
                     PROVIDER_A,
                     "com.cybersammy.bugreport.fixtures.providera.ProviderAMod",
                     PROVIDER_B,

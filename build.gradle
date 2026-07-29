@@ -23,6 +23,7 @@ def apiProjects = [
 
 def consumerProjects = [
         project(':bugreport-neoforge'),
+        project(':example-mod'),
         project(':spike-fixtures:provider-a'),
         project(':spike-fixtures:provider-b'),
         project(':spike-fixtures:provider-incompatible'),
@@ -63,6 +64,18 @@ def scenarios = [
         bugReportOnly: [
                 directory: 'bugreport-only',
                 artifacts: [project(':bugreport-neoforge'), runtimeProbe]
+        ],
+        exampleOnly: [
+                directory: 'example-only',
+                artifacts: [project(':example-mod'), runtimeProbe]
+        ],
+        exampleCompatible: [
+                directory: 'example-compatible',
+                artifacts: [
+                        project(':bugreport-neoforge'),
+                        project(':example-mod'),
+                        runtimeProbe
+                ]
         ],
         providersOnlyCompatible: [
                 directory: 'providers-only-compatible',
@@ -187,6 +200,18 @@ verifyMarker(
         '0.2.0',
         [])
 verifyMarker(
+        'verifyExampleOnly',
+        'example-only',
+        ['bugreport_example'],
+        '0.2.0',
+        ['bugreport_example:unknown'])
+verifyMarker(
+        'verifyExampleCompatible',
+        'example-compatible',
+        ['bugreport', 'bugreport_example'],
+        '0.2.0',
+        ['bugreport_example:unknown'])
+verifyMarker(
         'verifyProvidersOnlyCompatible',
         'providers-only-compatible',
         ['bugreport_provider_a', 'bugreport_provider_b'],
@@ -203,7 +228,83 @@ tasks.register('verifyPositiveRuntimeScenarios') {
     group = 'verification'
     description = 'Runs and verifies all successful API packaging scenarios.'
     dependsOn 'verifyProviderOnly', 'verifyBugReportOnly',
+            'verifyExampleOnly', 'verifyExampleCompatible',
             'verifyProvidersOnlyCompatible', 'verifyCompatible'
+}
+
+def verifyDiscoveryLog = { String taskName, String prerequisite,
+                           String scenarioDirectory, String providers,
+                           List<String> diagnosticFragments ->
+    tasks.register(taskName) {
+        group = 'verification'
+        dependsOn prerequisite
+
+        doLast {
+            def latestLog = layout.buildDirectory.file(
+                    "spike-runtime/${scenarioDirectory}/logs/latest.log").get().asFile
+            if (!latestLog.isFile()) {
+                throw new GradleException("Missing discovery runtime log: ${latestLog}")
+            }
+            def discoveryLine = latestLog.readLines('UTF-8').find {
+                it.contains('Bug Report provider discovery completed:')
+            }
+            if (discoveryLine == null) {
+                throw new GradleException(
+                        "Bug Report did not complete provider discovery in ${latestLog}")
+            }
+            if (!discoveryLine.contains("providers=${providers}")) {
+                throw new GradleException(
+                        "Unexpected discovered providers in ${latestLog}: ${discoveryLine}")
+            }
+            diagnosticFragments.each { fragment ->
+                if (!discoveryLine.contains(fragment)) {
+                    throw new GradleException(
+                            "Missing discovery diagnostic '${fragment}' in ${latestLog}")
+                }
+            }
+        }
+    }
+}
+
+verifyDiscoveryLog(
+        'verifyEmptyProductionDiscovery',
+        'verifyBugReportOnly',
+        'bugreport-only',
+        '[]',
+        ['diagnostics=[]'])
+verifyDiscoveryLog(
+        'verifyExampleProductionDiscovery',
+        'verifyExampleCompatible',
+        'example-compatible',
+        '[bugreport_example]',
+        ['diagnostics=[]'])
+verifyDiscoveryLog(
+        'verifyFailureIsolationProductionDiscovery',
+        'verifyCompatible',
+        'compatible',
+        '[bugreport_provider_b]',
+        [
+                'access|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.PackagePrivateProvider',
+                'constructor|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider',
+                'duplicate|bugreport_provider_a|',
+                'invalid|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.NotAProvider',
+                'load|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider',
+                'missing|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.MissingProvider',
+                'ownership|bugreport_provider_b|'
+                        + 'com.cybersammy.bugreport.fixtures.providera.ProviderAMod'
+        ])
+
+tasks.register('verifyExecutableProviderPrototype') {
+    group = 'verification'
+    description = 'Verifies the selected discovery path in the production mod and example mod.'
+    dependsOn 'verifyEmptyProductionDiscovery',
+            'verifyExampleProductionDiscovery',
+            'verifyFailureIsolationProductionDiscovery'
 }
 
 tasks.register('verifyIncompatible') {
@@ -375,6 +476,8 @@ tasks.register('verifyJarJarMetadata') {
         def expectations = [
                 [project: project(':bugreport-neoforge'), range: '[0.1.0,1.0.0)',
                  version: '0.2.0'],
+                [project: project(':example-mod'), range: '[0.2.0,1.0.0)',
+                 version: '0.2.0'],
                 [project: project(':spike-fixtures:provider-a'), range: '[0.1.0,0.3.0)',
                  version: '0.1.0'],
                 [project: project(':spike-fixtures:provider-b'), range: '[0.2.0,1.0.0)',
@@ -423,7 +526,8 @@ tasks.register('verifyApiPackagingSpike') {
     group = 'verification'
     description = 'Runs every static and production-like API packaging verification.'
     dependsOn 'verifyJarJarMetadata', 'verifyPositiveRuntimeScenarios',
-            'verifyIncompatible', 'verifyProviderDiscoverySpike'
+            'verifyIncompatible', 'verifyProviderDiscoverySpike',
+            'verifyExecutableProviderPrototype'
 }
 
 tasks.named('check') {

@@ -24,6 +24,20 @@ neoForge {
             programArgument '--nogui'
         }
 
+        exampleOnly {
+            server()
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/example-only').get().asFile
+            programArgument '--nogui'
+        }
+
+        exampleCompatible {
+            server()
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/example-compatible').get().asFile
+            programArgument '--nogui'
+        }
+
         providersOnlyCompatible {
             server()
             gameDirectory = rootProject.layout.buildDirectory.dir(
@@ -60,6 +74,14 @@ tasks.named('runProviderOnly') {
 
 tasks.named('runBugReportOnly') {
     dependsOn rootProject.tasks.named('prepareBugReportOnly')
+}
+
+tasks.named('runExampleOnly') {
+    dependsOn rootProject.tasks.named('prepareExampleOnly')
+}
+
+tasks.named('runExampleCompatible') {
+    dependsOn rootProject.tasks.named('prepareExampleCompatible')
 }
 
 tasks.named('runProvidersOnlyCompatible') {

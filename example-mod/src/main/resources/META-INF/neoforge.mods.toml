@@ -1,0 +1,28 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="bugreport_example"
+version="${version}"
+displayName="Bug Report Example Mod"
+description='''Minimal executable example of optional Bug Report integration.'''
+
+[modproperties.bugreport_example]
+bugreportProviders=[
+    "com.cybersammy.bugreport.example.ExampleBugReportProvider"
+]
+
+[[dependencies.bugreport_example]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.227,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.bugreport_example]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.21.2)"
+ordering="NONE"
+side="BOTH"

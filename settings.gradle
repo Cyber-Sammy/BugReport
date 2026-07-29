@@ -9,6 +9,7 @@ rootProject.name = 'bug-report'
 
 include 'bugreport-api'
 include 'bugreport-neoforge'
+include 'example-mod'
 include 'spike-fixtures:api-v010'
 include 'spike-fixtures:api-v100'
 include 'spike-fixtures:provider-a'
