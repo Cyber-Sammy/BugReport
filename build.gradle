@@ -530,6 +530,64 @@ tasks.register('verifyApiPackagingSpike') {
             'verifyExecutableProviderPrototype'
 }
 
+tasks.register('verifyCommonSideBoundaries') {
+    group = 'verification'
+    description = 'Rejects physical-client references from API and common production code.'
+
+    def clientOnlyNamespaces = [
+            'com.mojang.blaze3d.',
+            'net.minecraft.client.',
+            'net.neoforged.neoforge.client.',
+            'org.lwjgl.'
+    ]
+    def boundaries = [
+            [
+                    name: 'bugreport-api',
+                    sources: fileTree('bugreport-api/src/main/java') {
+                        include '**/*.java'
+                    }
+            ],
+            [
+                    name: 'bugreport-neoforge common',
+                    sources: fileTree('bugreport-neoforge/src/main/java') {
+                        include '**/*.java'
+                        exclude '**/client/**'
+                    }
+            ],
+            [
+                    name: 'example-mod common',
+                    sources: fileTree('example-mod/src/main/java') {
+                        include '**/*.java'
+                        exclude '**/client/**'
+                    }
+            ]
+    ]
+
+    inputs.files(boundaries.collect { it.sources })
+
+    doLast {
+        def violations = []
+        boundaries.each { boundary ->
+            boundary.sources.files.sort().each { sourceFile ->
+                def source = sourceFile.getText('UTF-8')
+                clientOnlyNamespaces.findAll { source.contains(it) }.each { namespace ->
+                    def relativePath = projectDir.toPath()
+                            .relativize(sourceFile.toPath())
+                            .toString()
+                            .replace('\\', '/')
+                    violations.add("${boundary.name}: ${relativePath} -> ${namespace}")
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Client-only references crossed common side boundaries:\n'
+                            + violations.sort().join('\n'))
+        }
+    }
+}
+
 tasks.named('check') {
-    dependsOn tasks.named('verifyApiPackagingSpike')
+    dependsOn tasks.named('verifyApiPackagingSpike'),
+            tasks.named('verifyCommonSideBoundaries')
 }
