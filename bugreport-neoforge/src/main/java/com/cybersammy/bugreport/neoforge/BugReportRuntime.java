@@ -22,8 +22,10 @@ final class BugReportRuntime {
         if (providersInitialized) {
             throw new IllegalStateException("Bug Report providers are already initialized");
         }
+        ProviderDiscoverySnapshot discovered =
+                Objects.requireNonNull(providerDiscovery.get());
+        providerSnapshot = discovered;
         providersInitialized = true;
-        providerSnapshot = Objects.requireNonNull(providerDiscovery.get());
     }
 
     synchronized ProviderDiscoverySnapshot providers() {

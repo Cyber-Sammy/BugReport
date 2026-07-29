@@ -29,4 +29,24 @@ final class BugReportRuntimeTest {
         assertSame(expected, runtime.providers());
         assertEquals(1, discoveryCalls.get());
     }
+
+    @Test
+    void failedDiscoveryDoesNotMarkRuntimeInitialized() {
+        AtomicInteger discoveryAttempts = new AtomicInteger();
+        BugReportRuntime runtime =
+                new BugReportRuntime(
+                        () -> {
+                            if (discoveryAttempts.getAndIncrement() == 0) {
+                                throw new IllegalStateException("discovery failed");
+                            }
+                            return ProviderDiscoverySnapshot.empty();
+                        });
+
+        assertThrows(IllegalStateException.class, runtime::initializeProviders);
+
+        runtime.initializeProviders();
+
+        assertEquals(2, discoveryAttempts.get());
+        assertEquals(List.of(), runtime.providers().providers());
+    }
 }
