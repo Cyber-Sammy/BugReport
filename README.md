@@ -62,14 +62,21 @@ features.
 Build and verify everything:
 
 ```powershell
+.\gradlew.bat publishSpikeApis
 .\gradlew.bat check
 ```
 
 On Unix-like systems:
 
 ```bash
+./gradlew publishSpikeApis
 ./gradlew check
 ```
+
+Keep these as separate Gradle invocations on a clean checkout. The first
+invocation creates the isolated Maven repository used by the executable API
+compatibility fixtures; the second can then resolve their Jar-in-Jar version
+ranges while constructing the task graph.
 
 The installable development JAR is produced at:
 
