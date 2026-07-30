@@ -3,14 +3,10 @@ plugins {
 }
 
 group = 'com.cybersammy.bugreport'
-version = '0.0.1-spike'
+version = providers.gradleProperty('mod_version').get()
 
 base {
     archivesName = 'bugreport-neoforge'
-}
-
-java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
 }
 
 neoForge {
@@ -23,23 +19,21 @@ neoForge {
 }
 
 dependencies {
+    implementation project(':bugreport-core')
     jarJar(implementation("${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.2.0")) {
         version {
             strictly '[0.1.0,1.0.0)'
             prefer '0.2.0'
         }
     }
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+    testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:${providers.gradleProperty('junit_platform_version').get()}"
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.release = 21
-}
-
-tasks.named('test', Test) {
-    useJUnitPlatform()
+configurations.named('jarJar') {
+    // A dependency lock is an exact local resolution constraint. Applying it to
+    // Jar-in-Jar would replace the advertised compatibility range in metadata.
+    resolutionStrategy.deactivateDependencyLocking()
 }
 
 processResources {
@@ -49,7 +43,12 @@ processResources {
     }
 }
 
+def coreProject = project(':bugreport-core')
+
 tasks.named('jar', Jar) {
+    dependsOn coreProject.tasks.named('classes')
+    from(coreProject.sourceSets.main.output)
+
     manifest {
         attributes 'Automatic-Module-Name': 'com.cybersammy.bugreport.neoforge'
     }

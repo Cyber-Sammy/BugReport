@@ -8,7 +8,9 @@ pluginManagement {
 rootProject.name = 'bug-report'
 
 include 'bugreport-api'
+include 'bugreport-core'
 include 'bugreport-neoforge'
+include 'bugreport-testkit'
 include 'example-mod'
 include 'spike-fixtures:api-v010'
 include 'spike-fixtures:api-v100'

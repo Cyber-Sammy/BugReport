@@ -9,7 +9,8 @@ discovers their providers deterministically through NeoForge mod metadata.
 
 ## Project status
 
-The project is currently at the M0 architecture-prototype stage.
+The M0 architecture and risk-closure milestone is complete. M1 build and module
+foundation is in progress.
 
 Implemented and executable:
 
@@ -19,7 +20,10 @@ Implemented and executable:
 - provider ownership and constructor validation;
 - deterministic duplicate rejection and failure isolation;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
-- an example provider mod that starts with or without Bug Report installed.
+- an example provider mod that starts with or without Bug Report installed;
+- loader-neutral API and Core module boundaries;
+- reproducible archives, local Maven publication, dependency locking, and CI
+  verification.
 
 Not implemented yet:
 
@@ -46,7 +50,9 @@ features.
 ## Repository modules
 
 - `bugreport-api` — loader-neutral contracts embedded by compatible mods;
+- `bugreport-core` — loader-neutral internal report behavior;
 - `bugreport-neoforge` — the installed Bug Report runtime mod;
+- `bugreport-testkit` — internal integration and security test support;
 - `example-mod` — minimal optional-integration example;
 - `spike-fixtures` and `spike-runtime` — executable compatibility and failure
   scenarios.
@@ -85,13 +91,13 @@ The API is not published to a public Maven repository yet. Build the local
 repository first:
 
 ```powershell
-.\gradlew.bat publishSpikeApis
+.\gradlew.bat :bugreport-api:publishMavenJavaPublicationToLocalRepository
 ```
 
 This creates:
 
 ```text
-build/spike-maven
+build/local-maven
 ```
 
 Add that repository to the integrating mod. For an external project, point the
@@ -101,7 +107,7 @@ path at the Bug Report checkout:
 repositories {
     maven {
         name = 'bugReportLocal'
-        url = uri('C:/path/to/BugReport/build/spike-maven')
+        url = uri('C:/path/to/BugReport/build/local-maven')
         content {
             includeGroup 'com.cybersammy.bugreport'
         }
@@ -111,6 +117,10 @@ repositories {
 
 This local path is a development setup only. Do not publish a consumer build
 that depends on the developer's filesystem path.
+
+The separate `publishSpikeApis` task publishes API compatibility fixtures to
+`build/spike-maven`; that repository exists for this project's executable
+version-negotiation tests and is not the normal integration repository.
 
 ### 2. Embed the API with Jar-in-Jar
 
@@ -233,11 +243,35 @@ Provider IDs must be globally unique. If multiple providers return the same
 ID, every registration for that ID is rejected. An invalid or throwing provider
 does not prevent unrelated valid providers from loading.
 
+## Build verification
+
+The root `check` task verifies:
+
+- unit tests and executable NeoForge compatibility scenarios;
+- the allowed production module dependency graph;
+- loader, implementation, and physical-side source boundaries;
+- local API publication with binary, sources, Javadoc, and POM artifacts;
+- deterministic archive settings and packaged Apache license;
+- source hygiene and generated-source isolation.
+
+CI runs the same task on Java 21. Dependency locks are committed for production
+modules and must be updated intentionally when dependencies change. CI also
+performs a clean second build and compares SHA-256 hashes of every production
+JAR.
+
+The `jarJar` configuration is intentionally excluded from exact dependency
+locking. Its declared version range is published as NeoForge compatibility
+metadata; replacing that range with a local lock would change API negotiation.
+The embedded preferred version remains explicit, and executable compatibility
+fixtures verify every advertised range.
+
 ## Direct source-level side boundaries
 
-`bugreport-api` and common production code must not reference physical-client
-Minecraft classes, NeoForge client classes, rendering classes, or LWJGL.
-Future client-only implementation belongs under an explicit `client` package.
+`bugreport-api` cannot reference Core, NeoForge, Minecraft, filesystem, or
+network implementation types. `bugreport-core` cannot reference Minecraft or
+NeoForge. Common production code must not reference physical-client Minecraft
+classes, NeoForge client classes, rendering classes, or LWJGL. Future
+client-only implementation belongs under an explicit `client` package.
 
 The build enforces direct source-level client namespace boundaries:
 

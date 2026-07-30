@@ -1,0 +1,80 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Verify wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Run verification
+        run: ./gradlew check --stacktrace
+
+      - name: Record production archive hashes
+        shell: bash
+        run: |
+          find \
+            bugreport-api/build/libs \
+            bugreport-core/build/libs \
+            bugreport-neoforge/build/libs \
+            bugreport-testkit/build/libs \
+            example-mod/build/libs \
+            -type f -name "*.jar" -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > "$RUNNER_TEMP/archives-first.sha256"
+
+      - name: Rebuild production archives
+        run: >-
+          ./gradlew clean
+          :bugreport-api:jar
+          :bugreport-api:sourcesJar
+          :bugreport-api:javadocJar
+          :bugreport-core:jar
+          :bugreport-neoforge:jar
+          :bugreport-testkit:jar
+          :example-mod:jar
+
+      - name: Verify byte-for-byte reproducibility
+        shell: bash
+        run: |
+          find \
+            bugreport-api/build/libs \
+            bugreport-core/build/libs \
+            bugreport-neoforge/build/libs \
+            bugreport-testkit/build/libs \
+            example-mod/build/libs \
+            -type f -name "*.jar" -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > "$RUNNER_TEMP/archives-second.sha256"
+          diff -u \
+            "$RUNNER_TEMP/archives-first.sha256" \
+            "$RUNNER_TEMP/archives-second.sha256"

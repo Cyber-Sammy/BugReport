@@ -2,6 +2,14 @@ plugins {
     id 'base'
 }
 
+def productionProjectPaths = [
+        ':bugreport-api',
+        ':bugreport-core',
+        ':bugreport-neoforge',
+        ':bugreport-testkit',
+        ':example-mod'
+]
+
 allprojects {
     repositories {
         maven {
@@ -12,6 +20,41 @@ allprojects {
             }
         }
         mavenCentral()
+    }
+}
+
+subprojects {
+    plugins.withId('java') {
+        java {
+            toolchain.languageVersion = JavaLanguageVersion.of(21)
+        }
+
+        tasks.withType(JavaCompile).configureEach {
+            options.encoding = 'UTF-8'
+            options.release = 21
+            options.compilerArgs.addAll(['-Xlint:all', '-Werror'])
+        }
+
+        tasks.withType(Test).configureEach {
+            useJUnitPlatform()
+        }
+
+        tasks.withType(Jar).configureEach {
+            from(rootProject.file('LICENSE')) {
+                into 'META-INF'
+            }
+        }
+    }
+
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+}
+
+configure(productionProjectPaths.collect { project(it) }) {
+    dependencyLocking {
+        lockAllConfigurations()
     }
 }
 
@@ -538,7 +581,7 @@ tasks.register('verifyApiPackagingSpike') {
 
 tasks.register('verifyCommonSideBoundaries') {
     group = 'verification'
-    description = 'Rejects physical-client references from API and common production code.'
+    description = 'Rejects forbidden implementation and side dependencies in production code.'
 
     def physicalClientNamespaces = [
             'com.mojang.blaze3d.',
@@ -549,8 +592,27 @@ tasks.register('verifyCommonSideBoundaries') {
     def boundaries = [
             [
                     name: 'bugreport-api',
-                    forbiddenNamespaces: physicalClientNamespaces,
+                    forbiddenNamespaces: physicalClientNamespaces + [
+                            'net.minecraft.',
+                            'net.neoforged.',
+                            'com.cybersammy.bugreport.core.',
+                            'com.cybersammy.bugreport.neoforge.',
+                            'java.io.',
+                            'java.net.',
+                            'java.nio.file.'
+                    ],
                     sources: fileTree('bugreport-api/src/main/java') {
+                        include '**/*.java'
+                    }
+            ],
+            [
+                    name: 'bugreport-core',
+                    forbiddenNamespaces: physicalClientNamespaces + [
+                            'net.minecraft.',
+                            'net.neoforged.',
+                            'com.cybersammy.bugreport.neoforge.'
+                    ],
+                    sources: fileTree('bugreport-core/src/main/java') {
                         include '**/*.java'
                     }
             ],
@@ -567,7 +629,9 @@ tasks.register('verifyCommonSideBoundaries') {
             [
                     name: 'example-mod common',
                     forbiddenNamespaces: physicalClientNamespaces + [
-                            'com.cybersammy.bugreport.example.client.'
+                            'com.cybersammy.bugreport.example.client.',
+                            'com.cybersammy.bugreport.core.',
+                            'com.cybersammy.bugreport.neoforge.'
                     ],
                     sources: fileTree('example-mod/src/main/java') {
                         include '**/*.java'
@@ -602,7 +666,254 @@ tasks.register('verifyCommonSideBoundaries') {
     }
 }
 
+tasks.register('verifyProductionDependencyGraph') {
+    group = 'verification'
+    description = 'Verifies the permitted production project dependency graph.'
+
+    def allowedDependencies = [
+            ':bugreport-api'     : [] as Set,
+            ':bugreport-core'    : [':bugreport-api'] as Set,
+            ':bugreport-neoforge': [':bugreport-core'] as Set,
+            ':bugreport-testkit' : [':bugreport-api', ':bugreport-core'] as Set,
+            ':example-mod'       : [] as Set
+    ]
+    def requiredDependencies = [
+            ':bugreport-core'    : [':bugreport-api'] as Set,
+            ':bugreport-neoforge': [':bugreport-core'] as Set,
+            ':bugreport-testkit' : [':bugreport-api', ':bugreport-core'] as Set
+    ]
+    def productionProjectsByPath = productionProjectPaths.collectEntries {
+        [(it): project(it)]
+    }
+
+    doLast {
+        def violations = []
+        def observed = [:].withDefault { [] as Set }
+
+        productionProjectsByPath.each { projectPath, owner ->
+            owner.configurations.each { configuration ->
+                configuration.dependencies
+                        .withType(ProjectDependency)
+                        .each { dependency ->
+                            observed[projectPath].add(dependency.path)
+                            if (!(dependency.path in allowedDependencies[projectPath])) {
+                                violations.add(
+                                        "${projectPath}:${configuration.name} -> "
+                                                + dependency.path)
+                            }
+                        }
+            }
+        }
+
+        requiredDependencies.each { projectPath, required ->
+            def missing = required - observed[projectPath]
+            missing.each {
+                violations.add("${projectPath} is missing required dependency ${it}")
+            }
+        }
+
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Production dependency graph violations:\n'
+                            + violations.sort().join('\n'))
+        }
+    }
+}
+
+tasks.register('verifySourceHygiene') {
+    group = 'verification'
+    description = 'Verifies text formatting and generated-source isolation.'
+
+    def checkedFiles = fileTree(rootDir) {
+        include '*.gradle'
+        include '*.properties'
+        include '*.md'
+        include '*.yml'
+        include '*.yaml'
+        include '.editorconfig'
+        include '.gitattributes'
+        include '.github/**/*.yml'
+        include '.github/**/*.yaml'
+        include '**/src/**/*.java'
+        include '**/src/**/*.json'
+        include '**/src/**/*.toml'
+        exclude 'docs/**'
+        exclude '**/build/**'
+        exclude '.gradle/**'
+    }
+    inputs.files(checkedFiles)
+
+    doLast {
+        def violations = []
+        checkedFiles.files.sort().each { sourceFile ->
+            def relativePath = rootDir.toPath()
+                    .relativize(sourceFile.toPath())
+                    .toString()
+                    .replace('\\', '/')
+            def source = sourceFile.getText('UTF-8')
+            if (!source.isEmpty() && !source.endsWith('\n')) {
+                violations.add("${relativePath}: missing final newline")
+            }
+            source.readLines().eachWithIndex { line, index ->
+                if (line.contains('\t')) {
+                    violations.add("${relativePath}:${index + 1}: tab character")
+                }
+                if (line ==~ /.*[ \t]+$/) {
+                    violations.add("${relativePath}:${index + 1}: trailing whitespace")
+                }
+            }
+            if (relativePath ==~ /(^|.*\/)src\/.*\/generated\/.*/) {
+                violations.add(
+                        "${relativePath}: generated source is stored under src")
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Source hygiene violations:\n' + violations.join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyDependencyLocks') {
+    group = 'verification'
+    description = 'Verifies committed lock state for every production module.'
+
+    def expectedLockEntries = [
+            'bugreport-api/gradle.lockfile'     : ['empty=annotationProcessor,compileClasspath'],
+            'bugreport-core/gradle.lockfile'    : ['org.junit.jupiter:junit-jupiter:5.11.4'],
+            'bugreport-neoforge/gradle.lockfile': [
+                    'com.cybersammy.bugreport:bugreport-api:0.2.0',
+                    'org.junit.jupiter:junit-jupiter:5.11.4'
+            ],
+            'bugreport-testkit/gradle.lockfile' : ['org.junit.jupiter:junit-jupiter:5.11.4'],
+            'example-mod/gradle.lockfile'       : [
+                    'com.cybersammy.bugreport:bugreport-api:0.2.0'
+            ]
+    ]
+    inputs.files(expectedLockEntries.keySet().collect { file(it) })
+
+    doLast {
+        def violations = []
+        expectedLockEntries.each { relativePath, expectedEntries ->
+            def lockFile = file(relativePath)
+            if (!lockFile.isFile()) {
+                violations.add("${relativePath}: missing dependency lock file")
+                return
+            }
+            def lockText = lockFile.getText('UTF-8')
+            expectedEntries.each { entry ->
+                if (!lockText.contains(entry)) {
+                    violations.add("${relativePath}: missing locked entry ${entry}")
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Dependency lock violations:\n'
+                            + violations.sort().join('\n'))
+        }
+    }
+}
+
+tasks.register('verifyProductionArchives') {
+    group = 'verification'
+    description = 'Verifies reproducible settings and license entries in production JARs.'
+
+    def productionProjects = productionProjectPaths.collect { project(it) }
+    def productionProjectsByPath = productionProjects.collectEntries {
+        [(it.path): it]
+    }
+    def expectedModuleNames = [
+            ':bugreport-api'     : 'com.cybersammy.bugreport.api',
+            ':bugreport-core'    : 'com.cybersammy.bugreport.core',
+            ':bugreport-neoforge': 'com.cybersammy.bugreport.neoforge',
+            ':bugreport-testkit' : 'com.cybersammy.bugreport.testkit',
+            ':example-mod'       : 'com.cybersammy.bugreport.example'
+    ]
+    dependsOn productionProjectPaths.collect { "${it}:jar" }
+
+    doLast {
+        def violations = []
+        productionProjects.each { owner ->
+            def jarTask = owner.tasks.named('jar').get()
+            if (jarTask.preserveFileTimestamps) {
+                violations.add("${owner.path}:jar preserves file timestamps")
+            }
+            if (!jarTask.reproducibleFileOrder) {
+                violations.add("${owner.path}:jar has non-reproducible file order")
+            }
+
+            def archiveFile = jarTask.archiveFile.get().asFile
+            def archive = new java.util.zip.ZipFile(archiveFile)
+            try {
+                if (archive.getEntry('META-INF/LICENSE') == null) {
+                    violations.add("${owner.path}:jar is missing META-INF/LICENSE")
+                }
+                def moduleName = archive.getInputStream(
+                        archive.getEntry('META-INF/MANIFEST.MF'))
+                        .withCloseable {
+                            new java.util.jar.Manifest(it)
+                                    .mainAttributes
+                                    .getValue('Automatic-Module-Name')
+                        }
+                if (moduleName != expectedModuleNames[owner.path]) {
+                    violations.add(
+                            "${owner.path}:jar has unexpected module name ${moduleName}")
+                }
+            } finally {
+                archive.close()
+            }
+        }
+
+        def coreArchiveFile = productionProjectsByPath[':bugreport-core']
+                .tasks.named('jar').get().archiveFile.get().asFile
+        def runtimeArchiveFile = productionProjectsByPath[':bugreport-neoforge']
+                .tasks.named('jar').get().archiveFile.get().asFile
+        def testkitArchiveFile = productionProjectsByPath[':bugreport-testkit']
+                .tasks.named('jar').get().archiveFile.get().asFile
+        def coreArchive = new java.util.zip.ZipFile(coreArchiveFile)
+        def runtimeArchive = new java.util.zip.ZipFile(runtimeArchiveFile)
+        def testkitArchive = new java.util.zip.ZipFile(testkitArchiveFile)
+        try {
+            def coreClasses = coreArchive.entries()
+                    .findAll {
+                        it.name.startsWith('com/cybersammy/bugreport/core/')
+                                && it.name.endsWith('.class')
+                    }
+                    .collect { it.name }
+            coreClasses.findAll { runtimeArchive.getEntry(it) == null }.each {
+                violations.add(":bugreport-neoforge:jar is missing Core class ${it}")
+            }
+            def leakedTestkitClasses = testkitArchive.entries()
+                    .findAll {
+                        it.name.startsWith('com/cybersammy/bugreport/testkit/')
+                                && it.name.endsWith('.class')
+                                && runtimeArchive.getEntry(it.name) != null
+                    }
+                    .collect { it.name }
+            leakedTestkitClasses.each {
+                violations.add(":bugreport-neoforge:jar contains Testkit class ${it}")
+            }
+        } finally {
+            coreArchive.close()
+            runtimeArchive.close()
+            testkitArchive.close()
+        }
+
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    'Production archive violations:\n'
+                            + violations.sort().join('\n'))
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn tasks.named('verifyApiPackagingSpike'),
-            tasks.named('verifyCommonSideBoundaries')
+            tasks.named('verifyCommonSideBoundaries'),
+            tasks.named('verifyProductionDependencyGraph'),
+            tasks.named('verifyDependencyLocks'),
+            tasks.named('verifySourceHygiene'),
+            tasks.named('verifyProductionArchives'),
+            ':bugreport-api:verifyLocalPublication'
 }

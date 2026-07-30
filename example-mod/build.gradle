@@ -3,14 +3,10 @@ plugins {
 }
 
 group = 'com.cybersammy.bugreport.example'
-version = '0.0.1-spike'
+version = providers.gradleProperty('mod_version').get()
 
 base {
     archivesName = 'bugreport-example-mod'
-}
-
-java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
 }
 
 neoForge {
@@ -31,9 +27,10 @@ dependencies {
     }
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.release = 21
+configurations.named('jarJar') {
+    // Preserve the tested API compatibility range in NeoForge Jar-in-Jar
+    // metadata; compile and runtime classpaths remain dependency-locked.
+    resolutionStrategy.deactivateDependencyLocking()
 }
 
 processResources {

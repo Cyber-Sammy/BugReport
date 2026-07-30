@@ -4,21 +4,15 @@ plugins {
 }
 
 group = providers.gradleProperty('api_group').get()
-version = '0.2.0'
+version = providers.gradleProperty('api_version').get()
 
 base {
     archivesName = providers.gradleProperty('api_artifact').get()
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
     withSourcesJar()
-}
-
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    options.release = 21
-    options.compilerArgs.addAll(['-Xlint:all', '-Werror'])
+    withJavadocJar()
 }
 
 tasks.named('jar', Jar) {
@@ -36,12 +30,79 @@ publishing {
         mavenJava(MavenPublication) {
             from components.java
             artifactId = providers.gradleProperty('api_artifact').get()
+            pom {
+                name = 'Bug Report API'
+                description = 'Loader-neutral integration contracts for Bug Report providers.'
+                url = 'https://github.com/Cyber-Sammy/BugReport'
+                licenses {
+                    license {
+                        name = 'Apache License, Version 2.0'
+                        url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                        distribution = 'repo'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:https://github.com/Cyber-Sammy/BugReport.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/Cyber-Sammy/BugReport.git'
+                    url = 'https://github.com/Cyber-Sammy/BugReport'
+                }
+            }
         }
     }
     repositories {
         maven {
             name = 'spike'
             url = rootProject.layout.buildDirectory.dir('spike-maven')
+        }
+        maven {
+            name = 'local'
+            url = rootProject.layout.buildDirectory.dir('local-maven')
+        }
+    }
+}
+
+def publishedGroup = providers.gradleProperty('api_group').get()
+def publishedArtifact = providers.gradleProperty('api_artifact').get()
+def publishedVersion = version.toString()
+def publicationCoordinatePath = [
+        publishedGroup.replace('.', '/'),
+        publishedArtifact,
+        publishedVersion
+].join('/')
+def localPublicationDirectory =
+        rootProject.layout.buildDirectory.dir(
+                "local-maven/${publicationCoordinatePath}")
+
+tasks.register('verifyLocalPublication') {
+    group = 'verification'
+    description = 'Publishes and verifies the API in the isolated local Maven repository.'
+    dependsOn tasks.named('publishMavenJavaPublicationToLocalRepository')
+
+    doLast {
+        def publicationDirectory = localPublicationDirectory.get().asFile
+        def expectedFiles = [
+                "${publishedArtifact}-${publishedVersion}.jar",
+                "${publishedArtifact}-${publishedVersion}-sources.jar",
+                "${publishedArtifact}-${publishedVersion}-javadoc.jar",
+                "${publishedArtifact}-${publishedVersion}.pom"
+        ]
+        def missing = expectedFiles.findAll {
+            !new File(publicationDirectory, it).isFile()
+        }
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                    "Local API publication is incomplete in ${publicationDirectory}: ${missing}")
+        }
+
+        def pom = new groovy.xml.XmlSlurper()
+                .parse(new File(
+                        publicationDirectory,
+                        "${publishedArtifact}-${publishedVersion}.pom"))
+        if (pom.groupId.text() != publishedGroup
+                || pom.artifactId.text() != publishedArtifact
+                || pom.version.text() != publishedVersion
+                || pom.licenses.license.name.text() != 'Apache License, Version 2.0') {
+            throw new GradleException("Unexpected local API POM metadata: ${pom}")
         }
     }
 }

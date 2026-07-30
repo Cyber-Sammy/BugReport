@@ -1,0 +1,28 @@
+plugins {
+    id 'java-library'
+}
+
+group = providers.gradleProperty('api_group').get()
+version = providers.gradleProperty('mod_version').get()
+
+base {
+    archivesName = 'bugreport-core'
+}
+
+dependencies {
+    compileOnly project(':bugreport-api')
+
+    testImplementation project(':bugreport-api')
+    testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:${providers.gradleProperty('junit_platform_version').get()}"
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes(
+                'Automatic-Module-Name': 'com.cybersammy.bugreport.core',
+                'Implementation-Title': 'Bug Report Core',
+                'Implementation-Version': project.version
+        )
+    }
+}

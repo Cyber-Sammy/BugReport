@@ -19,10 +19,16 @@ public interface BugReportProvider {
      * lowercase ASCII letters, digits, and underscores, start with a letter,
      * and contain at most 64 characters. The namespace must equal the declaring
      * mod ID.
+     *
+     * @return the stable provider identifier
      */
     String providerId();
 
-    /** Returns the provider version when it is available. */
+    /**
+     * Returns the provider version when it is available.
+     *
+     * @return the provider version, or {@code "unknown"} when it is unavailable
+     */
     default String providerVersion() {
         return "unknown";
     }
