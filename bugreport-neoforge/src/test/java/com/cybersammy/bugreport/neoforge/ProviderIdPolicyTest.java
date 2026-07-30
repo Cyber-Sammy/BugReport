@@ -80,7 +80,7 @@ final class ProviderIdPolicyTest {
     }
 
     @Test
-    void reservedNamespaceRequiresMatchingDeclaringMod() {
+    void bugReportNamespaceRequiresMatchingDeclaringMod() {
         assertTrue(ProviderIdPolicy.isValidForOwner("bugreport", "bugreport"));
         assertTrue(
                 ProviderIdPolicy.isValidForOwner(

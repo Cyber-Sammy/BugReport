@@ -65,13 +65,17 @@ final class ProviderRegistryBuilder {
         try {
             providerId = provider.providerId();
         } catch (RuntimeException | LinkageError exception) {
-            diagnostics.add(invalidProviderId(candidate));
+            diagnostics.add(
+                    ProviderDiagnostic.forClass(
+                            ProviderDiagnosticCode.PROVIDER_ID_FAILED,
+                            candidate.ownerModId(),
+                            candidate.className()));
             return;
         }
         if (!ProviderIdPolicy.isValidForOwner(
                 providerId,
                 candidate.ownerModId())) {
-            diagnostics.add(invalidProviderId(candidate));
+            diagnostics.add(invalidProviderId(candidate, providerId));
             return;
         }
 
@@ -114,10 +118,11 @@ final class ProviderRegistryBuilder {
     }
 
     private static ProviderDiagnostic invalidProviderId(
-            ProviderCandidate candidate) {
-        return ProviderDiagnostic.forClass(
-                ProviderDiagnosticCode.INVALID_PROVIDER_ID,
+            ProviderCandidate candidate,
+            String providerId) {
+        return ProviderDiagnostic.forInvalidProviderId(
                 candidate.ownerModId(),
-                candidate.className());
+                candidate.className(),
+                providerId);
     }
 }

@@ -292,7 +292,7 @@ verifyDiscoveryLog(
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderA',
                 'duplicate|bugreport_provider_b:duplicate|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderB',
-                'id|bugreport_provider_b|'
+                'id|bugreport_provider_a|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateProvider',
                 'invalid|bugreport_provider_b|'
                         + 'com.cybersammy.bugreport.fixtures.providerb.NotAProvider',

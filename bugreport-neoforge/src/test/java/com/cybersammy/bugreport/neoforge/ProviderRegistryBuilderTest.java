@@ -37,7 +37,7 @@ final class ProviderRegistryBuilderTest {
     }
 
     @Test
-    void rejectsForeignNamespaceWhileRetainingItsOwner()
+    void reportsForeignNamespaceWhileRetainingItsOwner()
             throws NoSuchMethodException {
         ProviderDiscoverySnapshot snapshot =
                 new ProviderRegistryBuilder()
@@ -52,7 +52,30 @@ final class ProviderRegistryBuilderTest {
         assertEquals(
                 ProviderDiagnosticCode.INVALID_PROVIDER_ID,
                 snapshot.diagnostics().getFirst().code());
-        assertNull(snapshot.diagnostics().getFirst().providerId());
+        assertEquals("mod_b", snapshot.diagnostics().getFirst().providerId());
+    }
+
+    @Test
+    void distinguishesProviderIdFailureFromReturnedNull()
+            throws NoSuchMethodException {
+        ProviderDiscoverySnapshot snapshot =
+                new ProviderRegistryBuilder()
+                        .build(
+                                List.of(
+                                        candidate("mod_a", ThrowingId.class),
+                                        candidate("mod_b", NullId.class)),
+                                List.of());
+
+        assertEquals(List.of(), snapshot.providerIds());
+        assertEquals(
+                List.of(
+                        ProviderDiagnosticCode.PROVIDER_ID_FAILED,
+                        ProviderDiagnosticCode.INVALID_PROVIDER_ID),
+                snapshot.diagnostics().stream()
+                        .map(ProviderDiagnostic::code)
+                        .toList());
+        assertNull(snapshot.diagnostics().get(0).providerId());
+        assertNull(snapshot.diagnostics().get(1).providerId());
     }
 
     private static ProviderCandidate candidate(
@@ -100,6 +123,24 @@ final class ProviderRegistryBuilderTest {
         @Override
         public String providerId() {
             return "mod_b";
+        }
+    }
+
+    public static final class ThrowingId implements BugReportProvider {
+        public ThrowingId() {}
+
+        @Override
+        public String providerId() {
+            throw new IllegalStateException("failure");
+        }
+    }
+
+    public static final class NullId implements BugReportProvider {
+        public NullId() {}
+
+        @Override
+        public String providerId() {
+            return null;
         }
     }
 }

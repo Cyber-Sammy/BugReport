@@ -10,6 +10,7 @@ enum ProviderDiagnosticCode {
     ABSTRACT_TYPE("abstract"),
     MISSING_CONSTRUCTOR("constructor"),
     INSTANTIATION_FAILED("instantiation"),
+    PROVIDER_ID_FAILED("id_call"),
     INVALID_PROVIDER_ID("id"),
     DUPLICATE_PROVIDER_ID("duplicate");
 
