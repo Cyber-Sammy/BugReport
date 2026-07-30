@@ -22,6 +22,9 @@ Implemented and executable:
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
+- typed canonical identifiers, independent version domains, side and privacy
+  classifications, collection constraints, validation results, localization
+  keys, and bounded extension metadata;
 - reproducible archives, local Maven publication, dependency locking, and CI
   verification.
 
@@ -152,7 +155,53 @@ contract against which the provider was compiled.
 Do **not** add a required dependency on the `bugreport` mod. The integrating mod
 must start normally when Bug Report is absent.
 
-### 3. Implement a provider
+### 3. Use the loader-neutral contract primitives
+
+Public API values live under `com.cybersammy.bugreport.api` and its descriptive
+child packages. They have no Minecraft, NeoForge, filesystem, network, UI, or
+worker-runtime dependencies.
+
+Use typed identifiers instead of passing unvalidated strings between contract
+objects:
+
+```java
+import com.cybersammy.bugreport.api.identifier.CapabilityId;
+import com.cybersammy.bugreport.api.identifier.NamespaceId;
+import com.cybersammy.bugreport.api.identifier.ProviderId;
+
+NamespaceId namespace = NamespaceId.of("my_mod");
+ProviderId providerId = ProviderId.namespaced(namespace, "client");
+CapabilityId capabilityId = CapabilityId.of("my_mod:environment_v1");
+```
+
+Identifiers preserve their exact canonical text. They are never lowercased or
+otherwise normalized. `ProviderId` accepts the declaring mod ID for the default
+provider or `<mod_id>:<local_name>` for an additional provider. Other global
+identities, such as capabilities, transports, validation codes, and extension
+metadata keys, always require the namespaced form.
+
+The API separates artifact, persisted-schema, and capability versions:
+
+```java
+ApiVersion api = ApiVersion.parse("0.2.0");
+SchemaVersion schema = SchemaVersion.parse("1.0");
+CapabilityVersion capability = CapabilityVersion.parse("1.0");
+```
+
+Provider-requested `CollectionConstraints` are optional tighter bounds; they
+cannot raise product-owned ceilings. `PrivacyClassification` is an immutable
+privacy floor that consumers may only make more restrictive.
+
+`ExtensionMetadata` accepts immutable JSON-compatible data only. It rejects
+duplicate top-level keys and enforces documented depth, entry-count, string,
+number, and total-value bounds. It cannot register callbacks, classes, scripts,
+or services. Required behavior belongs in explicit capability negotiation.
+
+`ValidationResult` carries bounded, machine-readable issues with exact
+`ValidationPath` values. Errors block a contract; warnings describe
+non-blocking limitations.
+
+### 4. Implement a provider
 
 ```java
 package com.example.mymod.bugreport;
@@ -205,7 +254,7 @@ underscores and starts with a letter. The optional local component contains
 Unicode, punctuation, extra separators, and IDs owned by another mod; it does
 not silently normalize them.
 
-### 4. Declare the provider in NeoForge metadata
+### 5. Declare the provider in NeoForge metadata
 
 Add the provider class name to the declaring mod's block in
 `META-INF/neoforge.mods.toml`:
@@ -231,7 +280,7 @@ tasks.named('jar', Jar) {
 }
 ```
 
-### 5. Verify optional integration
+### 6. Verify optional integration
 
 Test at least these installations:
 

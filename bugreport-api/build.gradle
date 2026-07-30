@@ -15,6 +15,11 @@ java {
     withJavadocJar()
 }
 
+dependencies {
+    testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:${providers.gradleProperty('junit_platform_version').get()}"
+}
+
 tasks.named('jar', Jar) {
     manifest {
         attributes(

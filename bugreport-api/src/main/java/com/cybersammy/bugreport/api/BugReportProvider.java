@@ -1,5 +1,7 @@
 package com.cybersammy.bugreport.api;
 
+import com.cybersammy.bugreport.api.identifier.ProviderId;
+
 /**
  * Loader-neutral contract implemented by Bug Report providers.
  *
@@ -18,7 +20,9 @@ public interface BugReportProvider {
      * providers use {@code <mod_id>:<local_name>}. Both components use
      * lowercase ASCII letters, digits, and underscores, start with a letter,
      * and contain at most 64 characters. The namespace must equal the declaring
-     * mod ID.
+     * mod ID. {@link ProviderId} provides the canonical typed representation;
+     * this spike-era method retains its string return type for binary
+     * compatibility.
      *
      * @return the stable provider identifier
      */
