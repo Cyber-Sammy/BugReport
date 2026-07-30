@@ -56,6 +56,14 @@ configure(productionProjectPaths.collect { project(it) }) {
     dependencyLocking {
         lockAllConfigurations()
     }
+
+    configurations.configureEach {
+        if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
+            // ModDev adds OS-specific native artifacts to this tooling
+            // configuration. A lock generated on one OS is invalid on another.
+            resolutionStrategy.deactivateDependencyLocking()
+        }
+    }
 }
 
 def apiProjects = [
