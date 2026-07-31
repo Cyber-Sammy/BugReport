@@ -14,8 +14,7 @@ public final class ValidationResult {
     private static final Comparator<ValidationIssue> ISSUE_ORDER =
             Comparator.comparing(ValidationIssue::path)
                     .thenComparing(ValidationIssue::severity)
-                    .thenComparing(ValidationIssue::code)
-                    .thenComparing(ValidationIssue::message);
+                    .thenComparing(ValidationIssue::code);
     private static final ValidationResult VALID = new ValidationResult(List.of());
 
     private final List<ValidationIssue> issues;
@@ -45,7 +44,10 @@ public final class ValidationResult {
     }
 
     /**
-     * Returns all issues in deterministic path, severity, code, and message order.
+     * Returns all issues in deterministic path, severity, and code order.
+     *
+     * <p>Issues with identical stable keys retain their insertion order. The
+     * developer-facing message is deliberately not part of canonical ordering.
      *
      * @return immutable issue list
      */

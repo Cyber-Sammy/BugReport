@@ -188,6 +188,10 @@ SchemaVersion schema = SchemaVersion.parse("1.0");
 CapabilityVersion capability = CapabilityVersion.parse("1.0");
 ```
 
+`ApiVersion` accepts canonical SemVer with each numeric core component bounded
+to `0..2147483647`. Its equality is exact-text identity, including build
+metadata; it must not be used as a precedence or compatibility decision.
+
 Provider-requested `CollectionConstraints` are optional tighter bounds; they
 cannot raise product-owned ceilings. `PrivacyClassification` is an immutable
 privacy floor that consumers may only make more restrictive.

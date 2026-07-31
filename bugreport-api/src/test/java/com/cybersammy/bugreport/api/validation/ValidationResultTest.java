@@ -64,6 +64,19 @@ final class ValidationResultTest {
     }
 
     @Test
+    void messageTextDoesNotAffectCanonicalIssueOrder() {
+        ValidationPath path = ValidationPath.root().property("fields");
+        ValidationResult result =
+                ValidationResult.builder()
+                        .error(DUPLICATE, path, "Zeta wording added first")
+                        .error(DUPLICATE, path, "Alpha wording added second")
+                        .build();
+
+        assertEquals("Zeta wording added first", result.issues().get(0).message());
+        assertEquals("Alpha wording added second", result.issues().get(1).message());
+    }
+
+    @Test
     void rejectsUnsafeMessagesAndUnboundedPaths() {
         assertThrows(
                 IllegalArgumentException.class,

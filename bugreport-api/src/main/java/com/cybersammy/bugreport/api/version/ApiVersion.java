@@ -1,5 +1,6 @@
 package com.cybersammy.bugreport.api.version;
 
+import java.math.BigInteger;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -8,12 +9,17 @@ import java.util.regex.Pattern;
 /**
  * Semantic version identifier for the Bug Report Java API artifact.
  *
- * <p>This value validates Semantic Versioning syntax. Compatibility is still
- * established by the published API baseline and executable linkage fixtures,
- * not by parsing a version string alone.
+ * <p>This value validates bounded Semantic Versioning syntax. Each numeric core
+ * component is restricted to {@code 0..2147483647} so it can be exposed as an
+ * {@code int}. Equality represents exact canonical version text, including
+ * build metadata; it does not represent SemVer precedence or API compatibility.
+ * Compatibility is established by the published API baseline and executable
+ * linkage fixtures, not by parsing or comparing a version string alone.
  */
 public final class ApiVersion {
     private static final int MAX_LENGTH = 128;
+    private static final BigInteger MAX_CORE_COMPONENT =
+            BigInteger.valueOf(Integer.MAX_VALUE);
     private static final Pattern PATTERN =
             Pattern.compile(
                     "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)"
@@ -59,17 +65,21 @@ public final class ApiVersion {
             throw invalidVersion();
         }
 
-        try {
-            return new ApiVersion(
-                    value,
-                    Integer.parseInt(matcher.group(1)),
-                    Integer.parseInt(matcher.group(2)),
-                    Integer.parseInt(matcher.group(3)),
-                    matcher.group(4),
-                    matcher.group(5));
-        } catch (NumberFormatException exception) {
+        return new ApiVersion(
+                value,
+                parseCoreComponent(matcher.group(1)),
+                parseCoreComponent(matcher.group(2)),
+                parseCoreComponent(matcher.group(3)),
+                matcher.group(4),
+                matcher.group(5));
+    }
+
+    private static int parseCoreComponent(String component) {
+        BigInteger parsed = new BigInteger(component);
+        if (parsed.compareTo(MAX_CORE_COMPONENT) > 0) {
             throw invalidVersion();
         }
+        return parsed.intValueExact();
     }
 
     private static boolean hasLeadingZeroNumericPreRelease(String preRelease) {
@@ -90,7 +100,8 @@ public final class ApiVersion {
         return new IllegalArgumentException(
                 "API version must be canonical Semantic Versioning text of at most "
                         + MAX_LENGTH
-                        + " characters");
+                        + " characters with numeric core components in 0.."
+                        + Integer.MAX_VALUE);
     }
 
     /**
@@ -147,6 +158,14 @@ public final class ApiVersion {
         return value;
     }
 
+    /**
+     * Compares exact canonical text, including prerelease and build metadata.
+     *
+     * <p>This is identity equality, not SemVer precedence or API compatibility.
+     *
+     * @param other value to compare
+     * @return {@code true} when the complete canonical text is identical
+     */
     @Override
     public boolean equals(Object other) {
         return other instanceof ApiVersion version && value.equals(version.value);
