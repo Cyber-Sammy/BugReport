@@ -363,6 +363,8 @@ does not prevent unrelated valid providers from loading.
 The root `check` task verifies:
 
 - unit tests and executable NeoForge compatibility scenarios;
+- the current public API bytecode against the frozen `0.2.0` compatibility
+  baseline, plus compatible-addition and known-breaking fixtures;
 - the allowed production module dependency graph;
 - loader, implementation, and physical-side source boundaries;
 - local API publication with binary, sources, Javadoc, and POM artifacts;
@@ -379,6 +381,29 @@ locking. Its declared version range is published as NeoForge compatibility
 metadata; replacing that range with a local lock would change API negotiation.
 The embedded preferred version remains explicit, and executable compatibility
 fixtures verify every advertised range.
+
+### Updating the API compatibility baseline
+
+The committed baseline is
+`config/api-baseline/bugreport-api-0.2.0.jar`. Normal builds only read it and
+verify its pinned SHA-256, manifest, module name, license, and public/protected
+binary surface. Additive binary-compatible API changes are reported but do not
+fail the build; removals and incompatible signature or accessibility changes
+do.
+
+After an intentional API version decision and compatibility review, replace
+the baseline explicitly:
+
+```powershell
+.\gradlew.bat :bugreport-api:updateApiBaseline `
+    -PconfirmApiBaselineUpdate=true
+```
+
+Review the resulting binary diff and update `api_baseline_version` and
+`api_baseline_sha256` in `gradle.properties` deliberately. The task refuses to
+run without the confirmation property or when the current API and target
+baseline versions differ. Reports are written under
+`bugreport-api/build/reports/api-compatibility`.
 
 ## Direct source-level side boundaries
 

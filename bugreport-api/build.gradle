@@ -1,7 +1,20 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
+    id 'me.champeau.gradle.japicmp'
 }
+
+tasks.register(
+        'verifyApiCompatibility',
+        me.champeau.gradle.japicmp.JapicmpTask)
+tasks.register(
+        'detectBreakingApiFixture',
+        me.champeau.gradle.japicmp.JapicmpTask)
+tasks.register(
+        'verifyAdditiveApiFixture',
+        me.champeau.gradle.japicmp.JapicmpTask)
+
+apply from: rootProject.file('gradle/api-compatibility.gradle')
 
 group = providers.gradleProperty('api_group').get()
 version = providers.gradleProperty('api_version').get()

@@ -5,6 +5,9 @@ pluginManagement {
     }
 
     plugins {
+        id 'me.champeau.gradle.japicmp' version providers
+                .gradleProperty('japicmp_plugin_version')
+                .get()
         id 'net.neoforged.moddev' version providers.gradleProperty('moddev_version').get()
     }
 }

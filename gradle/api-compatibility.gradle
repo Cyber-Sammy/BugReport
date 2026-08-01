@@ -1,0 +1,190 @@
+def baselineVersion = providers.gradleProperty('api_baseline_version').get()
+def baselineSha256 = providers.gradleProperty('api_baseline_sha256').get()
+def baselineArchive = rootProject.layout.projectDirectory.file(
+        "config/api-baseline/bugreport-api-${baselineVersion}.jar")
+def currentArchive = tasks.named('jar', Jar).flatMap { it.archiveFile }
+def compatibilityReportDirectory = layout.buildDirectory.dir('reports/api-compatibility')
+
+tasks.register('verifyApiBaselineArtifact') {
+    group = 'verification'
+    description = 'Verifies the identity and integrity of the committed API baseline JAR.'
+    inputs.file(baselineArchive)
+    inputs.property('expectedSha256', baselineSha256)
+
+    doLast {
+        def archive = baselineArchive.asFile
+        if (!archive.isFile()) {
+            throw new GradleException(
+                    "Missing API baseline ${archive}. "
+                            + 'Restore the committed fixture; do not regenerate it implicitly.')
+        }
+
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        archive.withInputStream { input ->
+            def buffer = new byte[8192]
+            int count
+            while ((count = input.read(buffer)) >= 0) {
+                digest.update(buffer, 0, count)
+            }
+        }
+        def actualSha256 = digest.digest().encodeHex().toString().toUpperCase(Locale.ROOT)
+        if (actualSha256 != baselineSha256) {
+            throw new GradleException(
+                    "API baseline SHA-256 mismatch: ${actualSha256}, expected ${baselineSha256}")
+        }
+
+        def jar = new java.util.jar.JarFile(archive)
+        try {
+            def attributes = jar.manifest?.mainAttributes
+            if (attributes?.getValue('Implementation-Version') != baselineVersion
+                    || attributes?.getValue('Automatic-Module-Name')
+                            != 'com.cybersammy.bugreport.api'
+                    || jar.getEntry('META-INF/LICENSE') == null
+                    || jar.getEntry('com/cybersammy/bugreport/api/BugReportProvider.class') == null) {
+                throw new GradleException(
+                        "API baseline has unexpected manifest or archive contents: ${archive}")
+            }
+        } finally {
+            jar.close()
+        }
+    }
+}
+
+tasks.named('verifyApiCompatibility') {
+    group = 'verification'
+    description = 'Rejects binary-incompatible changes to the frozen Bug Report API baseline.'
+    dependsOn tasks.named('jar'), tasks.named('verifyApiBaselineArtifact')
+
+    oldClasspath.from(files(baselineArchive))
+    newClasspath.from(currentArchive)
+    oldArchives.from(files(baselineArchive))
+    newArchives.from(currentArchive)
+    packageIncludes = ['com.cybersammy.bugreport.api.*']
+    accessModifier = 'protected'
+    onlyModified = true
+    ignoreMissingClasses = false
+    txtOutputFile = compatibilityReportDirectory.map { it.file('japicmp.txt') }
+
+    richReport {
+        destinationDir = compatibilityReportDirectory
+        reportName = 'japicmp.html'
+        title = "Bug Report API ${baselineVersion} compatibility"
+        description = 'Current bugreport-api bytecode compared with the frozen M1 baseline.'
+        addDefaultRules = true
+    }
+
+}
+
+tasks.named('detectBreakingApiFixture') {
+    group = 'verification'
+    description = 'Runs JApiCmp against an intentionally older, incompatible API fixture.'
+    dependsOn tasks.named('jar'),
+            tasks.named('verifyApiBaselineArtifact'),
+            ':spike-fixtures:api-v010:jar'
+
+    oldClasspath.from(files(baselineArchive))
+    newClasspath.from(project(':spike-fixtures:api-v010').tasks.named('jar'))
+    oldArchives.from(files(baselineArchive))
+    newArchives.from(project(':spike-fixtures:api-v010').tasks.named('jar'))
+    packageIncludes = ['com.cybersammy.bugreport.api.*']
+    accessModifier = 'protected'
+    onlyModified = true
+    onlyBinaryIncompatibleModified = true
+    ignoreMissingClasses = false
+    txtOutputFile = compatibilityReportDirectory.map { it.file('breaking-fixture.txt') }
+
+}
+
+tasks.named('verifyAdditiveApiFixture') {
+    group = 'verification'
+    description = 'Proves that compatible additions preserve an older provider ABI.'
+    dependsOn tasks.named('jar'), ':spike-fixtures:api-v010:jar'
+
+    oldClasspath.from(project(':spike-fixtures:api-v010').tasks.named('jar'))
+    newClasspath.from(currentArchive)
+    oldArchives.from(project(':spike-fixtures:api-v010').tasks.named('jar'))
+    newArchives.from(currentArchive)
+    packageIncludes = ['com.cybersammy.bugreport.api.*']
+    accessModifier = 'protected'
+    onlyModified = true
+    ignoreMissingClasses = false
+    txtOutputFile = compatibilityReportDirectory.map { it.file('additive-fixture.txt') }
+
+    richReport {
+        destinationDir = compatibilityReportDirectory
+        reportName = 'additive-fixture.html'
+        title = 'Bug Report API additive compatibility fixture'
+        description = 'Current API compared with the provider-facing 0.1.0 fixture.'
+        addDefaultRules = true
+    }
+}
+
+tasks.register('verifyApiCompatibilityGuard') {
+    group = 'verification'
+    description = 'Proves that the API comparator detects a known binary regression.'
+    dependsOn tasks.named('detectBreakingApiFixture')
+
+    doLast {
+        def report = compatibilityReportDirectory.get().file('breaking-fixture.txt').asFile
+        if (!report.isFile()) {
+            throw new GradleException("Missing breaking-fixture report: ${report}")
+        }
+        def content = report.getText('UTF-8')
+        if (!content.contains('ProviderSpecification')
+                || !content.contains('REMOVED')) {
+            throw new GradleException(
+                    'JApiCmp did not report the intentional ProviderSpecification removal')
+        }
+    }
+}
+
+tasks.register('updateApiBaseline', Copy) {
+    group = 'release preparation'
+    description = 'Explicitly replaces the frozen API baseline after compatibility review.'
+    dependsOn tasks.named('jar')
+    from(currentArchive)
+    into(baselineArchive.asFile.parentFile)
+    rename { "bugreport-api-${baselineVersion}.jar" }
+
+    doFirst {
+        if (!providers.gradleProperty('confirmApiBaselineUpdate')
+                .map { it == 'true' }
+                .getOrElse(false)) {
+            throw new GradleException(
+                    'Baseline replacement requires -PconfirmApiBaselineUpdate=true')
+        }
+        if (project.version.toString() != baselineVersion) {
+            throw new GradleException(
+                    "Current API version ${version} does not match baseline version "
+                            + baselineVersion)
+        }
+    }
+
+    doLast {
+        def updatedArchive = baselineArchive.asFile
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        updatedArchive.withInputStream { input ->
+            def buffer = new byte[8192]
+            int count
+            while ((count = input.read(buffer)) >= 0) {
+                digest.update(buffer, 0, count)
+            }
+        }
+        logger.lifecycle(
+                'Updated API baseline SHA-256: '
+                        + digest.digest().encodeHex().toString().toUpperCase(Locale.ROOT))
+        logger.lifecycle('Review the API diff and update api_baseline_sha256 explicitly.')
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('verifyApiCompatibility'),
+            tasks.named('verifyApiCompatibilityGuard'),
+            tasks.named('verifyAdditiveApiFixture')
+}
+
+rootProject.tasks.named('check') {
+    dependsOn tasks.named('verifyApiCompatibility'),
+            tasks.named('verifyApiCompatibilityGuard'),
+            tasks.named('verifyAdditiveApiFixture')
+}
