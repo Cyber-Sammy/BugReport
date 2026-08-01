@@ -138,32 +138,42 @@ tasks.register('verifyApiCompatibilityGuard') {
     }
 }
 
-tasks.register('updateApiBaseline', Copy) {
+tasks.register('createApiBaseline') {
     group = 'release preparation'
-    description = 'Explicitly replaces the frozen API baseline after compatibility review.'
+    description = 'Creates a frozen API baseline for a version that has no baseline yet.'
     dependsOn tasks.named('jar')
-    from(currentArchive)
-    into(baselineArchive.asFile.parentFile)
-    rename { "bugreport-api-${baselineVersion}.jar" }
 
-    doFirst {
-        if (!providers.gradleProperty('confirmApiBaselineUpdate')
+    doLast {
+        if (!providers.gradleProperty('confirmApiBaselineCreation')
                 .map { it == 'true' }
                 .getOrElse(false)) {
             throw new GradleException(
-                    'Baseline replacement requires -PconfirmApiBaselineUpdate=true')
+                    'Baseline creation requires -PconfirmApiBaselineCreation=true')
         }
         if (project.version.toString() != baselineVersion) {
             throw new GradleException(
                     "Current API version ${version} does not match baseline version "
                             + baselineVersion)
         }
-    }
 
-    doLast {
-        def updatedArchive = baselineArchive.asFile
+        def newBaseline = baselineArchive.asFile
+        if (newBaseline.exists()) {
+            throw new GradleException(
+                    "API baseline ${baselineVersion} already exists and is immutable: "
+                            + newBaseline)
+        }
+
+        java.nio.file.Files.createDirectories(newBaseline.toPath().parent)
+        try {
+            java.nio.file.Files.copy(currentArchive.get().asFile.toPath(), newBaseline.toPath())
+        } catch (java.nio.file.FileAlreadyExistsException ignored) {
+            throw new GradleException(
+                    "API baseline ${baselineVersion} already exists and is immutable: "
+                            + newBaseline)
+        }
+
         def digest = java.security.MessageDigest.getInstance('SHA-256')
-        updatedArchive.withInputStream { input ->
+        newBaseline.withInputStream { input ->
             def buffer = new byte[8192]
             int count
             while ((count = input.read(buffer)) >= 0) {
@@ -171,9 +181,9 @@ tasks.register('updateApiBaseline', Copy) {
             }
         }
         logger.lifecycle(
-                'Updated API baseline SHA-256: '
+                'Created API baseline SHA-256: '
                         + digest.digest().encodeHex().toString().toUpperCase(Locale.ROOT))
-        logger.lifecycle('Review the API diff and update api_baseline_sha256 explicitly.')
+        logger.lifecycle('Review the API surface and update api_baseline_sha256 explicitly.')
     }
 }
 

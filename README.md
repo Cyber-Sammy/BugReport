@@ -391,19 +391,21 @@ binary surface. Additive binary-compatible API changes are reported but do not
 fail the build; removals and incompatible signature or accessibility changes
 do.
 
-After an intentional API version decision and compatibility review, replace
-the baseline explicitly:
+Baselines are immutable once created. After an intentional API version decision
+and compatibility review, increase both `api_version` and
+`api_baseline_version`, then create the absent baseline explicitly:
 
 ```powershell
-.\gradlew.bat :bugreport-api:updateApiBaseline `
-    -PconfirmApiBaselineUpdate=true
+.\gradlew.bat :bugreport-api:createApiBaseline `
+    -PconfirmApiBaselineCreation=true
 ```
 
-Review the resulting binary diff and update `api_baseline_version` and
-`api_baseline_sha256` in `gradle.properties` deliberately. The task refuses to
-run without the confirmation property or when the current API and target
-baseline versions differ. Reports are written under
-`bugreport-api/build/reports/api-compatibility`.
+Review the resulting API surface and update `api_baseline_sha256` in
+`gradle.properties` deliberately. The task refuses to run without the
+confirmation property, when the current API and target baseline versions
+differ, or when a baseline for that version already exists. Never replace a
+baseline for an API version that has already been published. Reports are
+written under `bugreport-api/build/reports/api-compatibility`.
 
 ## Direct source-level side boundaries
 
