@@ -9,6 +9,10 @@ import com.cybersammy.bugreport.api.identifier.GeneratedArtifactId;
  * <p>The implementation enforces declared and product-owned count and byte
  * ceilings. It exposes no filesystem path, stream, workspace, or package
  * handle. Emitting after cancellation or beyond a limit fails the invocation.
+ * The sink also rejects an emission method whose representation does not match
+ * the owning generator's declared {@link DiagnosticContentType}: a TEXT
+ * generator may call only {@link #emitText}, and a JSON generator may call only
+ * {@link #emitJson}.
  */
 public interface GeneratedDiagnosticSink {
     /**

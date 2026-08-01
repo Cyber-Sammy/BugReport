@@ -12,8 +12,9 @@ import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.identifier.TransportId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
-import com.cybersammy.bugreport.api.version.ApiVersion;
+import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 final class ProviderSpecificationTest {
@@ -33,7 +34,7 @@ final class ProviderSpecificationTest {
                 .addCategory(category)
                 .build();
 
-        assertEquals(ApiVersion.parse("1.0.0"), specification.version());
+        assertEquals(ProviderVersion.parse("1.0.0"), specification.version());
         assertEquals(List.of(CategoryId.of("general")), List.copyOf(specification.categories().keySet()));
         assertThrows(UnsupportedOperationException.class, () -> specification.categories().clear());
         assertThrows(UnsupportedOperationException.class, () -> specification.supportedSides().clear());
@@ -52,7 +53,9 @@ final class ProviderSpecificationTest {
     @Test
     void rejectsChildSidesNotSupportedByProvider() {
         ProviderSpecification.Builder builder = ProviderSpecification.builder(
-                        ProviderId.parse("example"), ApiVersion.parse("1.0.0"), key("provider"))
+                        ProviderId.parse("example"),
+                        ProviderVersion.parse("1.0.0"),
+                        key("provider"))
                 .supportSide(SupportedSide.DEDICATED_SERVER)
                 .addSource(latestLog("latest_log"))
                 .addCategory(CategorySpecification.builder(CategoryId.of("general"), key("general"))
@@ -81,9 +84,40 @@ final class ProviderSpecificationTest {
         assertEquals(false, provider.specification().isPresent());
     }
 
+    @Test
+    void m1ProviderFixtureKeepsBridgeIdentityAndVersionConsistent() {
+        ProviderSpecification specification = baseBuilder()
+                .addCategory(CategorySpecification.builder(
+                                CategoryId.of("general"), key("general"))
+                        .build())
+                .build();
+        BugReportProvider provider = new BugReportProvider() {
+            @Override
+            public String providerId() {
+                return "example";
+            }
+
+            @Override
+            public String providerVersion() {
+                return "1.0.0";
+            }
+
+            @Override
+            public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+
+        ProviderSpecification declared = provider.specification().orElseThrow();
+        assertEquals(provider.providerId(), declared.id().value());
+        assertEquals(provider.providerVersion(), declared.version().value());
+    }
+
     private static ProviderSpecification.Builder baseBuilder() {
         return ProviderSpecification.builder(
-                        ProviderId.parse("example"), ApiVersion.parse("1.0.0"), key("provider"))
+                        ProviderId.parse("example"),
+                        ProviderVersion.parse("1.0.0"),
+                        key("provider"))
                 .supportSide(SupportedSide.PHYSICAL_CLIENT);
     }
 

@@ -14,6 +14,8 @@ final class VersionTest {
     @Test
     void parsesIndependentVersionDomains() {
         ApiVersion apiVersion = ApiVersion.parse("1.2.3-alpha.1+build.5");
+        ProviderVersion providerVersion =
+                ProviderVersion.parse("4.5.6-integration.1+mod.9");
 
         assertEquals(1, apiVersion.major());
         assertEquals(2, apiVersion.minor());
@@ -21,6 +23,11 @@ final class VersionTest {
         assertEquals("alpha.1", apiVersion.preRelease().orElseThrow());
         assertEquals("build.5", apiVersion.buildMetadata().orElseThrow());
         assertEquals("1.2.3-alpha.1+build.5", apiVersion.toString());
+        assertEquals(4, providerVersion.major());
+        assertEquals(5, providerVersion.minor());
+        assertEquals(6, providerVersion.patch());
+        assertEquals("integration.1", providerVersion.preRelease().orElseThrow());
+        assertEquals("mod.9", providerVersion.buildMetadata().orElseThrow());
         assertEquals(new SchemaVersion(1, 0), SchemaVersion.parse("1.0"));
         assertEquals(new CapabilityVersion(2, 4), CapabilityVersion.parse("2.4"));
     }
@@ -42,6 +49,7 @@ final class VersionTest {
 
         assertEquals(first, same);
         assertNotEquals(first, differentBuild);
+        assertNotEquals(first, ProviderVersion.parse("1.2.3+build1"));
     }
 
     @ParameterizedTest
@@ -49,6 +57,7 @@ final class VersionTest {
     @ValueSource(strings = {"", "1", "1.2", "01.2.3", "1.02.3", "1.2.3-01", "1.2.3+"})
     void rejectsNonCanonicalApiVersions(String value) {
         assertThrows(IllegalArgumentException.class, () -> ApiVersion.parse(value));
+        assertThrows(IllegalArgumentException.class, () -> ProviderVersion.parse(value));
     }
 
     @ParameterizedTest
@@ -61,8 +70,13 @@ final class VersionTest {
     void rejectsCoreComponentsOutsideDocumentedRange(String value) {
         IllegalArgumentException exception =
                 assertThrows(IllegalArgumentException.class, () -> ApiVersion.parse(value));
+        IllegalArgumentException providerException =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> ProviderVersion.parse(value));
 
         assertTrue(exception.getMessage().contains("0..2147483647"));
+        assertTrue(providerException.getMessage().startsWith("Provider version"));
     }
 
     @ParameterizedTest

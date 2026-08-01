@@ -1,10 +1,7 @@
 package com.cybersammy.bugreport.api.version;
 
-import java.math.BigInteger;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Semantic version identifier for the Bug Report Java API artifact.
@@ -17,15 +14,6 @@ import java.util.regex.Pattern;
  * linkage fixtures, not by parsing or comparing a version string alone.
  */
 public final class ApiVersion {
-    private static final int MAX_LENGTH = 128;
-    private static final BigInteger MAX_CORE_COMPONENT =
-            BigInteger.valueOf(Integer.MAX_VALUE);
-    private static final Pattern PATTERN =
-            Pattern.compile(
-                    "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)"
-                            + "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?"
-                            + "(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?");
-
     private final String value;
     private final int major;
     private final int minor;
@@ -56,52 +44,15 @@ public final class ApiVersion {
      * @throws IllegalArgumentException when the value is not canonical SemVer
      */
     public static ApiVersion parse(String value) {
-        if (value == null || value.length() > MAX_LENGTH) {
-            throw invalidVersion();
-        }
-
-        Matcher matcher = PATTERN.matcher(value);
-        if (!matcher.matches() || hasLeadingZeroNumericPreRelease(matcher.group(4))) {
-            throw invalidVersion();
-        }
-
+        SemanticVersionSyntax.Components components =
+                SemanticVersionSyntax.parse(value, "API version");
         return new ApiVersion(
-                value,
-                parseCoreComponent(matcher.group(1)),
-                parseCoreComponent(matcher.group(2)),
-                parseCoreComponent(matcher.group(3)),
-                matcher.group(4),
-                matcher.group(5));
-    }
-
-    private static int parseCoreComponent(String component) {
-        BigInteger parsed = new BigInteger(component);
-        if (parsed.compareTo(MAX_CORE_COMPONENT) > 0) {
-            throw invalidVersion();
-        }
-        return parsed.intValueExact();
-    }
-
-    private static boolean hasLeadingZeroNumericPreRelease(String preRelease) {
-        if (preRelease == null) {
-            return false;
-        }
-        for (String identifier : preRelease.split("\\.")) {
-            if (identifier.length() > 1
-                    && identifier.charAt(0) == '0'
-                    && identifier.chars().allMatch(Character::isDigit)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static IllegalArgumentException invalidVersion() {
-        return new IllegalArgumentException(
-                "API version must be canonical Semantic Versioning text of at most "
-                        + MAX_LENGTH
-                        + " characters with numeric core components in 0.."
-                        + Integer.MAX_VALUE);
+                components.value(),
+                components.major(),
+                components.minor(),
+                components.patch(),
+                components.preRelease(),
+                components.buildMetadata());
     }
 
     /**

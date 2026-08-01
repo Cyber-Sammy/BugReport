@@ -10,7 +10,7 @@ import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.IdentifierKind;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
-import com.cybersammy.bugreport.api.version.ApiVersion;
+import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Map;
@@ -35,7 +35,7 @@ public final class ProviderSpecification {
     public static final int MAX_TOTAL_FIELDS = 512;
 
     private final ProviderId id;
-    private final ApiVersion version;
+    private final ProviderVersion version;
     private final LocalizationKey labelKey;
     private final LocalizationKey descriptionKey;
     private final LocalizationKey privacyNoticeKey;
@@ -75,7 +75,8 @@ public final class ProviderSpecification {
      * @param labelKey localized provider label
      * @return new builder
      */
-    public static Builder builder(ProviderId id, ApiVersion version, LocalizationKey labelKey) {
+    public static Builder builder(
+            ProviderId id, ProviderVersion version, LocalizationKey labelKey) {
         return new Builder(id, version, labelKey);
     }
 
@@ -93,7 +94,7 @@ public final class ProviderSpecification {
      *
      * @return exact provider-defined version text
      */
-    public ApiVersion version() {
+    public ProviderVersion version() {
         return version;
     }
 
@@ -213,7 +214,7 @@ public final class ProviderSpecification {
     /** Builder for a complete immutable provider specification. */
     public static final class Builder {
         private final ProviderId id;
-        private final ApiVersion version;
+        private final ProviderVersion version;
         private final LocalizationKey labelKey;
         private final EnumSet<SupportedSide> supportedSides =
                 EnumSet.noneOf(SupportedSide.class);
@@ -232,7 +233,8 @@ public final class ProviderSpecification {
         private HttpsUrl documentationUrl;
         private ExtensionMetadata extensions = ExtensionMetadata.empty();
 
-        private Builder(ProviderId id, ApiVersion version, LocalizationKey labelKey) {
+        private Builder(
+                ProviderId id, ProviderVersion version, LocalizationKey labelKey) {
             this.id = Objects.requireNonNull(id, "id");
             this.version = Objects.requireNonNull(version, "version");
             this.labelKey = Objects.requireNonNull(labelKey, "labelKey");

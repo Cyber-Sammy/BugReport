@@ -35,8 +35,8 @@ import com.cybersammy.bugreport.api.specification.ReportQualityRole;
 import com.cybersammy.bugreport.api.specification.SupportDestinationSpecification;
 import com.cybersammy.bugreport.api.specification.SupportDestinationTarget;
 import com.cybersammy.bugreport.api.specification.SupportDestinationType;
-import com.cybersammy.bugreport.api.version.ApiVersion;
 import com.cybersammy.bugreport.api.version.CapabilityVersion;
+import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.time.Duration;
 import java.util.Optional;
 
@@ -146,7 +146,7 @@ public final class ExampleBugReportProvider implements BugReportProvider {
                         .build();
 
         return ProviderSpecification.builder(
-                        PROVIDER_ID, ApiVersion.parse("1.0.0"), key("provider.name"))
+                        PROVIDER_ID, ProviderVersion.parse("1.0.0"), key("provider.name"))
                 .descriptionKey(key("provider.description"))
                 .privacyNoticeKey(key("provider.privacy_notice"))
                 .documentationUrl(HttpsUrl.of("https://github.com/Cyber-Sammy/BugReport"))

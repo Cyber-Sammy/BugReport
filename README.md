@@ -219,14 +219,14 @@ import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
-import com.cybersammy.bugreport.api.version.ApiVersion;
+import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.util.Optional;
 
 public final class MyBugReportProvider implements BugReportProvider {
     private static final ProviderSpecification SPECIFICATION =
             ProviderSpecification.builder(
                             ProviderId.parse("my_mod"),
-                            ApiVersion.parse("1.0.0"),
+                            ProviderVersion.parse("1.0.0"),
                             LocalizationKey.of("my_mod.bugreport.provider"))
                     .supportSide(SupportedSide.PHYSICAL_CLIENT)
                     .addCategory(
@@ -262,6 +262,12 @@ generated diagnostics, and support destinations by typed ID. The builder
 rejects duplicate IDs, unresolved references, cross-provider destination and
 capability IDs, unsupported physical sides, prohibited privacy declarations,
 and invalid field/constraint combinations.
+
+`ProviderVersion` identifies the release of this provider integration. It is a
+separate domain from `ApiVersion` and must never be used for API artifact
+selection or compatibility negotiation. Its exact text must match
+`providerVersion()`, just as the specification ID must match `providerId()`;
+the production registry rejects mismatches before accepting child declarations.
 
 Filesystem sources use an approved `LogicalRoot` plus a validated
 `RelativePath` or non-recursive `FilenamePattern`; the API never gives a
