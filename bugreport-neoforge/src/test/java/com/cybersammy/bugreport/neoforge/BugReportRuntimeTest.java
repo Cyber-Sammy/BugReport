@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -12,7 +13,9 @@ final class BugReportRuntimeTest {
     @Test
     void retainsOneDiscoverySnapshotAndRejectsReinitialization() {
         ProviderDiscoverySnapshot expected =
-                new ProviderDiscoverySnapshot(List.of(), List.of());
+                new ProviderDiscoverySnapshot(
+                        ProviderRegistrySnapshot.empty(),
+                        List.of());
         AtomicInteger discoveryCalls = new AtomicInteger();
         BugReportRuntime runtime =
                 new BugReportRuntime(
@@ -47,6 +50,6 @@ final class BugReportRuntimeTest {
         runtime.initializeProviders();
 
         assertEquals(2, discoveryAttempts.get());
-        assertEquals(List.of(), runtime.providers().providers());
+        assertEquals(List.of(), runtime.providers().registry().providers());
     }
 }

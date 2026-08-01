@@ -21,9 +21,11 @@ public final class BugReportMod {
         runtime.initializeProviders();
         ProviderDiscoverySnapshot snapshot = runtime.providers();
         LOGGER.info(
-                "Bug Report provider discovery completed: providers={}, diagnostics={}",
+                "Bug Report provider discovery completed: providers={}, "
+                        + "discoveryDiagnostics={}, registryDiagnostics={}",
                 snapshot.providerIds(),
-                snapshot.diagnostics());
+                snapshot.discoveryDiagnostics(),
+                snapshot.registry().diagnostics());
     }
 
     BugReportRuntime runtime() {

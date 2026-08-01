@@ -322,37 +322,41 @@ verifyDiscoveryLog(
         'verifyBugReportOnly',
         'bugreport-only',
         '[]',
-        ['diagnostics=[]'])
+        ['discoveryDiagnostics=[]', 'registryDiagnostics=[]'])
 verifyDiscoveryLog(
         'verifyExampleProductionDiscovery',
         'verifyExampleCompatible',
         'example-compatible',
         '[bugreport_example]',
-        ['diagnostics=[]'])
+        ['discoveryDiagnostics=[]', 'registryDiagnostics=[]'])
 verifyDiscoveryLog(
         'verifyFailureIsolationProductionDiscovery',
         'verifyCompatible',
         'compatible',
-        '[bugreport_provider_a, bugreport_provider_b]',
+        '[]',
         [
-                'access|bugreport_provider_b|'
+                'access|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.PackagePrivateProvider',
-                'constructor|bugreport_provider_b|'
+                'constructor|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.NoPublicConstructorProvider',
-                'duplicate|bugreport_provider_b:duplicate|bugreport_provider_b|'
+                'duplicate|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderA',
-                'duplicate|bugreport_provider_b:duplicate|bugreport_provider_b|'
+                'duplicate|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateNamedProviderB',
-                'id|bugreport_provider_a|bugreport_provider_b|'
+                'id_ownership|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.DuplicateProvider',
-                'invalid|bugreport_provider_b|'
+                'invalid|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.NotAProvider',
-                'instantiation|bugreport_provider_b|'
+                'instantiation|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.ThrowingProvider',
-                'missing|bugreport_provider_b|'
+                'missing|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.MissingProvider',
-                'ownership|bugreport_provider_b|'
-                        + 'com.cybersammy.bugreport.fixtures.providera.ProviderAMod'
+                'ownership|owner=bugreport_provider_b|class='
+                        + 'com.cybersammy.bugreport.fixtures.providera.ProviderAMod',
+                'specification_missing|owner=bugreport_provider_a|class='
+                        + 'com.cybersammy.bugreport.fixtures.providera.ProviderAMod',
+                'specification_missing|owner=bugreport_provider_b|class='
+                        + 'com.cybersammy.bugreport.fixtures.providerb.ProviderBMod'
         ])
 
 tasks.register('verifyExecutableProviderPrototype') {

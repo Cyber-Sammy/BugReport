@@ -9,10 +9,7 @@ enum ProviderDiagnosticCode {
     INACCESSIBLE_CLASS("access"),
     ABSTRACT_TYPE("abstract"),
     MISSING_CONSTRUCTOR("constructor"),
-    INSTANTIATION_FAILED("instantiation"),
-    PROVIDER_ID_FAILED("id_call"),
-    INVALID_PROVIDER_ID("id"),
-    DUPLICATE_PROVIDER_ID("duplicate");
+    INSTANTIATION_FAILED("instantiation");
 
     private final String logToken;
 

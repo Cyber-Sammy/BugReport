@@ -19,6 +19,8 @@ Implemented and executable:
 - provider discovery through NeoForge mod metadata;
 - provider ownership and constructor validation;
 - deterministic duplicate rejection and failure isolation;
+- a loader-neutral production registry with immutable snapshots, canonical
+  ordering, bridge/specification consistency checks, and structured diagnostics;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
@@ -33,7 +35,7 @@ Implemented and executable:
 Not implemented yet:
 
 - execution of diagnostic collection callbacks;
-- the production provider registry;
+- capability negotiation and provider support-state evaluation;
 - report creation, review, sanitization, export, or submission;
 - player commands and UI.
 
@@ -351,12 +353,14 @@ Test at least these installations:
 With Bug Report installed, the current prototype logs:
 
 ```text
-Bug Report provider discovery completed: providers=[my_mod], diagnostics=[]
+Bug Report provider discovery completed: providers=[my_mod], discoveryDiagnostics=[], registryDiagnostics=[]
 ```
 
 Provider IDs must be globally unique. If multiple providers return the same
 ID, every registration for that ID is rejected. An invalid or throwing provider
-does not prevent unrelated valid providers from loading.
+does not prevent unrelated valid providers from loading. Providers that return
+no M1 specification are diagnosed as legacy and are not added to the production
+registry.
 
 ## Build verification
 

@@ -1,6 +1,9 @@
 package com.cybersammy.bugreport.neoforge;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
+import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
+import com.cybersammy.bugreport.core.registry.ProviderRegistry;
+import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -11,20 +14,20 @@ final class NeoForgeProviderDiscovery {
     private static final String PROVIDER_PROPERTY = "bugreportProviders";
 
     private final ProviderCandidateEvaluator candidateEvaluator;
-    private final ProviderRegistryBuilder registryBuilder;
+    private final ProviderCandidateInstantiator candidateInstantiator;
 
     private NeoForgeProviderDiscovery(
             ProviderCandidateEvaluator candidateEvaluator,
-            ProviderRegistryBuilder registryBuilder) {
+            ProviderCandidateInstantiator candidateInstantiator) {
         this.candidateEvaluator = candidateEvaluator;
-        this.registryBuilder = registryBuilder;
+        this.candidateInstantiator = candidateInstantiator;
     }
 
     static ProviderDiscoverySnapshot discover() {
         return new NeoForgeProviderDiscovery(
-                        new ProviderCandidateEvaluator(
+                new ProviderCandidateEvaluator(
                                 BugReportProvider.class.getClassLoader()),
-                        new ProviderRegistryBuilder())
+                        new ProviderCandidateInstantiator())
                 .discoverProviders();
     }
 
@@ -41,7 +44,25 @@ final class NeoForgeProviderDiscovery {
                                         candidates,
                                         diagnostics));
 
-        return registryBuilder.build(candidates, diagnostics);
+        List<DiscoveredProvider> discoveredProviders = new ArrayList<>();
+        candidates.stream()
+                .sorted(
+                        Comparator.comparing(ProviderCandidate::ownerModId)
+                                .thenComparing(ProviderCandidate::className))
+                .map(candidateInstantiator::instantiate)
+                .forEach(
+                        evaluation -> {
+                            if (evaluation.provider() != null) {
+                                discoveredProviders.add(evaluation.provider());
+                            } else {
+                                diagnostics.add(evaluation.diagnostic());
+                            }
+                        });
+
+        diagnostics.sort(Comparator.comparing(ProviderDiagnostic::logToken));
+        ProviderRegistrySnapshot registry =
+                ProviderRegistry.createSnapshot(discoveredProviders);
+        return new ProviderDiscoverySnapshot(registry, diagnostics);
     }
 
     private void discoverModCandidates(
