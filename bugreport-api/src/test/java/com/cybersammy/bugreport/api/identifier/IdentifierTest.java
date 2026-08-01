@@ -27,6 +27,9 @@ final class IdentifierTest {
         assertEquals("steps", FieldId.of("steps").value());
         assertEquals("latest_log", DiagnosticSourceId.of("latest_log").value());
         assertEquals("environment", DiagnosticGeneratorId.of("environment").value());
+        assertEquals("primary", FieldOptionId.of("primary").value());
+        assertEquals("environment", GeneratedArtifactId.of("environment").value());
+        assertEquals("example_mod:local", DestinationId.of("example_mod:local").value());
         assertEquals("example_mod:json_v1", CapabilityId.of("example_mod:json_v1").value());
         assertEquals("bugreport:local_zip", TransportId.of("bugreport:local_zip").value());
         assertEquals(

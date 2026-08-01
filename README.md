@@ -25,12 +25,14 @@ Implemented and executable:
 - typed canonical identifiers, independent version domains, side and privacy
   classifications, collection constraints, validation results, localization
   keys, and bounded extension metadata;
+- immutable declarative provider, category, field, diagnostic source, generated
+  diagnostic, capability, and support-destination specifications;
 - reproducible archives, local Maven publication, dependency locking, and CI
   verification.
 
 Not implemented yet:
 
-- diagnostic specification and collection callbacks;
+- execution of diagnostic collection callbacks;
 - the production provider registry;
 - report creation, review, sanitization, export, or submission;
 - player commands and UI.
@@ -211,8 +213,30 @@ non-blocking limitations.
 package com.example.mymod.bugreport;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
+import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.api.identifier.CategoryId;
+import com.cybersammy.bugreport.api.identifier.ProviderId;
+import com.cybersammy.bugreport.api.localization.LocalizationKey;
+import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.version.ApiVersion;
+import java.util.Optional;
 
 public final class MyBugReportProvider implements BugReportProvider {
+    private static final ProviderSpecification SPECIFICATION =
+            ProviderSpecification.builder(
+                            ProviderId.parse("my_mod"),
+                            ApiVersion.parse("1.0.0"),
+                            LocalizationKey.of("my_mod.bugreport.provider"))
+                    .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                    .addCategory(
+                            CategorySpecification.builder(
+                                            CategoryId.of("general"),
+                                            LocalizationKey.of(
+                                                    "my_mod.bugreport.category.general"))
+                                    .build())
+                    .build();
+
     public MyBugReportProvider() {}
 
     @Override
@@ -224,8 +248,33 @@ public final class MyBugReportProvider implements BugReportProvider {
     public String providerVersion() {
         return "1.0.0";
     }
+
+    @Override
+    public Optional<ProviderSpecification> specification() {
+        return Optional.of(SPECIFICATION);
+    }
 }
 ```
+
+`ProviderSpecification` is the immutable root of the integration contract. A
+category owns its form fields and references provider-level diagnostic sources,
+generated diagnostics, and support destinations by typed ID. The builder
+rejects duplicate IDs, unresolved references, cross-provider destination and
+capability IDs, unsupported physical sides, prohibited privacy declarations,
+and invalid field/constraint combinations.
+
+Filesystem sources use an approved `LogicalRoot` plus a validated
+`RelativePath` or non-recursive `FilenamePattern`; the API never gives a
+provider an absolute path. Generated diagnostics receive only the physical
+side, a cancellation signal, and a bounded output sink. Destinations are
+descriptive values: declaring one cannot transmit data or bypass the user's
+review and confirmation.
+
+The default `specification()` implementation returns an empty value so providers
+compiled against the earlier API continue to link. New integrations should
+return a complete specification. See `ExampleBugReportProvider` in
+`example-mod` for sources, generated JSON, fields, capabilities, and a local
+archive destination in one executable example.
 
 The provider contract currently requires:
 

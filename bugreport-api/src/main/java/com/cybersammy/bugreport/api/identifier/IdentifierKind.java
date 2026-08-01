@@ -10,10 +10,16 @@ public enum IdentifierKind {
     CATEGORY,
     /** Field identity within a category. */
     FIELD,
+    /** Choice identity within a field. */
+    FIELD_OPTION,
     /** Diagnostic source identity within a provider. */
     DIAGNOSTIC_SOURCE,
     /** Generated diagnostic identity within a provider. */
     DIAGNOSTIC_GENERATOR,
+    /** Generated artifact identity within one diagnostic generator. */
+    GENERATED_ARTIFACT,
+    /** Globally namespaced support destination identity. */
+    DESTINATION,
     /** Globally namespaced capability identity. */
     CAPABILITY,
     /** Globally namespaced transport identity. */

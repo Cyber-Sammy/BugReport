@@ -255,13 +255,13 @@ verifyMarker(
         'example-only',
         ['bugreport_example'],
         '0.2.0',
-        ['bugreport_example:unknown'])
+        ['bugreport_example:1.0.0'])
 verifyMarker(
         'verifyExampleCompatible',
         'example-compatible',
         ['bugreport', 'bugreport_example'],
         '0.2.0',
-        ['bugreport_example:unknown'])
+        ['bugreport_example:1.0.0'])
 verifyMarker(
         'verifyProvidersOnlyCompatible',
         'providers-only-compatible',
