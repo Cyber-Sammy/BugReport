@@ -12,7 +12,8 @@ public record RegisteredProvider(
         String implementationClass,
         ProviderId id,
         BugReportProvider provider,
-        ProviderSpecification specification) {
+        ProviderSpecification specification,
+        ProviderSupport support) {
     /** Validates an accepted provider registration. */
     public RegisteredProvider {
         Objects.requireNonNull(ownerNamespace, "ownerNamespace");
@@ -20,6 +21,7 @@ public record RegisteredProvider(
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(specification, "specification");
+        Objects.requireNonNull(support, "support");
         if (!id.equals(specification.id())) {
             throw new IllegalArgumentException("Registration ID must match specification ID");
         }

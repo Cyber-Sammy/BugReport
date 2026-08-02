@@ -322,19 +322,25 @@ verifyDiscoveryLog(
         'verifyBugReportOnly',
         'bugreport-only',
         '[]',
-        ['discoveryDiagnostics=[]', 'registryDiagnostics=[]'])
+        ['supportStates=[]', 'discoveryDiagnostics=[]', 'registryDiagnostics=[]'])
 verifyDiscoveryLog(
         'verifyExampleProductionDiscovery',
         'verifyExampleCompatible',
         'example-compatible',
         '[bugreport_example]',
-        ['discoveryDiagnostics=[]', 'registryDiagnostics=[]'])
+        [
+                'supportStates=[bugreport_example=ENABLED]',
+                'discoveryDiagnostics=[]',
+                'registryDiagnostics=[]'
+        ])
 verifyDiscoveryLog(
         'verifyFailureIsolationProductionDiscovery',
         'verifyCompatible',
         'compatible',
-        '[]',
+        '[bugreport_provider_b:disabled, bugreport_provider_b:partial]',
         [
+                'supportStates=[bugreport_provider_b:disabled=DISABLED, '
+                        + 'bugreport_provider_b:partial=PARTIALLY_SUPPORTED]',
                 'access|owner=bugreport_provider_b|class='
                         + 'com.cybersammy.bugreport.fixtures.providerb.PackagePrivateProvider',
                 'constructor|owner=bugreport_provider_b|class='
@@ -472,7 +478,11 @@ tasks.register('verifyProviderDiscoverySpike') {
                 decision: 'mod_metadata',
                 serviceProviders: 'bugreport_provider_b',
                 serviceFailures: expectedServiceFailures,
-                metadataProviders: 'bugreport_provider_b',
+                metadataProviders: [
+                        'bugreport_provider_b',
+                        'bugreport_provider_b:disabled',
+                        'bugreport_provider_b:partial'
+                ].join(','),
                 metadataFailures: expectedMetadataFailures,
                 api: '0.2.0',
                 apiLoader: 'cpw.mods.cl.ModuleClassLoader',

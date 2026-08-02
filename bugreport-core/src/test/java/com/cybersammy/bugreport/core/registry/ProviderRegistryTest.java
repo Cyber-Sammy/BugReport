@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import org.junit.jupiter.api.Test;
 
 final class ProviderRegistryTest {
@@ -36,26 +37,29 @@ final class ProviderRegistryTest {
                                 provider("mod_dup:secondary", "1.0.0")));
 
         ProviderRegistrySnapshot forward = ProviderRegistry.createSnapshot(candidates);
-        List<DiscoveredProvider> reversed = new ArrayList<>(candidates);
-        Collections.reverse(reversed);
-        ProviderRegistrySnapshot backward = ProviderRegistry.createSnapshot(reversed);
-
         assertEquals(
                 List.of(ProviderId.parse("mod_a"), ProviderId.parse("mod_z")),
                 forward.providerIds());
-        assertEquals(forward.providerIds(), backward.providerIds());
-        assertEquals(
-                forward.diagnostics().stream()
-                        .map(ProviderRegistryDiagnostic::logToken)
-                        .toList(),
-                backward.diagnostics().stream()
-                        .map(ProviderRegistryDiagnostic::logToken)
-                        .toList());
         assertEquals(
                 List.of("DuplicateA", "DuplicateB"),
                 forward.diagnostics().stream()
                         .map(ProviderRegistryDiagnostic::implementationClass)
                         .toList());
+
+        for (int seed = 0; seed < 100; seed++) {
+            List<DiscoveredProvider> shuffled = new ArrayList<>(candidates);
+            Collections.shuffle(shuffled, new Random(seed));
+            ProviderRegistrySnapshot actual = ProviderRegistry.createSnapshot(shuffled);
+
+            assertEquals(forward.providerIds(), actual.providerIds());
+            assertEquals(
+                    forward.diagnostics().stream()
+                            .map(ProviderRegistryDiagnostic::logToken)
+                            .toList(),
+                    actual.diagnostics().stream()
+                            .map(ProviderRegistryDiagnostic::logToken)
+                            .toList());
+        }
     }
 
     @Test
