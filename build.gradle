@@ -362,7 +362,9 @@ verifyDiscoveryLog(
                 'specification_missing|owner=bugreport_provider_a|class='
                         + 'com.cybersammy.bugreport.fixtures.providera.ProviderAMod',
                 'specification_missing|owner=bugreport_provider_b|class='
-                        + 'com.cybersammy.bugreport.fixtures.providerb.ProviderBMod'
+                        + 'com.cybersammy.bugreport.fixtures.providerb.ProviderBMod',
+                '|path=$.providerId|message=',
+                '|path=$.specification|message='
         ])
 
 tasks.register('verifyExecutableProviderPrototype') {

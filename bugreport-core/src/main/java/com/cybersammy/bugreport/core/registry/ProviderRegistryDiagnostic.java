@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.core.registry;
 
 import com.cybersammy.bugreport.api.identifier.NamespaceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
+import com.cybersammy.bugreport.api.validation.ValidationPath;
 import com.cybersammy.bugreport.core.diagnostic.DiagnosticLogValue;
 import java.util.Comparator;
 import java.util.Objects;
@@ -85,6 +86,16 @@ public record ProviderRegistryDiagnostic(
                 specificationValue);
     }
 
+    /** Returns the exact provider contract path rejected by this diagnostic. */
+    public ValidationPath path() {
+        return code.validationPath();
+    }
+
+    /** Returns the stable bounded developer-facing explanation. */
+    public String message() {
+        return code.message();
+    }
+
     /** Returns a bounded, injection-safe token for structured logging. */
     public String logToken() {
         return code.logToken()
@@ -97,7 +108,11 @@ public record ProviderRegistryDiagnostic(
                 + "|bridge="
                 + DiagnosticLogValue.render(bridgeValue)
                 + "|specification="
-                + DiagnosticLogValue.render(specificationValue);
+                + DiagnosticLogValue.render(specificationValue)
+                + "|path="
+                + DiagnosticLogValue.render(path().toString())
+                + "|message="
+                + DiagnosticLogValue.render(message());
     }
 
     private static String valueOrEmpty(Object value) {

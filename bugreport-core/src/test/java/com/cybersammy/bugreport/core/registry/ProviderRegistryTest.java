@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.core.registry;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
@@ -122,6 +123,10 @@ final class ProviderRegistryTest {
                 snapshot.diagnostics().stream()
                         .map(ProviderRegistryDiagnostic::code)
                         .toList());
+        assertTrue(
+                snapshot.diagnostics().stream()
+                        .map(ProviderRegistryDiagnostic::logToken)
+                        .noneMatch(token -> token.contains("failure")));
     }
 
     @Test
