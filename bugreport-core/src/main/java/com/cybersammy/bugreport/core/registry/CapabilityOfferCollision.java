@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.core.registry;
 import com.cybersammy.bugreport.api.identifier.CapabilityId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.version.CapabilityVersion;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -12,17 +13,27 @@ public record CapabilityOfferCollision(
         CapabilityId capabilityId,
         List<CapabilityOfferProvenance> providerOffers,
         Optional<CapabilityVersion> runtimeVersion) {
-    /** Defensively copies collision provenance. */
+    /** Canonicalizes and defensively copies collision provenance. */
     public CapabilityOfferCollision {
         Objects.requireNonNull(capabilityId, "capabilityId");
-        providerOffers = List.copyOf(
-                Objects.requireNonNull(providerOffers, "providerOffers"));
         Objects.requireNonNull(runtimeVersion, "runtimeVersion");
+        providerOffers = Objects.requireNonNull(providerOffers, "providerOffers").stream()
+                .map(offer -> Objects.requireNonNull(offer, "provider offer"))
+                .sorted(Comparator.comparing(CapabilityOfferProvenance::providerId))
+                .toList();
         if (providerOffers.isEmpty()) {
             throw new IllegalArgumentException(
                     "A capability collision must include at least one provider");
         }
-        if (runtimeVersion.isEmpty() && providerOffers.size() < 2) {
+        long uniqueProviders = providerOffers.stream()
+                .map(CapabilityOfferProvenance::providerId)
+                .distinct()
+                .count();
+        if (uniqueProviders != providerOffers.size()) {
+            throw new IllegalArgumentException(
+                    "A capability collision cannot repeat a provider ID");
+        }
+        if (runtimeVersion.isEmpty() && uniqueProviders < 2) {
             throw new IllegalArgumentException(
                     "A provider-only capability collision requires at least two providers");
         }
