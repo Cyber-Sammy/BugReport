@@ -1,7 +1,9 @@
 package com.cybersammy.bugreport.core.registry;
 
+import com.cybersammy.bugreport.api.identifier.CapabilityId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.version.CapabilityVersion;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -29,6 +31,20 @@ public final class ProviderRegistry {
      */
     public static ProviderRegistrySnapshot createSnapshot(
             List<DiscoveredProvider> candidates) {
+        return createSnapshot(candidates, Map.of());
+    }
+
+    /**
+     * Validates providers and negotiates them against product-owned runtime
+     * capabilities.
+     *
+     * @param candidates provider instances with trusted loader provenance
+     * @param runtimeCapabilities product-owned capability versions
+     * @return accepted providers, support states, and rejection diagnostics
+     */
+    public static ProviderRegistrySnapshot createSnapshot(
+            List<DiscoveredProvider> candidates,
+            Map<CapabilityId, CapabilityVersion> runtimeCapabilities) {
         Objects.requireNonNull(candidates, "candidates");
         Map<ProviderId, List<IdentifiedProvider>> candidatesById = new TreeMap<>();
         List<ProviderRegistryDiagnostic> diagnostics = new ArrayList<>();
@@ -40,7 +56,7 @@ public final class ProviderRegistry {
                         candidate ->
                                 identifyCandidate(candidate, candidatesById, diagnostics));
 
-        List<RegisteredProvider> accepted = new ArrayList<>();
+        List<ValidatedProvider> accepted = new ArrayList<>();
         candidatesById.forEach(
                 (providerId, identifiedProviders) ->
                         resolveProviderId(
@@ -49,7 +65,9 @@ public final class ProviderRegistry {
                                 accepted,
                                 diagnostics));
         diagnostics.sort(ProviderRegistryDiagnostic.CANONICAL_ORDER);
-        return new ProviderRegistrySnapshot(accepted, diagnostics);
+        return new ProviderRegistrySnapshot(
+                CapabilityNegotiator.negotiate(accepted, runtimeCapabilities),
+                diagnostics);
     }
 
     private static void identifyCandidate(
@@ -90,7 +108,7 @@ public final class ProviderRegistry {
 
     private static void validateSpecification(
             IdentifiedProvider identifiedProvider,
-            List<RegisteredProvider> accepted,
+            List<ValidatedProvider> accepted,
             List<ProviderRegistryDiagnostic> diagnostics) {
         DiscoveredProvider candidate = identifiedProvider.candidate();
         ProviderId providerId = identifiedProvider.id();
@@ -153,7 +171,7 @@ public final class ProviderRegistry {
         }
 
         accepted.add(
-                new RegisteredProvider(
+                new ValidatedProvider(
                         candidate.ownerNamespace(),
                         candidate.implementationClass(),
                         providerId,
@@ -164,7 +182,7 @@ public final class ProviderRegistry {
     private static void resolveProviderId(
             ProviderId providerId,
             List<IdentifiedProvider> identifiedProviders,
-            List<RegisteredProvider> accepted,
+            List<ValidatedProvider> accepted,
             List<ProviderRegistryDiagnostic> diagnostics) {
         if (identifiedProviders.size() == 1) {
             validateSpecification(identifiedProviders.getFirst(), accepted, diagnostics);

@@ -23,4 +23,14 @@ record ProviderDiscoverySnapshot(
                 .map(Object::toString)
                 .toList();
     }
+
+    List<String> providerStates() {
+        return registry.providers().stream()
+                .map(
+                        provider ->
+                                provider.id()
+                                        + "="
+                                        + provider.support().state())
+                .toList();
+    }
 }
