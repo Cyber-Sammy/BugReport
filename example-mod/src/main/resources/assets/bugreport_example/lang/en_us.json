@@ -2,8 +2,6 @@
   "bugreport_example.category.general": "General issue",
   "bugreport_example.category.general.description": "Report a general example-mod problem.",
   "bugreport_example.destination.local_archive": "Save local Bug Report archive",
-  "bugreport_example.field.steps": "Steps to reproduce",
-  "bugreport_example.field.summary": "Summary",
   "bugreport_example.generator.environment": "Example environment summary",
   "bugreport_example.provider.description": "Executable example of optional Bug Report integration.",
   "bugreport_example.provider.name": "Bug Report Example Mod",

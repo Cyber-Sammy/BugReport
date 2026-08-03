@@ -148,10 +148,10 @@ With the NeoForge ModDev plugin configured, add:
 ```groovy
 dependencies {
     jarJar(implementation(
-            'com.cybersammy.bugreport:bugreport-api:0.2.0')) {
+            'com.cybersammy.bugreport:bugreport-api:0.3.0')) {
         version {
-            strictly '[0.2.0,1.0.0)'
-            prefer '0.2.0'
+            strictly '[0.3.0,1.0.0)'
+            prefer '0.3.0'
         }
     }
 }
@@ -192,7 +192,7 @@ metadata keys, always require the namespaced form.
 The API separates artifact, persisted-schema, and capability versions:
 
 ```java
-ApiVersion api = ApiVersion.parse("0.2.0");
+ApiVersion api = ApiVersion.parse("0.3.0");
 SchemaVersion schema = SchemaVersion.parse("1.0");
 CapabilityVersion capability = CapabilityVersion.parse("1.0");
 ```
@@ -226,6 +226,7 @@ import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.specification.StandardFields;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.util.Optional;
 
@@ -241,6 +242,9 @@ public final class MyBugReportProvider implements BugReportProvider {
                                             CategoryId.of("general"),
                                             LocalizationKey.of(
                                                     "my_mod.bugreport.category.general"))
+                                    .addField(StandardFields.summary())
+                                    .addField(StandardFields.description())
+                                    .addField(StandardFields.reproductionSteps())
                                     .build())
                     .build();
 
@@ -269,6 +273,12 @@ generated diagnostics, and support destinations by typed ID. The builder
 rejects duplicate IDs, unresolved references, cross-provider destination and
 capability IDs, unsupported physical sides, prohibited privacy declarations,
 and invalid field/constraint combinations.
+
+`StandardFields` provides immutable, localized declarations for summary,
+description, reproduction steps, expected and actual behavior, severity, and
+side/context. A provider may reuse any subset and combine it with its own
+category-local fields. Free-form standard fields are bounded and carry a
+`PERSONAL` privacy floor; product-defined selectors contain no provider options.
 
 `ProviderVersion` identifies the release of this provider integration. It is a
 separate domain from `ApiVersion` and must never be used for API artifact

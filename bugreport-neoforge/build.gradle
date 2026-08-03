@@ -20,10 +20,10 @@ neoForge {
 
 dependencies {
     implementation project(':bugreport-core')
-    jarJar(implementation("${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.2.0")) {
+    jarJar(implementation("${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:${providers.gradleProperty('api_version').get()}")) {
         version {
             strictly '[0.1.0,1.0.0)'
-            prefer '0.2.0'
+            prefer providers.gradleProperty('api_version').get()
         }
     }
     testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"

@@ -25,7 +25,7 @@ neoForge {
 dependencies {
     jarJar(implementation("${providers.gradleProperty('api_group').get()}:${providers.gradleProperty('api_artifact').get()}:0.1.0")) {
         version {
-            strictly '[0.1.0,0.3.0)'
+            strictly '[0.1.0,1.0.0)'
             prefer '0.1.0'
         }
     }
