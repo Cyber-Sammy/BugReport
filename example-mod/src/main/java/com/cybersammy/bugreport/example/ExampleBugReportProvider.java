@@ -12,7 +12,6 @@ import com.cybersammy.bugreport.api.identifier.DestinationId;
 import com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId;
 import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.ExtensionMetadataKey;
-import com.cybersammy.bugreport.api.identifier.FieldId;
 import com.cybersammy.bugreport.api.identifier.GeneratedArtifactId;
 import com.cybersammy.bugreport.api.identifier.NamespaceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
@@ -23,15 +22,13 @@ import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
-import com.cybersammy.bugreport.api.specification.FieldConstraints;
-import com.cybersammy.bugreport.api.specification.FieldKind;
-import com.cybersammy.bugreport.api.specification.FieldSpecification;
 import com.cybersammy.bugreport.api.specification.GeneratedDiagnosticRequest;
 import com.cybersammy.bugreport.api.specification.GeneratedDiagnosticSink;
 import com.cybersammy.bugreport.api.specification.GeneratorExecutionContext;
 import com.cybersammy.bugreport.api.specification.HttpsUrl;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
 import com.cybersammy.bugreport.api.specification.ReportQualityRole;
+import com.cybersammy.bugreport.api.specification.StandardFields;
 import com.cybersammy.bugreport.api.specification.SupportDestinationSpecification;
 import com.cybersammy.bugreport.api.specification.SupportDestinationTarget;
 import com.cybersammy.bugreport.api.specification.SupportDestinationType;
@@ -115,31 +112,8 @@ public final class ExampleBugReportProvider implements BugReportProvider {
         CategorySpecification general =
                 CategorySpecification.builder(CategoryId.of("general"), key("category.general"))
                         .descriptionKey(key("category.general.description"))
-                        .addField(
-                                FieldSpecification.builder(
-                                                FieldId.of("summary"),
-                                                FieldKind.SINGLE_LINE_TEXT,
-                                                key("field.summary"),
-                                                PrivacyClassification.PERSONAL)
-                                        .required(true)
-                                        .constraints(
-                                                FieldConstraints.builder()
-                                                        .minimumLength(3)
-                                                        .maximumLength(200)
-                                                        .build())
-                                        .build())
-                        .addField(
-                                FieldSpecification.builder(
-                                                FieldId.of("steps"),
-                                                FieldKind.REPRODUCTION_STEPS,
-                                                key("field.steps"),
-                                                PrivacyClassification.PERSONAL)
-                                        .constraints(
-                                                FieldConstraints.builder()
-                                                        .maximumLength(1_000)
-                                                        .maximumItems(20)
-                                                        .build())
-                                        .build())
+                        .addField(StandardFields.summary())
+                        .addField(StandardFields.reproductionSteps())
                         .useSource(LATEST_LOG_ID)
                         .useGenerator(ENVIRONMENT_ID)
                         .useDestination(LOCAL_ARCHIVE_ID)

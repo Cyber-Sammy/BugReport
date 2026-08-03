@@ -2,12 +2,12 @@
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
 ca.weblite:java-objc-bridge:1.1=compileClasspath,neoFormRuntimeDependenciesCompileClasspath
-com.cybersammy.bugreport:bugreport-api:0.2.0=compileClasspath,jarJar,testCompileClasspath,testRuntimeClasspath
+com.cybersammy.bugreport:bugreport-api:0.3.0=compileClasspath,jarJar,testCompileClasspath,testRuntimeClasspath
 com.electronwill.night-config:core:3.8.3=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
 com.electronwill.night-config:toml:3.8.3=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
 com.github.oshi:oshi-core:6.4.10=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
 com.google.code.findbugs:jsr305:3.0.2=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
-com.google.code.gson:gson:2.10.1=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
+com.google.code.gson:gson:2.10.1=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath,testCompileClasspath,testRuntimeClasspath
 com.google.errorprone:error_prone_annotations:2.18.0=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
 com.google.guava:failureaccess:1.0.1=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath
 com.google.guava:guava:32.1.2-jre=compileClasspath,neoFormRuntimeDependenciesCompileClasspath,neoFormRuntimeDependenciesRuntimeClasspath

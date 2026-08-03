@@ -1,0 +1,16 @@
+{
+  "bugreport.field.actual_behavior.description": "Describe what happened instead.",
+  "bugreport.field.actual_behavior.label": "Actual behavior",
+  "bugreport.field.description.description": "Describe the problem and any relevant context.",
+  "bugreport.field.description.label": "Description",
+  "bugreport.field.expected_behavior.description": "Describe what you expected to happen.",
+  "bugreport.field.expected_behavior.label": "Expected behavior",
+  "bugreport.field.reproduction_steps.description": "List the actions that reproduce the problem, in order.",
+  "bugreport.field.reproduction_steps.label": "Steps to reproduce",
+  "bugreport.field.severity.description": "Select how strongly the problem affects play or operation.",
+  "bugreport.field.severity.label": "Severity",
+  "bugreport.field.side_context.description": "Select where and in which gameplay context the problem occurs.",
+  "bugreport.field.side_context.label": "Side and context",
+  "bugreport.field.summary.description": "Summarize the problem in one line.",
+  "bugreport.field.summary.label": "Summary"
+}

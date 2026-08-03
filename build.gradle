@@ -2,6 +2,8 @@ plugins {
     id 'base'
 }
 
+def currentApiVersion = providers.gradleProperty('api_version').get()
+
 def productionProjectPaths = [
         ':bugreport-api',
         ':bugreport-core',
@@ -248,19 +250,19 @@ verifyMarker(
         'verifyBugReportOnly',
         'bugreport-only',
         ['bugreport'],
-        '0.2.0',
+        currentApiVersion,
         [])
 verifyMarker(
         'verifyExampleOnly',
         'example-only',
         ['bugreport_example'],
-        '0.2.0',
+        currentApiVersion,
         ['bugreport_example:1.0.0'])
 verifyMarker(
         'verifyExampleCompatible',
         'example-compatible',
         ['bugreport', 'bugreport_example'],
-        '0.2.0',
+        currentApiVersion,
         ['bugreport_example:1.0.0'])
 verifyMarker(
         'verifyProvidersOnlyCompatible',
@@ -272,7 +274,7 @@ verifyMarker(
         'verifyCompatible',
         'compatible',
         ['bugreport', 'bugreport_provider_a', 'bugreport_provider_b'],
-        '0.2.0',
+        currentApiVersion,
         ['bugreport_provider_a:unknown', 'bugreport_provider_b:unknown'])
 
 tasks.register('verifyPositiveRuntimeScenarios') {
@@ -391,7 +393,7 @@ tasks.register('verifyIncompatible') {
         def logText = latestLog.getText('UTF-8')
         def expectedFragments = [
                 'conflicting versions of: com.cybersammy.bugreport:bugreport-api',
-                'bugreport - [0.1.0,1.0.0) - 0.2.0',
+                "bugreport - [0.1.0,1.0.0) - ${currentApiVersion}",
                 'bugreport_provider_incompatible - [1.0.0,2.0.0) - 1.0.0'
         ]
         expectedFragments.each { fragment ->
@@ -548,10 +550,10 @@ tasks.register('verifyJarJarMetadata') {
 
         def expectations = [
                 [project: project(':bugreport-neoforge'), range: '[0.1.0,1.0.0)',
-                 version: '0.2.0'],
-                [project: project(':example-mod'), range: '[0.2.0,1.0.0)',
-                 version: '0.2.0'],
-                [project: project(':spike-fixtures:provider-a'), range: '[0.1.0,0.3.0)',
+                 version: currentApiVersion],
+                [project: project(':example-mod'), range: '[0.3.0,1.0.0)',
+                 version: currentApiVersion],
+                [project: project(':spike-fixtures:provider-a'), range: '[0.1.0,1.0.0)',
                  version: '0.1.0'],
                 [project: project(':spike-fixtures:provider-b'), range: '[0.2.0,1.0.0)',
                  version: '0.2.0'],
@@ -806,12 +808,12 @@ tasks.register('verifyDependencyLocks') {
             'bugreport-api/gradle.lockfile'     : ['empty=annotationProcessor,compileClasspath'],
             'bugreport-core/gradle.lockfile'    : ['org.junit.jupiter:junit-jupiter:5.11.4'],
             'bugreport-neoforge/gradle.lockfile': [
-                    'com.cybersammy.bugreport:bugreport-api:0.2.0',
+                    "com.cybersammy.bugreport:bugreport-api:${currentApiVersion}",
                     'org.junit.jupiter:junit-jupiter:5.11.4'
             ],
             'bugreport-testkit/gradle.lockfile' : ['org.junit.jupiter:junit-jupiter:5.11.4'],
             'example-mod/gradle.lockfile'       : [
-                    'com.cybersammy.bugreport:bugreport-api:0.2.0'
+                    "com.cybersammy.bugreport:bugreport-api:${currentApiVersion}"
             ]
     ]
     inputs.files(expectedLockEntries.keySet().collect { file(it) })
