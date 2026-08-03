@@ -4,13 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import com.cybersammy.bugreport.api.classification.SupportedSide;
-import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
-import com.cybersammy.bugreport.api.localization.LocalizationKey;
-import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
-import com.cybersammy.bugreport.api.version.ProviderVersion;
+import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
+import com.cybersammy.bugreport.core.registry.RegisteredProvider;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -21,8 +18,13 @@ final class ReportSessionTest {
 
     @Test
     void completesThePrimaryLifecycleWithImmutableMonotonicSnapshots() {
-        ProviderSpecification specification = specification();
-        ReportSession session = new ReportSession(SESSION_ID, specification);
+        ProviderSpecification specification = SessionProviderFixture.specification("example_mod");
+        ProviderRegistrySnapshot registry = SessionProviderFixture.registry(specification);
+        RegisteredProvider registered =
+                registry.find(ProviderId.parse("example_mod")).orElseThrow();
+        ReportSession session =
+                new ReportSessionFactory(registry)
+                        .create(SESSION_ID, registered.id());
         ReportSessionSnapshot initial = session.snapshot();
         List<ReportSessionState> lifecycle =
                 List.of(
@@ -46,11 +48,12 @@ final class ReportSessionTest {
         assertEquals(lifecycle.size(), current.revision());
         assertEquals(SESSION_ID, current.id());
         assertSame(specification, current.providerSpecification());
+        assertSame(registered.support(), current.providerSupport());
     }
 
     @Test
     void recoversFromEachFailureAndFromPartialCollection() {
-        ReportSession session = new ReportSession(SESSION_ID, specification());
+        ReportSession session = session();
 
         transition(
                 session,
@@ -81,7 +84,7 @@ final class ReportSessionTest {
 
     @Test
     void rejectsInvalidTransitionWithoutChangingSnapshot() {
-        ReportSession session = new ReportSession(SESSION_ID, specification());
+        ReportSession session = session();
         ReportSessionSnapshot before = session.snapshot();
 
         InvalidReportSessionTransitionException exception =
@@ -104,7 +107,7 @@ final class ReportSessionTest {
 
     @Test
     void cancellationIsTerminal() {
-        ReportSession session = new ReportSession(SESSION_ID, specification());
+        ReportSession session = session();
 
         ReportSessionSnapshot cancelled = session.transitionTo(ReportSessionState.CANCELLED);
 
@@ -121,18 +124,11 @@ final class ReportSessionTest {
         }
     }
 
-    private static ProviderSpecification specification() {
-        return ProviderSpecification.builder(
-                        ProviderId.parse("example_mod"),
-                        ProviderVersion.parse("1.0.0"),
-                        LocalizationKey.of("example_mod.bugreport.provider"))
-                .supportSide(SupportedSide.PHYSICAL_CLIENT)
-                .addCategory(
-                        CategorySpecification.builder(
-                                        CategoryId.of("general"),
-                                        LocalizationKey.of(
-                                                "example_mod.bugreport.category.general"))
-                                .build())
-                .build();
+    private static ReportSession session() {
+        ProviderRegistrySnapshot registry =
+                SessionProviderFixture.registry(
+                        SessionProviderFixture.specification("example_mod"));
+        return new ReportSessionFactory(registry)
+                .create(SESSION_ID, ProviderId.parse("example_mod"));
     }
 }

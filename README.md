@@ -24,7 +24,8 @@ Implemented and executable:
   ordering, bridge/specification consistency checks, and structured diagnostics;
 - deterministic capability negotiation with enabled, partially supported, and
   disabled provider states;
-- a loader-neutral report session state machine with typed invalid-transition
+- registry-bound report session creation that rejects absent and disabled
+  providers, plus a loader-neutral state machine with typed invalid-transition
   errors, recovery paths, monotonic revisions, and immutable snapshots;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;

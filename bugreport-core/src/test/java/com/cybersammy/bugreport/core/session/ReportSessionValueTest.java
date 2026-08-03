@@ -3,13 +3,8 @@ package com.cybersammy.bugreport.core.session;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import com.cybersammy.bugreport.api.classification.SupportedSide;
-import com.cybersammy.bugreport.api.identifier.CategoryId;
-import com.cybersammy.bugreport.api.identifier.ProviderId;
-import com.cybersammy.bugreport.api.localization.LocalizationKey;
-import com.cybersammy.bugreport.api.specification.CategorySpecification;
-import com.cybersammy.bugreport.api.specification.ProviderSpecification;
-import com.cybersammy.bugreport.api.version.ProviderVersion;
+import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
+import com.cybersammy.bugreport.core.registry.RegisteredProvider;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -31,28 +26,19 @@ final class ReportSessionValueTest {
 
     @Test
     void snapshotRejectsNegativeRevision() {
+        ProviderRegistrySnapshot registry =
+                SessionProviderFixture.registry(
+                        SessionProviderFixture.specification("example_mod"));
+        RegisteredProvider provider = registry.providers().getFirst();
+
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
                         new ReportSessionSnapshot(
                                 ReportSessionId.parse(CANONICAL_ID),
-                                specification(),
+                                provider.specification(),
+                                provider.support(),
                                 ReportSessionState.CREATED,
                                 -1));
-    }
-
-    private static ProviderSpecification specification() {
-        return ProviderSpecification.builder(
-                        ProviderId.parse("example_mod"),
-                        ProviderVersion.parse("1.0.0"),
-                        LocalizationKey.of("example_mod.bugreport.provider"))
-                .supportSide(SupportedSide.PHYSICAL_CLIENT)
-                .addCategory(
-                        CategorySpecification.builder(
-                                        CategoryId.of("general"),
-                                        LocalizationKey.of(
-                                                "example_mod.bugreport.category.general"))
-                                .build())
-                .build();
     }
 }
