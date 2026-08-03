@@ -9,8 +9,9 @@ discovers their providers deterministically through NeoForge mod metadata.
 
 ## Project status
 
-The M0 architecture and risk-closure milestone is complete. M1 build and module
-foundation is in progress.
+The M0 architecture and risk-closure milestone and the M1 contracts, registry,
+and build-foundation milestone are complete. M2 headless reporting-engine work
+is next.
 
 Implemented and executable:
 
@@ -37,8 +38,7 @@ Implemented and executable:
 Not implemented yet:
 
 - execution of diagnostic collection callbacks;
-- complete M1 testkit fixtures and exit-criteria verification;
-- report creation, review, sanitization, export, or submission;
+- report sessions, collection, review, sanitization, export, or submission;
 - player commands and UI.
 
 The current build is suitable for testing API packaging, optional installation,
