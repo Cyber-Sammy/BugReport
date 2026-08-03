@@ -9,8 +9,17 @@
   "bugreport.field.reproduction_steps.label": "Steps to reproduce",
   "bugreport.field.severity.description": "Select how strongly the problem affects play or operation.",
   "bugreport.field.severity.label": "Severity",
+  "bugreport.field.severity.option.blocking": "Blocking",
+  "bugreport.field.severity.option.high": "High",
+  "bugreport.field.severity.option.low": "Low",
+  "bugreport.field.severity.option.moderate": "Moderate",
   "bugreport.field.side_context.description": "Select where and in which gameplay context the problem occurs.",
   "bugreport.field.side_context.label": "Side and context",
+  "bugreport.field.side_context.option.client_general": "Client or menus",
+  "bugreport.field.side_context.option.dedicated_server": "Dedicated server",
+  "bugreport.field.side_context.option.multiplayer_client": "Multiplayer client",
+  "bugreport.field.side_context.option.singleplayer": "Singleplayer",
+  "bugreport.field.side_context.option.unknown": "Not sure",
   "bugreport.field.summary.description": "Summarize the problem in one line.",
   "bugreport.field.summary.label": "Summary"
 }

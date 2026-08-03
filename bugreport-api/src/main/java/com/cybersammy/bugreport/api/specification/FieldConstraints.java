@@ -5,7 +5,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 
-/** Immutable declarative bounds interpreted according to a field's kind. */
+/**
+ * Immutable declarative bounds interpreted according to a field's kind.
+ *
+ * <p>Length bounds apply to a text value or to each individual item of ordered reproduction
+ * steps. Item bounds apply to the reproduction-step list or multi-selection as a whole.
+ */
 public final class FieldConstraints {
     private static final FieldConstraints NONE = new FieldConstraints(new Builder());
 

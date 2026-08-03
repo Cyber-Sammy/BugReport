@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.StandardFields;
+import com.cybersammy.bugreport.core.form.ReportSeverity;
+import com.cybersammy.bugreport.core.form.ReportSideContext;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import java.io.IOException;
@@ -36,6 +38,12 @@ final class StandardFieldLocalizationTest {
             assertContains(translations, field.labelKey());
             assertContains(translations, field.descriptionKey().orElseThrow());
         });
+        for (ReportSeverity severity : ReportSeverity.values()) {
+            assertContains(translations, severity.labelKey());
+        }
+        for (ReportSideContext context : ReportSideContext.values()) {
+            assertContains(translations, context.labelKey());
+        }
     }
 
     @Test
