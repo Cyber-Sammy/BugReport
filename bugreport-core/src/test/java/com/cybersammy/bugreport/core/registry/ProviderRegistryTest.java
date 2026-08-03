@@ -123,10 +123,6 @@ final class ProviderRegistryTest {
                 snapshot.diagnostics().stream()
                         .map(ProviderRegistryDiagnostic::code)
                         .toList());
-        assertTrue(
-                snapshot.diagnostics().stream()
-                        .map(ProviderRegistryDiagnostic::logToken)
-                        .noneMatch(token -> token.contains("failure")));
     }
 
     @Test
@@ -162,14 +158,24 @@ final class ProviderRegistryTest {
                 List.of(
                         ProviderRegistryDiagnosticCode.INVALID_PROVIDER_ID,
                         ProviderRegistryDiagnosticCode.MISSING_PROVIDER_SPECIFICATION,
+                        ProviderRegistryDiagnosticCode.NULL_PROVIDER_SPECIFICATION,
                         ProviderRegistryDiagnosticCode.PROVIDER_ID_FAILED,
                         ProviderRegistryDiagnosticCode.PROVIDER_ID_OWNERSHIP_MISMATCH,
-                        ProviderRegistryDiagnosticCode.PROVIDER_SPECIFICATION_FAILED,
                         ProviderRegistryDiagnosticCode.PROVIDER_SPECIFICATION_FAILED,
                         ProviderRegistryDiagnosticCode.PROVIDER_VERSION_FAILED),
                 snapshot.diagnostics().stream()
                         .map(ProviderRegistryDiagnostic::code)
                         .toList());
+        assertEquals(
+                ProviderRegistryDiagnosticCode.NULL_PROVIDER_SPECIFICATION,
+                diagnosticFor(snapshot, "NullSpecification").code());
+        assertEquals(
+                ProviderRegistryDiagnosticCode.PROVIDER_SPECIFICATION_FAILED,
+                diagnosticFor(snapshot, "ThrowSpecification").code());
+        assertTrue(
+                snapshot.diagnostics().stream()
+                        .map(ProviderRegistryDiagnostic::logToken)
+                        .noneMatch(token -> token.contains("failure")));
     }
 
     @Test
@@ -200,6 +206,17 @@ final class ProviderRegistryTest {
                 NamespaceId.of(ownerNamespace),
                 implementationClass,
                 provider);
+    }
+
+    private static ProviderRegistryDiagnostic diagnosticFor(
+            ProviderRegistrySnapshot snapshot,
+            String implementationClass) {
+        return snapshot.diagnostics().stream()
+                .filter(
+                        diagnostic ->
+                                diagnostic.implementationClass().equals(implementationClass))
+                .findFirst()
+                .orElseThrow();
     }
 
     private static BugReportProvider provider(String id, String version) {

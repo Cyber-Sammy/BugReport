@@ -368,7 +368,9 @@ Every registry rejection exposes a stable diagnostic code, an exact
 `ValidationPath`, and a deterministic developer-facing message. Paths identify
 the rejected bridge or specification property, such as `$.providerId`,
 `$.specification.id`, or `$.specification.version`. Exception messages supplied
-by third-party providers are not copied into diagnostics or normal logs.
+by third-party providers are not copied into diagnostics or normal logs. A
+thrown `specification()` callback and an invalid `null` return have distinct
+diagnostic codes and remediation messages.
 
 Capability requirements are negotiated independently from Java API linkage.
 Compatibility requires the same capability ID and major version, with an

@@ -21,6 +21,10 @@ public enum ProviderRegistryDiagnosticCode {
             "specification_call",
             ValidationPath.root().property("specification"),
             "Calling specification() failed."),
+    NULL_PROVIDER_SPECIFICATION(
+            "specification_null",
+            ValidationPath.root().property("specification"),
+            "specification() returned null instead of Optional."),
     MISSING_PROVIDER_SPECIFICATION(
             "specification_missing",
             ValidationPath.root().property("specification"),

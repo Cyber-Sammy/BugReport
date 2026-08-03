@@ -55,6 +55,10 @@ final class ProviderRegistryDiagnosticTest {
                         "$.specification",
                         "Calling specification() failed."),
                 Arguments.of(
+                        ProviderRegistryDiagnosticCode.NULL_PROVIDER_SPECIFICATION,
+                        "$.specification",
+                        "specification() returned null instead of Optional."),
+                Arguments.of(
                         ProviderRegistryDiagnosticCode.MISSING_PROVIDER_SPECIFICATION,
                         "$.specification",
                         "Provider does not declare an M1 specification."),
