@@ -26,6 +26,7 @@ dependencies {
             prefer providers.gradleProperty('api_version').get()
         }
     }
+    testImplementation "com.google.code.gson:gson:${providers.gradleProperty('gson_version').get()}"
     testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher:${providers.gradleProperty('junit_platform_version').get()}"
 }

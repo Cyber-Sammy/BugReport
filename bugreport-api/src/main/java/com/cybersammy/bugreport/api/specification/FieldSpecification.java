@@ -103,9 +103,10 @@ public final class FieldSpecification {
     }
 
     /**
-     * Returns whether a value is required for report completion.
+     * Returns whether a value is required when this field is present in the selected category.
+     * This does not require a provider or category to declare the field.
      *
-     * @return whether a value is required for report completion
+     * @return whether a value is required when the declared field is active
      */
     public boolean required() {
         return required;

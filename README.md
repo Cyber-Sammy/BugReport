@@ -279,6 +279,8 @@ description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
 category-local fields. Free-form standard fields are bounded and carry a
 `PERSONAL` privacy floor; product-defined selectors contain no provider options.
+`required` applies only when a provider includes that field in a selected
+category. It does not make the field globally mandatory for every provider.
 
 `ProviderVersion` identifies the release of this provider integration. It is a
 separate domain from `ApiVersion` and must never be used for API artifact

@@ -10,7 +10,8 @@ import java.util.List;
  *
  * <p>The returned specifications are immutable and use localization keys supplied by the Bug
  * Report mod. Providers may include any subset in their category declarations and remain free to
- * declare provider-specific fields alongside them.
+ * declare provider-specific fields alongside them. A standard field's required state applies only
+ * to a category that includes that field; the catalog does not define globally mandatory fields.
  */
 public final class StandardFields {
     private static final String LOCALIZATION_PREFIX = "bugreport.field.";
