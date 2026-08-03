@@ -11,7 +11,7 @@ discovers their providers deterministically through NeoForge mod metadata.
 
 The M0 architecture and risk-closure milestone and the M1 contracts, registry,
 and build-foundation milestone are complete. M2 headless reporting-engine work
-is next.
+is in progress.
 
 Implemented and executable:
 
@@ -24,6 +24,8 @@ Implemented and executable:
   ordering, bridge/specification consistency checks, and structured diagnostics;
 - deterministic capability negotiation with enabled, partially supported, and
   disabled provider states;
+- a loader-neutral report session state machine with typed invalid-transition
+  errors, recovery paths, monotonic revisions, and immutable snapshots;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
@@ -38,7 +40,7 @@ Implemented and executable:
 Not implemented yet:
 
 - execution of diagnostic collection callbacks;
-- report sessions, collection, review, sanitization, export, or submission;
+- report forms, collection, review, sanitization, export, or submission;
 - player commands and UI.
 
 The current build is suitable for testing API packaging, optional installation,
