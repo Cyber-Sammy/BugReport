@@ -115,14 +115,19 @@ public final class ProviderRegistry {
 
         Optional<ProviderSpecification> declaredSpecification;
         try {
-            declaredSpecification =
-                    Objects.requireNonNull(
-                            candidate.provider().specification(),
-                            "Provider specification Optional");
+            declaredSpecification = candidate.provider().specification();
         } catch (RuntimeException | LinkageError exception) {
             diagnostics.add(
                     ProviderRegistryDiagnostic.forProvider(
                             ProviderRegistryDiagnosticCode.PROVIDER_SPECIFICATION_FAILED,
+                            candidate,
+                            providerId));
+            return;
+        }
+        if (declaredSpecification == null) {
+            diagnostics.add(
+                    ProviderRegistryDiagnostic.forProvider(
+                            ProviderRegistryDiagnosticCode.NULL_PROVIDER_SPECIFICATION,
                             candidate,
                             providerId));
             return;
