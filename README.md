@@ -36,7 +36,8 @@ Implemented and executable:
   conservative restart recovery that never restores collection or delivery
   authority;
 - platform-bound approved source roots and planning-time exact-file resolution
-  with typed failures, containment checks, and no-follow link rejection;
+  with typed failures, containment checks, followed/no-follow identity
+  comparison, and end-of-plan replacement detection;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;

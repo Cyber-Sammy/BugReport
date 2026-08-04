@@ -5,6 +5,7 @@ import com.cybersammy.bugreport.api.specification.RelativePath;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.Objects;
+import java.util.Optional;
 
 /** Trusted planning-time view of one regular file below an approved logical root. */
 public final class ResolvedSourceFile {
@@ -13,18 +14,21 @@ public final class ResolvedSourceFile {
     private final Path localPath;
     private final long observedSize;
     private final FileTime observedLastModified;
+    private final Object observedFileKey;
 
     ResolvedSourceFile(
             LogicalRoot root,
             RelativePath relativePath,
             Path localPath,
             long observedSize,
-            FileTime observedLastModified) {
+            FileTime observedLastModified,
+            Object observedFileKey) {
         this.root = Objects.requireNonNull(root, "root");
         this.relativePath = Objects.requireNonNull(relativePath, "relativePath");
         Path path = Objects.requireNonNull(localPath, "localPath");
         this.observedLastModified =
                 Objects.requireNonNull(observedLastModified, "observedLastModified");
+        this.observedFileKey = observedFileKey;
         if (!path.isAbsolute()) {
             throw new IllegalArgumentException("Resolved source path must be absolute");
         }
@@ -63,5 +67,9 @@ public final class ResolvedSourceFile {
     /** Returns the last-modified value observed during planning. */
     public FileTime observedLastModified() {
         return observedLastModified;
+    }
+
+    Optional<Object> observedFileKey() {
+        return Optional.ofNullable(observedFileKey);
     }
 }
