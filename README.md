@@ -38,6 +38,8 @@ Implemented and executable:
 - platform-bound approved source roots and planning-time exact-file resolution
   with typed failures, containment checks, followed/no-follow identity
   comparison, and end-of-plan replacement detection;
+- deterministic bounded planning for exact, latest, filtered-directory,
+  built-in summary, and user-selected screenshot source declarations;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
