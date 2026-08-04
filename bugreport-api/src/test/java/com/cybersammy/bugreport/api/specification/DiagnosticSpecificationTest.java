@@ -12,9 +12,29 @@ import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.TransportId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import java.time.Duration;
+import java.util.EnumSet;
 import org.junit.jupiter.api.Test;
 
 final class DiagnosticSpecificationTest {
+    @Test
+    void normalDeclarativeRootVocabularyExcludesBroadAndSensitiveAuthority() {
+        assertEquals(
+                EnumSet.of(
+                        LogicalRoot.GAME_LOGS,
+                        LogicalRoot.CRASH_REPORTS,
+                        LogicalRoot.MOD_CONFIGURATION),
+                EnumSet.allOf(LogicalRoot.class));
+    }
+
+    @Test
+    void relativePathsCannotEscapeTowardSensitiveGameLocations() {
+        for (String path : new String[] {
+            "../saves/world/level.dat", "../../servers.dat", "/minecraft/usercache.json"
+        }) {
+            assertThrows(IllegalArgumentException.class, () -> RelativePath.of(path));
+        }
+    }
+
     @Test
     void createsLogicalRootSourceWithoutExposingFilesystemPaths() {
         DiagnosticSourceSpecification source = DiagnosticSourceSpecification.exactFile(
