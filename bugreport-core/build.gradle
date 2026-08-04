@@ -11,6 +11,7 @@ base {
 
 dependencies {
     compileOnly project(':bugreport-api')
+    implementation "com.google.code.gson:gson:${providers.gradleProperty('gson_version').get()}"
 
     testImplementation project(':bugreport-api')
     testImplementation "org.junit.jupiter:junit-jupiter:${providers.gradleProperty('junit_version').get()}"

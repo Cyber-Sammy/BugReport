@@ -30,6 +30,8 @@ Implemented and executable:
   revisions, and immutable snapshots;
 - immutable bounded form values and deterministic category-scoped field
   validation with stable codes and exact paths;
+- bounded deterministic report-draft JSON with explicit schema migration and
+  trusted registry rebinding;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
