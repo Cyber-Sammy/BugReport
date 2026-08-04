@@ -3,7 +3,7 @@ package com.cybersammy.bugreport.core.source;
 import com.cybersammy.bugreport.api.specification.LogicalRoot;
 import java.nio.file.Path;
 import java.util.EnumMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -31,9 +31,7 @@ public final class ApprovedSourceRoots {
         roots.put(
                 LogicalRoot.MOD_CONFIGURATION,
                 normalizeAbsolute(modConfiguration, LogicalRoot.MOD_CONFIGURATION));
-        if (new HashSet<>(roots.values()).size() != roots.size()) {
-            throw new IllegalArgumentException("Approved logical roots must map to distinct paths");
-        }
+        requireNonOverlapping(roots);
         return new ApprovedSourceRoots(roots);
     }
 
@@ -47,5 +45,19 @@ public final class ApprovedSourceRoots {
             throw new IllegalArgumentException("Approved logical roots must be absolute paths");
         }
         return value.normalize();
+    }
+
+    private static void requireNonOverlapping(Map<LogicalRoot, Path> roots) {
+        List<Path> paths = List.copyOf(roots.values());
+        for (int left = 0; left < paths.size(); left++) {
+            for (int right = left + 1; right < paths.size(); right++) {
+                Path first = paths.get(left);
+                Path second = paths.get(right);
+                if (first.startsWith(second) || second.startsWith(first)) {
+                    throw new IllegalArgumentException(
+                            "Approved logical roots must not overlap");
+                }
+            }
+        }
     }
 }

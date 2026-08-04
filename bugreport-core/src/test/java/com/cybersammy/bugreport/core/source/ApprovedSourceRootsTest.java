@@ -11,7 +11,7 @@ final class ApprovedSourceRootsTest {
     @TempDir Path temporaryDirectory;
 
     @Test
-    void acceptsThreeDistinctAbsolutePlatformBindings() {
+    void acceptsSiblingAbsolutePlatformBindings() {
         assertDoesNotThrow(
                 () ->
                         ApprovedSourceRoots.of(
@@ -33,5 +33,31 @@ final class ApprovedSourceRootsTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> ApprovedSourceRoots.of(same, same, temporaryDirectory.resolve("config")));
+    }
+
+    @Test
+    void rejectsRootThatContainsAnotherLogicalRoot() {
+        Path game = temporaryDirectory.resolve("game");
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ApprovedSourceRoots.of(
+                                game,
+                                game.resolve("crash-reports"),
+                                temporaryDirectory.resolve("config")));
+    }
+
+    @Test
+    void rejectsRootNestedBelowAnotherLogicalRootInEitherArgumentOrder() {
+        Path game = temporaryDirectory.resolve("game");
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        ApprovedSourceRoots.of(
+                                game.resolve("logs"),
+                                temporaryDirectory.resolve("crash-reports"),
+                                game));
     }
 }
