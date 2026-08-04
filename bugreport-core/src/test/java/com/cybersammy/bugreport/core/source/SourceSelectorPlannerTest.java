@@ -21,6 +21,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.List;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -95,6 +96,69 @@ final class SourceSelectorPlannerTest {
                         UnavailableSourcePlan.class,
                         SourceSelectorPlanner.plan(limited, roots));
         assertEquals(SourceSelectionFailureCode.MATCH_LIMIT_EXCEEDED, unavailable.code());
+    }
+
+    @Test
+    void acceptsNestedDirectoryWithoutFilesystemRedirection() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path current =
+                Files.createDirectories(temporaryDirectory.resolve("logs/archive/current"));
+        Files.writeString(current.resolve("client.log"), "diagnostic");
+
+        assertEquals(
+                "archive/current/client.log",
+                selectedFiles(
+                                filteredSource(
+                                        "nested", RelativePath.of("archive/current"), 2),
+                                roots)
+                        .getFirst()
+                        .relativePath()
+                        .value());
+    }
+
+    @Test
+    void rejectsIntermediateDirectorySymlinkBeforeScanningEvenWhenEmpty()
+            throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path realArchive =
+                Files.createDirectories(temporaryDirectory.resolve("logs/real-archive/current"));
+        Path link = temporaryDirectory.resolve("logs/archive");
+        try {
+            Files.createSymbolicLink(link, realArchive.getParent());
+        } catch (UnsupportedOperationException | IOException | SecurityException exception) {
+            Assumptions.abort("Symbolic links are unavailable in this test environment");
+        }
+
+        UnavailableSourcePlan unavailable =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(
+                                filteredSource(
+                                        "redirected",
+                                        RelativePath.of("archive/current"),
+                                        2),
+                                roots));
+
+        assertEquals(SourceSelectionFailureCode.PATH_REJECTED, unavailable.code());
+        assertEquals(
+                SourcePathResolutionCode.PATH_REDIRECTION,
+                unavailable.pathCode().orElseThrow());
+    }
+
+    @Test
+    void rejectsNonDirectoryScanTargetWithExactPathDiagnostic() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/archive"), "not a directory");
+
+        UnavailableSourcePlan unavailable =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(filteredSource("file_target", 2), roots));
+
+        assertEquals(SourceSelectionFailureCode.PATH_REJECTED, unavailable.code());
+        assertEquals(
+                SourcePathResolutionCode.TARGET_NOT_DIRECTORY,
+                unavailable.pathCode().orElseThrow());
     }
 
     @Test
@@ -261,10 +325,15 @@ final class SourceSelectorPlannerTest {
     }
 
     private DiagnosticSourceSpecification filteredSource(String sourceId, int maxFiles) {
+        return filteredSource(sourceId, RelativePath.of("archive"), maxFiles);
+    }
+
+    private DiagnosticSourceSpecification filteredSource(
+            String sourceId, RelativePath directory, int maxFiles) {
         return source(
                 DiagnosticSourceSpecification.filteredLogDirectory(
                                 id(sourceId),
-                                RelativePath.of("archive"),
+                                directory,
                                 FilenamePattern.of("*.log"))
                         .constraints(
                                 CollectionConstraints.builder()

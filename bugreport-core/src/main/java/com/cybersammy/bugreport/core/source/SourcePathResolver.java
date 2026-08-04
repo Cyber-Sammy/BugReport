@@ -34,6 +34,40 @@ public final class SourcePathResolver {
             LogicalRoot root,
             RelativePath relativePath,
             SourcePathInspection inspection) {
+        ResolvedPath resolved =
+                resolvePath(roots, root, relativePath, inspection, TargetType.REGULAR_FILE);
+        ObservedEntry target = resolved.target();
+        return new ResolvedSourceFile(
+                root,
+                relativePath,
+                target.realPath(),
+                target.attributes().size(),
+                target.attributes().lastModifiedTime(),
+                target.fileKey());
+    }
+
+    static ResolvedSourceDirectory resolveDirectory(
+            ApprovedSourceRoots roots,
+            LogicalRoot root,
+            RelativePath relativePath,
+            SourcePathInspection inspection) {
+        ResolvedPath resolved =
+                resolvePath(roots, root, relativePath, inspection, TargetType.DIRECTORY);
+        ObservedEntry target = resolved.target();
+        return new ResolvedSourceDirectory(
+                target.path(),
+                target.realPath(),
+                resolved.fileStore(),
+                target.fileKey(),
+                target.attributes().creationTime());
+    }
+
+    private static ResolvedPath resolvePath(
+            ApprovedSourceRoots roots,
+            LogicalRoot root,
+            RelativePath relativePath,
+            SourcePathInspection inspection,
+            TargetType targetType) {
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
         LogicalRoot logicalRoot = Objects.requireNonNull(root, "root");
         RelativePath declaredPath = Objects.requireNonNull(relativePath, "relativePath");
@@ -119,12 +153,12 @@ public final class SourcePathResolver {
                         declaredPath,
                         "Resolved source path is outside its approved logical root");
             }
-            if (!target.attributes().isRegularFile()) {
+            if (!targetType.accepts(target.attributes())) {
                 throw failure(
-                        SourcePathResolutionCode.TARGET_NOT_REGULAR_FILE,
+                        targetType.failureCode,
                         logicalRoot,
                         declaredPath,
-                        "Resolved source is not a regular file");
+                        targetType.failureMessage);
             }
 
             revalidateEntries(
@@ -132,14 +166,9 @@ public final class SourcePathResolver {
                     rootStore,
                     pathInspection,
                     logicalRoot,
-                    declaredPath);
-            return new ResolvedSourceFile(
-                    logicalRoot,
                     declaredPath,
-                    target.realPath(),
-                    target.attributes().size(),
-                    target.attributes().lastModifiedTime(),
-                    target.fileKey());
+                    targetType);
+            return new ResolvedPath(target, rootStore);
         } catch (SourcePathResolutionException exception) {
             throw exception;
         } catch (NoSuchFileException exception) {
@@ -187,6 +216,9 @@ public final class SourcePathResolver {
         Path followedReal = inspection.realPath(path, true);
         if ((noFollowKey == null) != (followedKey == null)
                 || (noFollowKey != null && !noFollowKey.equals(followedKey))
+                || (noFollowKey == null
+                        && (!sameType(noFollow, followed)
+                                || !noFollow.creationTime().equals(followed.creationTime())))
                 || !noFollowReal.equals(followedReal)) {
             throw new DetectedRedirectionException();
         }
@@ -198,7 +230,8 @@ public final class SourcePathResolver {
             FileStore rootStore,
             SourcePathInspection inspection,
             LogicalRoot root,
-            RelativePath relativePath)
+            RelativePath relativePath,
+            TargetType targetType)
             throws IOException {
         for (int index = entries.size() - 1; index >= 0; index--) {
             ObservedEntry original = entries.get(index);
@@ -220,7 +253,7 @@ public final class SourcePathResolver {
             if (!rootStore.equals(currentStore)
                     || !sameIdentity(original, current)
                     || (index == entries.size() - 1
-                            && !sameFileSnapshot(original, current))) {
+                            && !targetType.sameTargetSnapshot(original, current))) {
                 throw failure(
                         SourcePathResolutionCode.PATH_CHANGED_DURING_RESOLUTION,
                         root,
@@ -280,6 +313,46 @@ public final class SourcePathResolver {
 
     private record ObservedEntry(
             Path path, Path realPath, BasicFileAttributes attributes, Object fileKey) {}
+
+    private record ResolvedPath(ObservedEntry target, FileStore fileStore) {}
+
+    private enum TargetType {
+        REGULAR_FILE(
+                SourcePathResolutionCode.TARGET_NOT_REGULAR_FILE,
+                "Resolved source is not a regular file") {
+            @Override
+            boolean accepts(BasicFileAttributes attributes) {
+                return attributes.isRegularFile();
+            }
+
+            @Override
+            boolean sameTargetSnapshot(ObservedEntry original, ObservedEntry current) {
+                return sameFileSnapshot(original, current);
+            }
+        },
+        DIRECTORY(
+                SourcePathResolutionCode.TARGET_NOT_DIRECTORY,
+                "Resolved source is not a directory") {
+            @Override
+            boolean accepts(BasicFileAttributes attributes) {
+                return attributes.isDirectory();
+            }
+        };
+
+        private final SourcePathResolutionCode failureCode;
+        private final String failureMessage;
+
+        TargetType(SourcePathResolutionCode failureCode, String failureMessage) {
+            this.failureCode = failureCode;
+            this.failureMessage = failureMessage;
+        }
+
+        abstract boolean accepts(BasicFileAttributes attributes);
+
+        boolean sameTargetSnapshot(ObservedEntry original, ObservedEntry current) {
+            return accepts(current.attributes());
+        }
+    }
 
     private static final class DetectedRedirectionException extends Exception {
         private static final long serialVersionUID = 1L;

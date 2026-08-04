@@ -22,8 +22,8 @@ import java.util.Optional;
 
 /** Builds one bounded deterministic source-selection plan from a trusted declaration. */
 public final class SourceSelectorPlanner {
-    /** Product default for files returned by one filtered-directory selector. */
-    public static final int DEFAULT_MAX_MATCHED_FILES = 16;
+    /** Hard product ceiling for files returned by one filtered-directory selector. */
+    public static final int MAX_MATCHED_FILES = 16;
     /** Hard ceiling for entries inspected during one non-recursive directory scan. */
     public static final int MAX_SCANNED_DIRECTORY_ENTRIES = 512;
 
@@ -159,24 +159,25 @@ public final class SourceSelectorPlanner {
             throws SelectorScanException {
         Path rootPath = roots.path(logicalRoot);
         DirectoryObservation root = observeDirectory(rootPath, null, true, inspection);
-        Path directoryPath =
-                relativeDirectory
-                        .map(path -> rootPath.resolve(path.value()).normalize())
-                        .orElse(rootPath);
-        if (!directoryPath.startsWith(rootPath)) {
-            throw pathFailure(SourcePathResolutionCode.TARGET_OUTSIDE_ROOT);
-        }
-        DirectoryObservation directory =
-                directoryPath.equals(rootPath)
-                        ? root
-                        : observeDirectory(
-                                directoryPath,
-                                SourcePathResolutionCode.COMPONENT_MISSING,
-                                false,
+        DirectoryObservation directory = root;
+        if (relativeDirectory.isPresent()) {
+            try {
+                ResolvedSourceDirectory resolved =
+                        SourcePathResolver.resolveDirectory(
+                                roots,
+                                logicalRoot,
+                                relativeDirectory.orElseThrow(),
                                 inspection);
-        if (!directory.realPath.startsWith(root.realPath)
-                || !root.fileStore.equals(directory.fileStore)) {
-            throw pathFailure(SourcePathResolutionCode.PATH_REDIRECTION);
+                directory =
+                        new DirectoryObservation(
+                                resolved.declaredPath(),
+                                resolved.realPath(),
+                                resolved.fileStore(),
+                                resolved.fileKey(),
+                                resolved.creationTime());
+            } catch (SourcePathResolutionException exception) {
+                throw selectorFailure(exception);
+            }
         }
 
         List<Path> scannedEntries = new ArrayList<>();
@@ -316,9 +317,9 @@ public final class SourceSelectorPlanner {
         }
         return source.constraints().maxMatchedFiles().isPresent()
                 ? Math.min(
-                        DEFAULT_MAX_MATCHED_FILES,
+                        MAX_MATCHED_FILES,
                         source.constraints().maxMatchedFiles().getAsInt())
-                : DEFAULT_MAX_MATCHED_FILES;
+                : MAX_MATCHED_FILES;
     }
 
     private static UnavailableSourcePlan unavailable(
@@ -332,6 +333,10 @@ public final class SourceSelectorPlanner {
 
     private static SelectorScanException selectorFailure(
             SourcePathResolutionException exception) {
+        if (exception.code() == SourcePathResolutionCode.PATH_CHANGED_DURING_RESOLUTION) {
+            return new SelectorScanException(
+                    SourceSelectionFailureCode.PATH_CHANGED_DURING_SCAN, null);
+        }
         return new SelectorScanException(
                 isMissing(exception.code())
                         ? SourceSelectionFailureCode.SOURCE_MISSING
