@@ -146,6 +146,42 @@ final class SourceSelectorPlannerTest {
     }
 
     @Test
+    void deterministicallyRejectsRedirectedIntermediateDirectoryBeforeScanning()
+            throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path archive =
+                Files.createDirectories(temporaryDirectory.resolve("logs/archive/current"))
+                        .getParent();
+        Path redirected = Files.createDirectory(temporaryDirectory.resolve("redirected"));
+        SourcePathInspection inspection =
+                new DelegatingInspection() {
+                    @Override
+                    public Path realPath(Path path, boolean followLinks) throws IOException {
+                        if (path.equals(archive) && followLinks) {
+                            return redirected.toRealPath();
+                        }
+                        return super.realPath(path, followLinks);
+                    }
+                };
+
+        UnavailableSourcePlan unavailable =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(
+                                filteredSource(
+                                        "redirected_observation",
+                                        RelativePath.of("archive/current"),
+                                        2),
+                                roots,
+                                inspection));
+
+        assertEquals(SourceSelectionFailureCode.PATH_REJECTED, unavailable.code());
+        assertEquals(
+                SourcePathResolutionCode.PATH_REDIRECTION,
+                unavailable.pathCode().orElseThrow());
+    }
+
+    @Test
     void rejectsNonDirectoryScanTargetWithExactPathDiagnostic() throws IOException {
         ApprovedSourceRoots roots = createRoots();
         Files.writeString(temporaryDirectory.resolve("logs/archive"), "not a directory");
