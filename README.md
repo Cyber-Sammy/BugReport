@@ -42,6 +42,8 @@ Implemented and executable:
   built-in summary, and user-selected screenshot source declarations;
 - provider-tightenable source ceilings of 64 MiB per file and 128 MiB per
   source, with overflow-safe pre-collection size estimates;
+- registry-bound category source coordination with privacy-safe provenance,
+  isolated missing-source outcomes, and deterministic duplicate/conflict handling;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
