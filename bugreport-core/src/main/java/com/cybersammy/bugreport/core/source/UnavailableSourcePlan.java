@@ -39,4 +39,9 @@ public final class UnavailableSourcePlan implements SourceSelectionPlan {
     public Optional<SourcePathResolutionCode> pathCode() {
         return Optional.ofNullable(pathCode);
     }
+
+    @Override
+    public SourceSizeEstimate estimate() {
+        return SourceSizeEstimate.exact(0, 0);
+    }
 }

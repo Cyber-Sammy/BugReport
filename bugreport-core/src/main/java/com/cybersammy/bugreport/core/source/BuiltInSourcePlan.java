@@ -20,4 +20,9 @@ public final class BuiltInSourcePlan implements SourceSelectionPlan {
     public DiagnosticSourceSpecification source() {
         return source;
     }
+
+    @Override
+    public SourceSizeEstimate estimate() {
+        return SourceSizeEstimate.lowerBound(0, 0);
+    }
 }

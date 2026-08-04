@@ -40,6 +40,8 @@ Implemented and executable:
   comparison, and end-of-plan replacement detection;
 - deterministic bounded planning for exact, latest, filtered-directory,
   built-in summary, and user-selected screenshot source declarations;
+- provider-tightenable source ceilings of 64 MiB per file and 128 MiB per
+  source, with overflow-safe pre-collection size estimates;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;

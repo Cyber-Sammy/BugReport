@@ -10,4 +10,7 @@ public sealed interface SourceSelectionPlan
                 UnavailableSourcePlan {
     /** Returns the exact source declaration represented by this result. */
     DiagnosticSourceSpecification source();
+
+    /** Returns the bounded planning-time size estimate for this result. */
+    SourceSizeEstimate estimate();
 }

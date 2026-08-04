@@ -23,7 +23,12 @@ import java.util.Optional;
 /** Builds one bounded deterministic source-selection plan from a trusted declaration. */
 public final class SourceSelectorPlanner {
     /** Hard product ceiling for files returned by one filtered-directory selector. */
-    public static final int MAX_MATCHED_FILES = 16;
+    public static final int MAX_MATCHED_FILES = SourcePlanningLimits.PRODUCT_MAX_MATCHED_FILES;
+    /** Hard product ceiling for one selected file's observed size. */
+    public static final long MAX_BYTES_PER_FILE =
+            SourcePlanningLimits.PRODUCT_MAX_BYTES_PER_FILE;
+    /** Hard product ceiling for one source plan's aggregate observed size. */
+    public static final long MAX_TOTAL_BYTES = SourcePlanningLimits.PRODUCT_MAX_TOTAL_BYTES;
     /** Hard ceiling for entries inspected during one non-recursive directory scan. */
     public static final int MAX_SCANNED_DIRECTORY_ENTRIES = 512;
 
@@ -36,16 +41,29 @@ public final class SourceSelectorPlanner {
     /** Plans one source without reading file contents or granting collection authority. */
     public static SourceSelectionPlan plan(
             DiagnosticSourceSpecification source, ApprovedSourceRoots roots) {
-        return plan(source, roots, NioSourcePathInspection.INSTANCE);
+        return plan(
+                source,
+                roots,
+                NioSourcePathInspection.INSTANCE,
+                SourcePlanningLimits.productDefaults());
     }
 
     static SourceSelectionPlan plan(
             DiagnosticSourceSpecification source,
             ApprovedSourceRoots roots,
             SourcePathInspection inspection) {
+        return plan(source, roots, inspection, SourcePlanningLimits.productDefaults());
+    }
+
+    static SourceSelectionPlan plan(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
+            SourcePathInspection inspection,
+            SourcePlanningLimits limits) {
         DiagnosticSourceSpecification declaration = Objects.requireNonNull(source, "source");
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
         SourcePathInspection pathInspection = Objects.requireNonNull(inspection, "inspection");
+        SourcePlanningLimits productLimits = Objects.requireNonNull(limits, "limits");
         return switch (declaration.kind()) {
             case EXACT_FILE, MOD_CONFIGURATION ->
                     planExact(
@@ -53,7 +71,8 @@ public final class SourceSelectorPlanner {
                             approvedRoots,
                             declaration.root().orElseThrow(),
                             declaration.path().orElseThrow(),
-                            pathInspection);
+                            pathInspection,
+                            productLimits);
             case LATEST_FILE ->
                     planScan(
                             declaration,
@@ -62,7 +81,8 @@ public final class SourceSelectorPlanner {
                             Optional.empty(),
                             declaration.pattern().orElseThrow(),
                             true,
-                            pathInspection);
+                            pathInspection,
+                            productLimits);
             case FILTERED_DIRECTORY ->
                     planScan(
                             declaration,
@@ -71,14 +91,16 @@ public final class SourceSelectorPlanner {
                             declaration.path(),
                             declaration.pattern().orElseThrow(),
                             false,
-                            pathInspection);
+                            pathInspection,
+                            productLimits);
             case LATEST_LOG ->
                     planExact(
                             declaration,
                             approvedRoots,
                             LogicalRoot.GAME_LOGS,
                             LATEST_LOG_PATH,
-                            pathInspection);
+                            pathInspection,
+                            productLimits);
             case LATEST_CRASH_REPORT ->
                     planScan(
                             declaration,
@@ -87,7 +109,8 @@ public final class SourceSelectorPlanner {
                             Optional.empty(),
                             LATEST_CRASH_PATTERN,
                             true,
-                            pathInspection);
+                            pathInspection,
+                            productLimits);
             case USER_SELECTED_SCREENSHOT -> new UserSelectionSourcePlan(declaration);
             case MOD_LIST, ENVIRONMENT_SUMMARY -> new BuiltInSourcePlan(declaration);
         };
@@ -98,13 +121,15 @@ public final class SourceSelectorPlanner {
             ApprovedSourceRoots roots,
             LogicalRoot root,
             RelativePath path,
-            SourcePathInspection inspection) {
+            SourcePathInspection inspection,
+            SourcePlanningLimits limits) {
         try {
-            return new FileSourcePlan(
+            return filePlan(
                     source,
                     List.of(
                             SourcePathResolver.resolveRegularFile(
-                                    roots, root, path, inspection)));
+                                    roots, root, path, inspection)),
+                    limits);
         } catch (SourcePathResolutionException exception) {
             return unavailable(source, exception);
         }
@@ -117,7 +142,8 @@ public final class SourceSelectorPlanner {
             Optional<RelativePath> directory,
             FilenamePattern pattern,
             boolean latestOnly,
-            SourcePathInspection inspection) {
+            SourcePathInspection inspection,
+            SourcePlanningLimits limits) {
         try {
             List<ResolvedSourceFile> matches =
                     scan(
@@ -125,7 +151,7 @@ public final class SourceSelectorPlanner {
                             directory,
                             pattern,
                             roots,
-                            effectiveMatchLimit(source, latestOnly),
+                            effectiveMatchLimit(source, latestOnly, limits),
                             inspection);
             if (matches.isEmpty()) {
                 return new UnavailableSourcePlan(
@@ -140,10 +166,10 @@ public final class SourceSelectorPlanner {
                                                         Comparator.reverseOrder())
                                                 .thenComparing(ResolvedSourceFile::relativePath))
                                 .orElseThrow();
-                return new FileSourcePlan(source, List.of(latest));
+                return filePlan(source, List.of(latest), limits);
             }
             matches.sort(Comparator.comparing(ResolvedSourceFile::relativePath));
-            return new FileSourcePlan(source, matches);
+            return filePlan(source, matches, limits);
         } catch (SelectorScanException exception) {
             return new UnavailableSourcePlan(source, exception.code, exception.pathCode);
         }
@@ -311,15 +337,30 @@ public final class SourceSelectorPlanner {
     }
 
     private static int effectiveMatchLimit(
-            DiagnosticSourceSpecification source, boolean latestOnly) {
+            DiagnosticSourceSpecification source,
+            boolean latestOnly,
+            SourcePlanningLimits limits) {
         if (latestOnly) {
             return MAX_SCANNED_DIRECTORY_ENTRIES;
         }
         return source.constraints().maxMatchedFiles().isPresent()
                 ? Math.min(
-                        MAX_MATCHED_FILES,
+                        limits.maxMatchedFiles(),
                         source.constraints().maxMatchedFiles().getAsInt())
-                : MAX_MATCHED_FILES;
+                : limits.maxMatchedFiles();
+    }
+
+    private static SourceSelectionPlan filePlan(
+            DiagnosticSourceSpecification source,
+            List<ResolvedSourceFile> files,
+            SourcePlanningLimits limits) {
+        try {
+            SourceSizeEstimate estimate =
+                    SourceSizeEstimator.estimate(files, source.constraints(), limits);
+            return new FileSourcePlan(source, files, estimate);
+        } catch (SourceSizeEstimator.SourceSizeLimitException exception) {
+            return new UnavailableSourcePlan(source, exception.code(), null);
+        }
     }
 
     private static UnavailableSourcePlan unavailable(
