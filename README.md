@@ -32,7 +32,9 @@ Implemented and executable:
 - immutable bounded form values and deterministic category-scoped field
   validation with stable codes and exact paths;
 - bounded deterministic report-draft JSON with explicit schema migration and
-  trusted registry rebinding;
+  trusted registry rebinding, atomic revision-guarded local persistence, and
+  conservative restart recovery that never restores collection or delivery
+  authority;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;

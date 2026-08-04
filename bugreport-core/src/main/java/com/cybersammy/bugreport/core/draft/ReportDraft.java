@@ -38,6 +38,9 @@ public record ReportDraft(
         if (categoryId.isEmpty() && !formSubmission.values().isEmpty()) {
             throw new IllegalArgumentException("A draft without a category cannot contain fields");
         }
+        if (recordedState == ReportSessionState.CREATED && revision != 0) {
+            throw new IllegalArgumentException("A created draft must have revision zero");
+        }
     }
 
     /**

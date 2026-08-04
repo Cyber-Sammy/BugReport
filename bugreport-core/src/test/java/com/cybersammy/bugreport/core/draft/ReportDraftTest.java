@@ -16,6 +16,21 @@ import org.junit.jupiter.api.Test;
 
 final class ReportDraftTest {
     @Test
+    void createdDraftRequiresInitialRevision() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new ReportDraft(
+                                ReportSessionId.parse("00000000-0000-4000-8000-000000000099"),
+                                1,
+                                ProviderId.parse("example_mod"),
+                                ProviderVersion.parse("1.0.0"),
+                                Optional.empty(),
+                                ReportSessionState.CREATED,
+                                FormSubmission.empty()));
+    }
+
+    @Test
     void createdAndEarlyCancelledDraftsMayOmitCategory() {
         assertDoesNotThrow(
                 () -> draft(ReportSessionState.CREATED, Optional.empty(), FormSubmission.empty()));
