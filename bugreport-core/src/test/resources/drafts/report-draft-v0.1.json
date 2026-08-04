@@ -1,0 +1,1 @@
+{"schemaId":"bugreport:report_draft","schemaVersion":"0.1","sessionId":"00000000-0000-4000-8000-000000000010","revision":3,"providerId":"example_mod","providerVersion":"1.0.0","categoryId":"general","state":"FORM_IN_PROGRESS","values":{"severity":{"type":"severity","value":"moderate"},"summary":{"type":"text","value":"Example summary"}}}

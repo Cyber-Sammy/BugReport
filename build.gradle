@@ -806,7 +806,10 @@ tasks.register('verifyDependencyLocks') {
 
     def expectedLockEntries = [
             'bugreport-api/gradle.lockfile'     : ['empty=annotationProcessor,compileClasspath'],
-            'bugreport-core/gradle.lockfile'    : ['org.junit.jupiter:junit-jupiter:5.11.4'],
+            'bugreport-core/gradle.lockfile'    : [
+                    'com.google.code.gson:gson:2.10.1',
+                    'org.junit.jupiter:junit-jupiter:5.11.4'
+            ],
             'bugreport-neoforge/gradle.lockfile': [
                     "com.cybersammy.bugreport:bugreport-api:${currentApiVersion}",
                     'org.junit.jupiter:junit-jupiter:5.11.4'
