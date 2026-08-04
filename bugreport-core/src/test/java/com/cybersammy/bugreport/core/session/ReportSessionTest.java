@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
@@ -28,7 +29,6 @@ final class ReportSessionTest {
         ReportSessionSnapshot initial = session.snapshot();
         List<ReportSessionState> lifecycle =
                 List.of(
-                        ReportSessionState.FORM_IN_PROGRESS,
                         ReportSessionState.COLLECTION_PLANNED,
                         ReportSessionState.COLLECTING,
                         ReportSessionState.SANITIZING,
@@ -37,7 +37,7 @@ final class ReportSessionTest {
                         ReportSessionState.DELIVERING,
                         ReportSessionState.COMPLETED);
 
-        ReportSessionSnapshot current = initial;
+        ReportSessionSnapshot current = session.selectCategory(CategoryId.of("general"));
         for (ReportSessionState state : lifecycle) {
             current = session.transitionTo(state);
         }
@@ -45,7 +45,7 @@ final class ReportSessionTest {
         assertEquals(ReportSessionState.CREATED, initial.state());
         assertEquals(0, initial.revision());
         assertEquals(ReportSessionState.COMPLETED, current.state());
-        assertEquals(lifecycle.size(), current.revision());
+        assertEquals(lifecycle.size() + 1, current.revision());
         assertEquals(SESSION_ID, current.id());
         assertSame(specification, current.providerSpecification());
         assertSame(registered.support(), current.providerSupport());
@@ -54,10 +54,10 @@ final class ReportSessionTest {
     @Test
     void recoversFromEachFailureAndFromPartialCollection() {
         ReportSession session = session();
+        session.selectCategory(CategoryId.of("general"));
 
         transition(
                 session,
-                ReportSessionState.FORM_IN_PROGRESS,
                 ReportSessionState.FAILED_VALIDATION,
                 ReportSessionState.FORM_IN_PROGRESS,
                 ReportSessionState.COLLECTION_PLANNED,
@@ -116,6 +116,18 @@ final class ReportSessionTest {
                 InvalidReportSessionTransitionException.class,
                 () -> session.transitionTo(ReportSessionState.FORM_IN_PROGRESS));
         assertEquals(cancelled, session.snapshot());
+    }
+
+    @Test
+    void directFormTransitionCannotBypassCategorySelection() {
+        ReportSession session = session();
+        ReportSessionSnapshot before = session.snapshot();
+
+        assertThrows(
+                InvalidReportSessionTransitionException.class,
+                () -> session.transitionTo(ReportSessionState.FORM_IN_PROGRESS));
+
+        assertEquals(before, session.snapshot());
     }
 
     private static void transition(ReportSession session, ReportSessionState... states) {

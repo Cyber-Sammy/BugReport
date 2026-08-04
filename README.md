@@ -26,7 +26,8 @@ Implemented and executable:
   disabled provider states;
 - registry-bound report session creation that rejects absent and disabled
   providers, plus a loader-neutral state machine with typed invalid-transition
-  errors, recovery paths, monotonic revisions, and immutable snapshots;
+  errors, trusted provider-category selection, recovery paths, monotonic
+  revisions, and immutable snapshots;
 - immutable bounded form values and deterministic category-scoped field
   validation with stable codes and exact paths;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
