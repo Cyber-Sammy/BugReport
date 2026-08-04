@@ -292,6 +292,45 @@ rejects duplicate IDs, unresolved references, cross-provider destination and
 capability IDs, unsupported physical sides, prohibited privacy declarations,
 and invalid field/constraint combinations.
 
+### Bounded world-state diagnostics
+
+World saves and player files are never declarative source roots. A mod that
+needs to expose a small purpose-built world-state summary must generate TEXT or
+JSON through the bounded sink and require the versioned product capability:
+
+```java
+DiagnosticGeneratorSpecification worldSummary =
+        DiagnosticGeneratorSpecification.worldStateExport(
+                        DiagnosticGeneratorId.of("world_summary"),
+                        (request, sink) -> sink.emitJson(
+                                GeneratedArtifactId.of("summary"),
+                                createBoundedSummary()))
+                .labelKey(LocalizationKey.of("my_mod.bugreport.world_summary"))
+                .privacy(PrivacyClassification.SENSITIVE)
+                .contentType(DiagnosticContentType.JSON)
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .executionContext(GeneratorExecutionContext.WORKER)
+                .constraints(StandardCapabilities.boundedWorldStateExportMaximums())
+                .build();
+
+ProviderSpecification specification = ProviderSpecification.builder(/* ... */)
+        .addGenerator(worldSummary)
+        .requireCapability(StandardCapabilities.boundedWorldStateExport())
+        // add a category that references worldSummary.id()
+        .build();
+```
+
+Capability version 1.0 requires `SENSITIVE` classification, default exclusion,
+explicit limits of at most four artifacts, one MiB per artifact, two MiB in
+aggregate, and two seconds of callback time. Providers may request tighter
+limits. The callback receives no path, workspace, stream, or permission to read
+`saves/`; the generator kind gives the future UI enough trusted product context
+to present a separate warning before collection.
+
+The current foundation validates and negotiates this declaration but does not
+advertise the runtime capability yet. Providers that declare it remain disabled
+until the bounded callback executor and review flow are implemented.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
