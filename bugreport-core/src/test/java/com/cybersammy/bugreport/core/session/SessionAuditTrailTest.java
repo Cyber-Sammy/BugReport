@@ -52,6 +52,34 @@ final class SessionAuditTrailTest {
                 () -> new SessionAuditTrail(List.of(created(SESSION_ID)), 1));
     }
 
+    @Test
+    void rejectsRevisionThatDiffersFromSequenceInFullAndTruncatedHistory() {
+        SessionAuditEvent mismatchedFull =
+                new SessionAuditEvent.CategorySelected(
+                        SESSION_ID,
+                        1,
+                        2,
+                        Instant.EPOCH,
+                        CategoryId.of("general"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new SessionAuditTrail(
+                                List.of(created(SESSION_ID), mismatchedFull),
+                                0));
+
+        SessionAuditEvent mismatchedSuffix =
+                new SessionAuditEvent.CategorySelected(
+                        SESSION_ID,
+                        46,
+                        47,
+                        Instant.EPOCH,
+                        CategoryId.of("general"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new SessionAuditTrail(List.of(mismatchedSuffix), 46));
+    }
+
     private static SessionAuditEvent.Created created(ReportSessionId sessionId) {
         return new SessionAuditEvent.Created(
                 sessionId,

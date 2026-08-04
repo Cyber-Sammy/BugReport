@@ -23,7 +23,6 @@ public record SessionAuditTrail(List<SessionAuditEvent> events, long discardedEv
         }
         ReportSessionId sessionId = null;
         long expectedSequence = discardedEvents;
-        long previousRevision = -1;
         for (SessionAuditEvent event : events) {
             SessionAuditEvent validated = Objects.requireNonNull(event, "event");
             if (sessionId == null) {
@@ -33,12 +32,11 @@ public record SessionAuditTrail(List<SessionAuditEvent> events, long discardedEv
                         "Session audit trail cannot mix session identities");
             }
             if (validated.sequence() != expectedSequence
-                    || validated.revision() <= previousRevision) {
+                    || validated.revision() != expectedSequence) {
                 throw new IllegalArgumentException(
-                        "Session audit events must have contiguous sequence and increasing revision");
+                        "Session audit sequence and revision must match the contiguous event index");
             }
             expectedSequence = Math.addExact(expectedSequence, 1);
-            previousRevision = validated.revision();
         }
         events = List.copyOf(events);
     }
