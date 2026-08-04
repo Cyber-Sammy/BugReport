@@ -1,0 +1,354 @@
+package com.cybersammy.bugreport.core.source;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.cybersammy.bugreport.api.BugReportProvider;
+import com.cybersammy.bugreport.api.classification.PrivacyClassification;
+import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.api.identifier.CapabilityId;
+import com.cybersammy.bugreport.api.identifier.CategoryId;
+import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
+import com.cybersammy.bugreport.api.identifier.ProviderId;
+import com.cybersammy.bugreport.api.localization.LocalizationKey;
+import com.cybersammy.bugreport.api.specification.CapabilityRequirement;
+import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
+import com.cybersammy.bugreport.api.specification.FilenamePattern;
+import com.cybersammy.bugreport.api.specification.InclusionDefault;
+import com.cybersammy.bugreport.api.specification.LogicalRoot;
+import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.specification.RelativePath;
+import com.cybersammy.bugreport.api.specification.ReportQualityRole;
+import com.cybersammy.bugreport.api.version.CapabilityVersion;
+import com.cybersammy.bugreport.api.version.ProviderVersion;
+import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
+import com.cybersammy.bugreport.core.registry.ProviderRegistry;
+import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+final class CategorySourcePlannerTest {
+    private static final ProviderId PROVIDER_ID = ProviderId.parse("example");
+    private static final ProviderVersion PROVIDER_VERSION = ProviderVersion.parse("1.0.0");
+    private static final CategoryId CATEGORY_ID = CategoryId.of("general");
+
+    @TempDir Path temporaryDirectory;
+
+    @Test
+    void retainsCanonicalProvenanceAndIsolatesMissingSources() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/present.log"), "present");
+        DiagnosticSourceSpecification requiredMissing =
+                exact(
+                        "required_missing",
+                        "missing-required.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.REQUIRED,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification optionalMissing =
+                exact(
+                        "optional_missing",
+                        "missing-optional.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.OPTIONAL,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification present =
+                exact(
+                        "present",
+                        "present.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.RECOMMENDED,
+                        InclusionDefault.EXCLUDED);
+
+        CategorySourcePlan plan =
+                planner(specification(present, requiredMissing, optionalMissing), roots)
+                        .plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertEquals(
+                List.of("optional_missing", "present", "required_missing"),
+                plan.sources().stream()
+                        .map(source -> source.provenance().sourceId().value())
+                        .toList());
+        assertEquals(ReportQualityRole.OPTIONAL, plan.sources().get(0).provenance().qualityRole());
+        assertInstanceOf(FileSourcePlan.class, plan.sources().get(1).selection());
+        UnavailableSourcePlan missing =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        plan.sources().get(2).selection());
+        assertEquals(SourceSelectionFailureCode.SOURCE_MISSING, missing.code());
+        assertEquals(ReportQualityRole.REQUIRED, plan.sources().get(2).provenance().qualityRole());
+        assertEquals(1, plan.files().size());
+        assertEquals("present", plan.files().getFirst().provenances().getFirst().sourceId().value());
+    }
+
+    @Test
+    void mergesDuplicateFileProvenanceAndUsesConservativeMetadata() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/shared.log"), "shared");
+        DiagnosticSourceSpecification optional =
+                filtered(
+                        "a_optional",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.OPTIONAL,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification required =
+                exact(
+                        "b_required",
+                        "shared.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.SENSITIVE,
+                        ReportQualityRole.REQUIRED,
+                        InclusionDefault.EXCLUDED);
+
+        CategorySourcePlan plan =
+                planner(specification(required, optional), roots)
+                        .plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertEquals(1, plan.files().size());
+        PlannedSourceFile file = plan.files().getFirst();
+        assertTrue(file.duplicate());
+        assertEquals(
+                List.of("a_optional", "b_required"),
+                file.provenances().stream()
+                        .map(provenance -> provenance.sourceId().value())
+                        .toList());
+        assertEquals(PrivacyClassification.SENSITIVE, file.privacy());
+        assertEquals(ReportQualityRole.REQUIRED, file.qualityRole());
+        assertEquals(InclusionDefault.EXCLUDED, file.inclusionDefault());
+        assertEquals(List.of(), plan.conflicts());
+    }
+
+    @Test
+    void excludesDuplicateFileWithConflictingContentTypes() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/shared.log"), "shared");
+        DiagnosticSourceSpecification json =
+                exact(
+                        "as_json",
+                        "shared.log",
+                        DiagnosticContentType.JSON,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.RECOMMENDED,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification text =
+                exact(
+                        "as_text",
+                        "shared.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.RECOMMENDED,
+                        InclusionDefault.EXCLUDED);
+
+        CategorySourcePlan plan =
+                planner(specification(text, json), roots).plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertEquals(List.of(), plan.files());
+        SourcePlanConflict conflict = plan.conflicts().getFirst();
+        assertEquals(SourcePlanConflictCode.CONTENT_TYPE_MISMATCH, conflict.code());
+        assertEquals(LogicalRoot.GAME_LOGS, conflict.root());
+        assertEquals(RelativePath.of("shared.log"), conflict.relativePath());
+        assertEquals(
+                List.of("as_json", "as_text"),
+                conflict.provenances().stream()
+                        .map(provenance -> provenance.sourceId().value())
+                        .toList());
+    }
+
+    @Test
+    void outputDoesNotDependOnProviderBuilderInsertionOrder() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/a.log"), "a");
+        Files.writeString(temporaryDirectory.resolve("logs/b.log"), "b");
+        DiagnosticSourceSpecification first =
+                exact(
+                        "first",
+                        "a.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.OPTIONAL,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification second =
+                exact(
+                        "second",
+                        "b.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.OPTIONAL,
+                        InclusionDefault.EXCLUDED);
+
+        CategorySourcePlan forward =
+                planner(specification(first, second), roots).plan(PROVIDER_ID, CATEGORY_ID);
+        CategorySourcePlan reverse =
+                planner(specification(second, first), roots).plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertEquals(sourceIds(forward), sourceIds(reverse));
+        assertEquals(filePaths(forward), filePaths(reverse));
+    }
+
+    @Test
+    void rejectsUntrustedProviderAndUnknownCategoryBeforePlanning() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        ProviderRegistrySnapshot registry = registry(specification());
+        CategorySourcePlanner planner = new CategorySourcePlanner(registry, roots);
+
+        CategorySourcePlanException providerFailure =
+                assertThrows(
+                        CategorySourcePlanException.class,
+                        () -> planner.plan(ProviderId.parse("other"), CATEGORY_ID));
+        assertEquals(
+                CategorySourcePlanRequestCode.PROVIDER_NOT_REGISTERED,
+                providerFailure.code());
+
+        CategoryId unknown = CategoryId.of("unknown");
+        CategorySourcePlanException categoryFailure =
+                assertThrows(
+                        CategorySourcePlanException.class,
+                        () -> planner.plan(PROVIDER_ID, unknown));
+        assertEquals(
+                CategorySourcePlanRequestCode.CATEGORY_NOT_DECLARED,
+                categoryFailure.code());
+        assertEquals(PROVIDER_ID, categoryFailure.providerId());
+        assertEquals(unknown, categoryFailure.categoryId());
+
+        ProviderSpecification disabledSpecification = disabledSpecification();
+        CategorySourcePlanner disabledPlanner =
+                new CategorySourcePlanner(registry(disabledSpecification), roots);
+        CategorySourcePlanException disabledFailure =
+                assertThrows(
+                        CategorySourcePlanException.class,
+                        () -> disabledPlanner.plan(PROVIDER_ID, CATEGORY_ID));
+        assertEquals(CategorySourcePlanRequestCode.PROVIDER_DISABLED, disabledFailure.code());
+    }
+
+    private static List<String> sourceIds(CategorySourcePlan plan) {
+        return plan.sources().stream()
+                .map(source -> source.provenance().sourceId().value())
+                .toList();
+    }
+
+    private static List<String> filePaths(CategorySourcePlan plan) {
+        return plan.files().stream().map(file -> file.file().relativePath().value()).toList();
+    }
+
+    private static DiagnosticSourceSpecification exact(
+            String id,
+            String path,
+            DiagnosticContentType contentType,
+            PrivacyClassification privacy,
+            ReportQualityRole qualityRole,
+            InclusionDefault inclusionDefault) {
+        return DiagnosticSourceSpecification.exactFile(
+                        DiagnosticSourceId.of(id),
+                        LogicalRoot.GAME_LOGS,
+                        RelativePath.of(path))
+                .labelKey(LocalizationKey.of("example.source." + id))
+                .privacy(privacy)
+                .contentType(contentType)
+                .qualityRole(qualityRole)
+                .inclusionDefault(inclusionDefault)
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .build();
+    }
+
+    private static DiagnosticSourceSpecification filtered(
+            String id,
+            DiagnosticContentType contentType,
+            PrivacyClassification privacy,
+            ReportQualityRole qualityRole,
+            InclusionDefault inclusionDefault) {
+        return DiagnosticSourceSpecification.filteredLogDirectory(
+                        DiagnosticSourceId.of(id), FilenamePattern.of("shared.log"))
+                .labelKey(LocalizationKey.of("example.source." + id))
+                .privacy(privacy)
+                .contentType(contentType)
+                .qualityRole(qualityRole)
+                .inclusionDefault(inclusionDefault)
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .build();
+    }
+
+    private static ProviderSpecification specification(
+            DiagnosticSourceSpecification... sources) {
+        CategorySpecification.Builder category = CategorySpecification.builder(
+                CATEGORY_ID, LocalizationKey.of("example.category.general"));
+        Arrays.stream(sources).forEach(source -> category.useSource(source.id()));
+        ProviderSpecification.Builder provider = ProviderSpecification.builder(
+                        PROVIDER_ID,
+                        PROVIDER_VERSION,
+                        LocalizationKey.of("example.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addCategory(category.build());
+        Arrays.stream(sources).forEach(provider::addSource);
+        return provider.build();
+    }
+
+    private static ProviderSpecification disabledSpecification() {
+        return ProviderSpecification.builder(
+                        PROVIDER_ID,
+                        PROVIDER_VERSION,
+                        LocalizationKey.of("example.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addCategory(
+                        CategorySpecification.builder(
+                                        CATEGORY_ID,
+                                        LocalizationKey.of("example.category.general"))
+                                .build())
+                .requireCapability(
+                        new CapabilityRequirement(
+                                CapabilityId.of("bugreport:missing"),
+                                CapabilityVersion.parse("1.0"),
+                                true))
+                .build();
+    }
+
+    private static CategorySourcePlanner planner(
+            ProviderSpecification specification, ApprovedSourceRoots roots) {
+        return new CategorySourcePlanner(registry(specification), roots);
+    }
+
+    private static ProviderRegistrySnapshot registry(ProviderSpecification specification) {
+        BugReportProvider provider = new BugReportProvider() {
+            @Override
+            public String providerId() {
+                return specification.id().value();
+            }
+
+            @Override
+            public String providerVersion() {
+                return specification.version().value();
+            }
+
+            @Override
+            public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+        return ProviderRegistry.createSnapshot(
+                List.of(
+                        new DiscoveredProvider(
+                                specification.id().namespace(),
+                                "CategorySourcePlannerFixture",
+                                provider)));
+    }
+
+    private ApprovedSourceRoots createRoots() throws IOException {
+        return ApprovedSourceRoots.of(
+                Files.createDirectory(temporaryDirectory.resolve("logs")),
+                Files.createDirectory(temporaryDirectory.resolve("crash-reports")),
+                Files.createDirectory(temporaryDirectory.resolve("config")));
+    }
+}
