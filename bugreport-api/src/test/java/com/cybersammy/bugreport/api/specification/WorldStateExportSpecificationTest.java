@@ -10,6 +10,7 @@ import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
+import com.cybersammy.bugreport.api.version.CapabilityVersion;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
@@ -94,6 +95,13 @@ final class WorldStateExportSpecificationTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> providerBuilder(generator).requireCapability(optional).build());
+        CapabilityRequirement obsolete = new CapabilityRequirement(
+                StandardCapabilities.boundedWorldStateExport().id(),
+                new CapabilityVersion(0, 9),
+                true);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> providerBuilder(generator).requireCapability(obsolete).build());
 
         ProviderSpecification specification = providerBuilder(generator)
                 .requireCapability(StandardCapabilities.boundedWorldStateExport())
@@ -102,6 +110,16 @@ final class WorldStateExportSpecificationTest {
                 StandardCapabilities.boundedWorldStateExport(),
                 specification.capabilityRequirements().get(
                         StandardCapabilities.boundedWorldStateExport().id()));
+
+        CapabilityRequirement newer = new CapabilityRequirement(
+                StandardCapabilities.boundedWorldStateExport().id(),
+                new CapabilityVersion(1, 1),
+                true);
+        ProviderSpecification newerSpecification =
+                providerBuilder(generator).requireCapability(newer).build();
+        assertEquals(
+                newer,
+                newerSpecification.capabilityRequirements().get(newer.id()));
     }
 
     private static DiagnosticGeneratorSpecification validGenerator() {

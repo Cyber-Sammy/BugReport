@@ -325,7 +325,14 @@ explicit limits of at most four artifacts, one MiB per artifact, two MiB in
 aggregate, and two seconds of callback time. Providers may request tighter
 limits. The callback receives no path, workspace, stream, or permission to read
 `saves/`; the generator kind gives the future UI enough trusted product context
-to present a separate warning before collection.
+to present a separate warning and obtain explicit opt-in before invoking the
+callback. The two-second capability ceiling is not a game-thread blocking
+budget: `GAME_THREAD_SNAPSHOT` execution will use a separate substantially
+shorter capture budget and move longer serialization to a worker.
+
+This contract constrains Bug Report orchestration and cooperating providers. It
+is not a JVM sandbox: an installed Java mod executes in the same process and can
+independently access APIs that are not exposed by Bug Report.
 
 The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled

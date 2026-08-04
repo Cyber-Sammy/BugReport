@@ -463,11 +463,15 @@ public final class ProviderSpecification {
             if (!hasWorldStateExport) {
                 return;
             }
-            CapabilityRequirement requirement = capabilityRequirements.get(
-                    StandardCapabilities.boundedWorldStateExport().id());
-            if (requirement == null || !requirement.required()) {
+            CapabilityRequirement standard =
+                    StandardCapabilities.boundedWorldStateExport();
+            CapabilityRequirement requirement = capabilityRequirements.get(standard.id());
+            if (requirement == null
+                    || !requirement.required()
+                    || requirement.minimumVersion().compareTo(standard.minimumVersion()) < 0) {
                 throw new IllegalArgumentException(
-                        "World-state exports require the mandatory bounded world-state capability");
+                        "World-state exports require mandatory bounded world-state capability "
+                                + "1.0 or newer");
             }
         }
 
