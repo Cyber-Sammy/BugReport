@@ -1,7 +1,9 @@
 package com.cybersammy.bugreport.core.source;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
@@ -50,6 +52,127 @@ final class SourceSelectorPlannerTest {
 
         assertEquals("debug.log", selectedFiles(log, roots).getFirst().relativePath().value());
         assertEquals("example.toml", selectedFiles(config, roots).getFirst().relativePath().value());
+    }
+
+    @Test
+    void reportsExactObservedSizeForSelectedFiles() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/client.log"), "seven!!");
+        DiagnosticSourceSpecification source =
+                source(
+                        DiagnosticSourceSpecification.exactFile(
+                                id("sized"),
+                                LogicalRoot.GAME_LOGS,
+                                RelativePath.of("client.log")),
+                        PrivacyClassification.PERSONAL,
+                        DiagnosticContentType.TEXT);
+
+        SourceSizeEstimate estimate = SourceSelectorPlanner.plan(source, roots).estimate();
+
+        assertEquals(1, estimate.selectedFileCount());
+        assertEquals(7, estimate.knownBytes());
+        assertTrue(estimate.complete());
+    }
+
+    @Test
+    void providerByteLimitsCanRejectSelectedFilesAndAggregate() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/client.log"), "four");
+        DiagnosticSourceSpecification perFileLimited =
+                source(
+                        DiagnosticSourceSpecification.exactFile(
+                                        id("per_file"),
+                                        LogicalRoot.GAME_LOGS,
+                                        RelativePath.of("client.log"))
+                                .constraints(
+                                        CollectionConstraints.builder()
+                                                .maxBytesPerFile(3)
+                                                .build()),
+                        PrivacyClassification.PERSONAL,
+                        DiagnosticContentType.TEXT);
+        UnavailableSourcePlan oversized =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(perFileLimited, roots));
+        assertEquals(SourceSelectionFailureCode.FILE_SIZE_LIMIT_EXCEEDED, oversized.code());
+
+        Path archive = Files.createDirectory(temporaryDirectory.resolve("logs/archive"));
+        Files.writeString(archive.resolve("a.log"), "four");
+        Files.writeString(archive.resolve("b.log"), "four");
+        DiagnosticSourceSpecification totalLimited =
+                source(
+                        DiagnosticSourceSpecification.filteredLogDirectory(
+                                        id("total"),
+                                        RelativePath.of("archive"),
+                                        FilenamePattern.of("*.log"))
+                                .constraints(
+                                        CollectionConstraints.builder()
+                                                .maxBytesPerFile(4)
+                                                .maxTotalBytes(7)
+                                                .build()),
+                        PrivacyClassification.PERSONAL,
+                        DiagnosticContentType.TEXT);
+        UnavailableSourcePlan aggregate =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(totalLimited, roots));
+        assertEquals(SourceSelectionFailureCode.TOTAL_SIZE_LIMIT_EXCEEDED, aggregate.code());
+    }
+
+    @Test
+    void providerCannotRaiseProductByteCeilings() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/client.log"), "four");
+        DiagnosticSourceSpecification source =
+                source(
+                        DiagnosticSourceSpecification.exactFile(
+                                        id("product_limit"),
+                                        LogicalRoot.GAME_LOGS,
+                                        RelativePath.of("client.log"))
+                                .constraints(
+                                        CollectionConstraints.builder()
+                                                .maxBytesPerFile(100)
+                                                .maxTotalBytes(100)
+                                                .build()),
+                        PrivacyClassification.PERSONAL,
+                        DiagnosticContentType.TEXT);
+
+        UnavailableSourcePlan unavailable =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(
+                                source,
+                                roots,
+                                NioSourcePathInspection.INSTANCE,
+                                new SourcePlanningLimits(2, 3, 6)));
+
+        assertEquals(SourceSelectionFailureCode.FILE_SIZE_LIMIT_EXCEEDED, unavailable.code());
+
+        Path archive = Files.createDirectory(temporaryDirectory.resolve("logs/archive"));
+        Files.writeString(archive.resolve("a.log"), "four");
+        Files.writeString(archive.resolve("b.log"), "four");
+        DiagnosticSourceSpecification aggregateSource =
+                source(
+                        DiagnosticSourceSpecification.filteredLogDirectory(
+                                        id("product_total"),
+                                        RelativePath.of("archive"),
+                                        FilenamePattern.of("*.log"))
+                                .constraints(
+                                        CollectionConstraints.builder()
+                                                .maxBytesPerFile(100)
+                                                .maxTotalBytes(100)
+                                                .build()),
+                        PrivacyClassification.PERSONAL,
+                        DiagnosticContentType.TEXT);
+        UnavailableSourcePlan aggregate =
+                assertInstanceOf(
+                        UnavailableSourcePlan.class,
+                        SourceSelectorPlanner.plan(
+                                aggregateSource,
+                                roots,
+                                NioSourcePathInspection.INSTANCE,
+                                new SourcePlanningLimits(2, 4, 7)));
+        assertEquals(SourceSelectionFailureCode.TOTAL_SIZE_LIMIT_EXCEEDED, aggregate.code());
     }
 
     @Test
@@ -222,6 +345,7 @@ final class SourceSelectorPlannerTest {
                         SourceSelectorPlanner.plan(missing, roots));
         assertEquals(SourceSelectionFailureCode.SOURCE_MISSING, absent.code());
         assertEquals(SourcePathResolutionCode.COMPONENT_MISSING, absent.pathCode().orElseThrow());
+        assertEquals(SourceSizeEstimate.exact(0, 0), absent.estimate());
 
         Files.createDirectory(temporaryDirectory.resolve("logs/archive/not-a-file.log"));
         UnavailableSourcePlan unsafe =
@@ -351,13 +475,19 @@ final class SourceSelectorPlannerTest {
         assertInstanceOf(
                 UserSelectionSourcePlan.class,
                 SourceSelectorPlanner.plan(screenshot, roots));
+        SourceSizeEstimate screenshotEstimate =
+                SourceSelectorPlanner.plan(screenshot, roots).estimate();
+        assertEquals(0, screenshotEstimate.knownBytes());
+        assertFalse(screenshotEstimate.complete());
 
         DiagnosticSourceSpecification modList =
                 source(
                         DiagnosticSourceSpecification.modList(id("mod_list")),
                         PrivacyClassification.LOW,
                         DiagnosticContentType.JSON);
-        assertInstanceOf(BuiltInSourcePlan.class, SourceSelectorPlanner.plan(modList, roots));
+        SourceSelectionPlan builtIn = SourceSelectorPlanner.plan(modList, roots);
+        assertInstanceOf(BuiltInSourcePlan.class, builtIn);
+        assertFalse(builtIn.estimate().complete());
     }
 
     private DiagnosticSourceSpecification filteredSource(String sourceId, int maxFiles) {
