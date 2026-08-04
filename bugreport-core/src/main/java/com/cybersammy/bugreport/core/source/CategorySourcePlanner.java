@@ -28,12 +28,21 @@ public final class CategorySourcePlanner {
 
     private final ProviderRegistrySnapshot registry;
     private final ApprovedSourceRoots roots;
+    private final SourcePathInspection inspection;
 
     /** Binds category source planning to accepted providers and approved local roots. */
     public CategorySourcePlanner(
             ProviderRegistrySnapshot registry, ApprovedSourceRoots roots) {
+        this(registry, roots, NioSourcePathInspection.INSTANCE);
+    }
+
+    CategorySourcePlanner(
+            ProviderRegistrySnapshot registry,
+            ApprovedSourceRoots roots,
+            SourcePathInspection inspection) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.roots = Objects.requireNonNull(roots, "roots");
+        this.inspection = Objects.requireNonNull(inspection, "inspection");
     }
 
     /** Plans every source referenced by one trusted provider category. */
@@ -73,7 +82,8 @@ public final class CategorySourcePlanner {
                     DiagnosticSourceSpecification source =
                             specification.sources().get(sourceId);
                     SourceProvenance provenance = provenance(specification, category, source);
-                    SourceSelectionPlan selection = SourceSelectorPlanner.plan(source, roots);
+                    SourceSelectionPlan selection =
+                            SourceSelectorPlanner.plan(source, roots, inspection);
                     sources.add(new CoordinatedSourcePlan(provenance, selection));
                     if (selection instanceof FileSourcePlan filePlan) {
                         filePlan.files().forEach(
@@ -81,7 +91,7 @@ public final class CategorySourcePlanner {
                                         groups.computeIfAbsent(
                                                         file.localPath(),
                                                         ignored -> new FileGroup(file))
-                                                .add(provenance));
+                                                .add(file, provenance));
                     }
                 });
 
@@ -126,17 +136,28 @@ public final class CategorySourcePlanner {
     private static final class FileGroup {
         private final ResolvedSourceFile file;
         private final List<SourceProvenance> provenances = new ArrayList<>();
+        private boolean identityMismatch;
 
         private FileGroup(ResolvedSourceFile file) {
             this.file = Objects.requireNonNull(file, "file");
         }
 
-        private void add(SourceProvenance provenance) {
+        private void add(ResolvedSourceFile candidate, SourceProvenance provenance) {
+            identityMismatch |= !sameObservation(file, candidate);
             provenances.add(Objects.requireNonNull(provenance, "provenance"));
         }
 
         private void publish(
                 List<PlannedSourceFile> files, List<SourcePlanConflict> conflicts) {
+            if (identityMismatch) {
+                conflicts.add(
+                        new SourcePlanConflict(
+                                SourcePlanConflictCode.PATH_CHANGED_BETWEEN_SELECTORS,
+                                file.root(),
+                                file.relativePath(),
+                                provenances));
+                return;
+            }
             long representations = provenances.stream()
                     .map(SourceProvenance::contentType)
                     .distinct()
@@ -151,6 +172,16 @@ public final class CategorySourcePlanner {
                 return;
             }
             files.add(new PlannedSourceFile(file, provenances));
+        }
+
+        private static boolean sameObservation(
+                ResolvedSourceFile first, ResolvedSourceFile second) {
+            return first.localPath().equals(second.localPath())
+                    && first.root() == second.root()
+                    && first.relativePath().equals(second.relativePath())
+                    && first.observedFileKey().equals(second.observedFileKey())
+                    && first.observedSize() == second.observedSize()
+                    && first.observedLastModified().equals(second.observedLastModified());
         }
     }
 }

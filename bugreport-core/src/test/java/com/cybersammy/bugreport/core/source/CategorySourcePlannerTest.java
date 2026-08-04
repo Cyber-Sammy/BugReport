@@ -29,8 +29,10 @@ import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
 import com.cybersammy.bugreport.core.registry.ProviderRegistry;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import java.io.IOException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -166,6 +168,66 @@ final class CategorySourcePlannerTest {
                 conflict.provenances().stream()
                         .map(provenance -> provenance.sourceId().value())
                         .toList());
+    }
+
+    @Test
+    void excludesPathWhoseIdentityChangesBetweenSelectors() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path shared = temporaryDirectory.resolve("logs/shared.log");
+        Files.writeString(shared, "first");
+        DiagnosticSourceSpecification first =
+                exact(
+                        "a_first",
+                        "shared.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.RECOMMENDED,
+                        InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification second =
+                exact(
+                        "b_second",
+                        "shared.log",
+                        DiagnosticContentType.TEXT,
+                        PrivacyClassification.PERSONAL,
+                        ReportQualityRole.RECOMMENDED,
+                        InclusionDefault.EXCLUDED);
+        SourcePathInspection changingInspection =
+                new DelegatingInspection() {
+                    private int noFollowReads;
+
+                    @Override
+                    public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                            throws IOException {
+                        if (path.equals(shared) && !followLinks && ++noFollowReads == 3) {
+                            Files.writeString(shared, "replacement-with-a-different-size");
+                        }
+                        return super.readAttributes(path, followLinks);
+                    }
+                };
+        CategorySourcePlanner planner =
+                new CategorySourcePlanner(
+                        registry(specification(first, second)),
+                        roots,
+                        changingInspection);
+
+        CategorySourcePlan plan = planner.plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertEquals(List.of(), plan.files());
+        SourcePlanConflict conflict = plan.conflicts().getFirst();
+        assertEquals(
+                SourcePlanConflictCode.PATH_CHANGED_BETWEEN_SELECTORS,
+                conflict.code());
+        assertEquals(
+                List.of("a_first", "b_second"),
+                conflict.provenances().stream()
+                        .map(provenance -> provenance.sourceId().value())
+                        .toList());
+        FileSourcePlan firstPlan =
+                assertInstanceOf(FileSourcePlan.class, plan.sources().get(0).selection());
+        FileSourcePlan secondPlan =
+                assertInstanceOf(FileSourcePlan.class, plan.sources().get(1).selection());
+        assertEquals(5, firstPlan.files().getFirst().observedSize());
+        assertTrue(secondPlan.files().getFirst().observedSize() > 5);
     }
 
     @Test
@@ -350,5 +412,23 @@ final class CategorySourcePlannerTest {
                 Files.createDirectory(temporaryDirectory.resolve("logs")),
                 Files.createDirectory(temporaryDirectory.resolve("crash-reports")),
                 Files.createDirectory(temporaryDirectory.resolve("config")));
+    }
+
+    private static class DelegatingInspection implements SourcePathInspection {
+        @Override
+        public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                throws IOException {
+            return NioSourcePathInspection.INSTANCE.readAttributes(path, followLinks);
+        }
+
+        @Override
+        public Path realPath(Path path, boolean followLinks) throws IOException {
+            return NioSourcePathInspection.INSTANCE.realPath(path, followLinks);
+        }
+
+        @Override
+        public FileStore fileStore(Path path) throws IOException {
+            return NioSourcePathInspection.INSTANCE.fileStore(path);
+        }
     }
 }
