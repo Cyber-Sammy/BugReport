@@ -27,7 +27,8 @@ Implemented and executable:
 - registry-bound report session creation that rejects absent and disabled
   providers, plus a loader-neutral state machine with typed invalid-transition
   errors, trusted provider-category selection, recovery paths, monotonic
-  revisions, and immutable snapshots;
+  revisions, explicit cancellation, privacy-minimized bounded audit events, and
+  immutable snapshots;
 - immutable bounded form values and deterministic category-scoped field
   validation with stable codes and exact paths;
 - bounded deterministic report-draft JSON with explicit schema migration and

@@ -109,12 +109,18 @@ final class ReportSessionTest {
     void cancellationIsTerminal() {
         ReportSession session = session();
 
-        ReportSessionSnapshot cancelled = session.transitionTo(ReportSessionState.CANCELLED);
+        assertThrows(
+                InvalidReportSessionTransitionException.class,
+                () -> session.transitionTo(ReportSessionState.CANCELLED));
+        ReportSessionSnapshot cancelled = session.cancel(CancellationReason.USER_REQUESTED);
 
         assertEquals(ReportSessionState.CANCELLED, cancelled.state());
         assertThrows(
                 InvalidReportSessionTransitionException.class,
                 () -> session.transitionTo(ReportSessionState.FORM_IN_PROGRESS));
+        assertThrows(
+                InvalidReportSessionTransitionException.class,
+                () -> session.cancel(CancellationReason.OPERATION_ABORTED));
         assertEquals(cancelled, session.snapshot());
     }
 

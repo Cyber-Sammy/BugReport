@@ -6,6 +6,10 @@ import com.cybersammy.bugreport.api.specification.ProviderSpecification;
 import com.cybersammy.bugreport.core.registry.ProviderSupport;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -14,14 +18,19 @@ public final class ReportSession {
     private final ReportSessionId id;
     private final ProviderSpecification providerSpecification;
     private final ProviderSupport providerSupport;
+    private final Clock clock;
+    private final ArrayDeque<SessionAuditEvent> auditEvents = new ArrayDeque<>();
 
     private CategorySpecification selectedCategory;
     private ReportSessionState state = ReportSessionState.CREATED;
     private long revision;
+    private long lastAuditSequence;
+    private long discardedAuditEvents;
 
     ReportSession(
             ReportSessionId id,
-            RegisteredProvider provider) {
+            RegisteredProvider provider,
+            Clock clock) {
         this.id = Objects.requireNonNull(id, "id");
         RegisteredProvider acceptedProvider = Objects.requireNonNull(provider, "provider");
         if (acceptedProvider.support().state() == ProviderSupportState.DISABLED) {
@@ -31,6 +40,14 @@ public final class ReportSession {
         }
         providerSpecification = acceptedProvider.specification();
         providerSupport = acceptedProvider.support();
+        this.clock = Objects.requireNonNull(clock, "clock");
+        auditEvents.addLast(
+                new SessionAuditEvent.Created(
+                        id,
+                        0,
+                        0,
+                        auditInstant(),
+                        providerSpecification.id()));
     }
 
     /** Returns an immutable, internally consistent point-in-time snapshot. */
@@ -67,9 +84,29 @@ public final class ReportSession {
             return currentSnapshot();
         }
 
+        long nextRevision = nextRevision();
+        long nextSequence = nextAuditSequence();
+        Instant occurredAt = auditInstant();
+        SessionAuditEvent event =
+                selectedCategory == null
+                        ? new SessionAuditEvent.CategorySelected(
+                                id,
+                                nextSequence,
+                                nextRevision,
+                                occurredAt,
+                                requestedCategory.id())
+                        : new SessionAuditEvent.CategoryChanged(
+                                id,
+                                nextSequence,
+                                nextRevision,
+                                occurredAt,
+                                selectedCategory.id(),
+                                requestedCategory.id());
+        appendAuditEvent(event);
         selectedCategory = requestedCategory;
         state = ReportSessionState.FORM_IN_PROGRESS;
-        revision++;
+        revision = nextRevision;
+        lastAuditSequence = nextSequence;
         return currentSnapshot();
     }
 
@@ -77,12 +114,54 @@ public final class ReportSession {
     public synchronized ReportSessionSnapshot transitionTo(ReportSessionState requestedState) {
         Objects.requireNonNull(requestedState, "requestedState");
         if (!state.canTransitionTo(requestedState)
+                || requestedState == ReportSessionState.CANCELLED
                 || (state == ReportSessionState.CREATED
                         && requestedState == ReportSessionState.FORM_IN_PROGRESS)) {
             throw new InvalidReportSessionTransitionException(id, state, requestedState);
         }
+        long nextRevision = nextRevision();
+        long nextSequence = nextAuditSequence();
+        SessionAuditEvent event =
+                new SessionAuditEvent.StateTransitioned(
+                        id,
+                        nextSequence,
+                        nextRevision,
+                        auditInstant(),
+                        state,
+                        requestedState);
+        appendAuditEvent(event);
         state = requestedState;
-        revision++;
+        revision = nextRevision;
+        lastAuditSequence = nextSequence;
+        return currentSnapshot();
+    }
+
+    /**
+     * Explicitly cancels one active session and records the technical reason.
+     *
+     * @param reason cancellation reason without user-supplied text
+     * @return terminal cancelled snapshot
+     */
+    public synchronized ReportSessionSnapshot cancel(CancellationReason reason) {
+        CancellationReason cancellationReason = Objects.requireNonNull(reason, "reason");
+        if (!state.canTransitionTo(ReportSessionState.CANCELLED)) {
+            throw new InvalidReportSessionTransitionException(
+                    id, state, ReportSessionState.CANCELLED);
+        }
+        long nextRevision = nextRevision();
+        long nextSequence = nextAuditSequence();
+        SessionAuditEvent event =
+                new SessionAuditEvent.Cancelled(
+                        id,
+                        nextSequence,
+                        nextRevision,
+                        auditInstant(),
+                        state,
+                        cancellationReason);
+        appendAuditEvent(event);
+        state = ReportSessionState.CANCELLED;
+        revision = nextRevision;
+        lastAuditSequence = nextSequence;
         return currentSnapshot();
     }
 
@@ -93,6 +172,29 @@ public final class ReportSession {
                 providerSupport,
                 Optional.ofNullable(selectedCategory),
                 state,
-                revision);
+                revision,
+                new SessionAuditTrail(
+                        new ArrayList<>(auditEvents), discardedAuditEvents));
+    }
+
+    private long nextRevision() {
+        return Math.addExact(revision, 1);
+    }
+
+    private long nextAuditSequence() {
+        return Math.addExact(lastAuditSequence, 1);
+    }
+
+    private Instant auditInstant() {
+        return Objects.requireNonNull(clock.instant(), "clock.instant()");
+    }
+
+    private void appendAuditEvent(SessionAuditEvent event) {
+        if (auditEvents.size() == SessionAuditTrail.MAX_RETAINED_EVENTS) {
+            long nextDiscarded = Math.addExact(discardedAuditEvents, 1);
+            auditEvents.removeFirst();
+            discardedAuditEvents = nextDiscarded;
+        }
+        auditEvents.addLast(event);
     }
 }

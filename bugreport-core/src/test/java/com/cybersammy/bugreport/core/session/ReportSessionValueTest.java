@@ -8,6 +8,8 @@ import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -44,7 +46,8 @@ final class ReportSessionValueTest {
                                 provider.support(),
                                 Optional.empty(),
                                 ReportSessionState.CREATED,
-                                -1));
+                                -1,
+                                auditTrail(provider)));
     }
 
     @Test
@@ -63,7 +66,8 @@ final class ReportSessionValueTest {
                                 provider.support(),
                                 Optional.empty(),
                                 ReportSessionState.FORM_IN_PROGRESS,
-                                1));
+                                1,
+                                auditTrail(provider)));
 
         CategorySpecification independentlyBuilt =
                 CategorySpecification.builder(
@@ -79,6 +83,20 @@ final class ReportSessionValueTest {
                                 provider.support(),
                                 Optional.of(independentlyBuilt),
                                 ReportSessionState.FORM_IN_PROGRESS,
-                                1));
+                                1,
+                                auditTrail(provider)));
+    }
+
+    private static SessionAuditTrail auditTrail(RegisteredProvider provider) {
+        ReportSessionId id = ReportSessionId.parse(CANONICAL_ID);
+        return new SessionAuditTrail(
+                List.of(
+                        new SessionAuditEvent.Created(
+                                id,
+                                0,
+                                0,
+                                Instant.EPOCH,
+                                provider.id())),
+                0);
     }
 }
