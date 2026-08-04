@@ -27,6 +27,8 @@ Implemented and executable:
 - registry-bound report session creation that rejects absent and disabled
   providers, plus a loader-neutral state machine with typed invalid-transition
   errors, recovery paths, monotonic revisions, and immutable snapshots;
+- immutable bounded form values and deterministic category-scoped field
+  validation with stable codes and exact paths;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
@@ -41,7 +43,8 @@ Implemented and executable:
 Not implemented yet:
 
 - execution of diagnostic collection callbacks;
-- report forms, collection, review, sanitization, export, or submission;
+- interactive report forms, collection, review, sanitization, export, or
+  submission;
 - player commands and UI.
 
 The current build is suitable for testing API packaging, optional installation,

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
-/** Immutable exact path to a value in a nested provider specification. */
+/** Immutable exact path to a value in a nested contract or submitted form. */
 public final class ValidationPath implements Comparable<ValidationPath> {
     private static final int MAX_PROPERTY_LENGTH = 64;
     private static final int MAX_SEGMENTS = 64;

@@ -58,7 +58,7 @@ public final class ValidationResult {
     /**
      * Reports whether the result contains no errors.
      *
-     * @return {@code true} when registration may continue
+     * @return {@code true} when the validated operation may continue
      */
     public boolean isValid() {
         return issues.stream().noneMatch(issue -> issue.severity() == ValidationSeverity.ERROR);
