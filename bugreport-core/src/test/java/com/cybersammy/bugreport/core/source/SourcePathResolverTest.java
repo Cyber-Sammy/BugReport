@@ -8,8 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.cybersammy.bugreport.api.specification.LogicalRoot;
 import com.cybersammy.bugreport.api.specification.RelativePath;
 import java.io.IOException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -145,7 +147,93 @@ final class SourcePathResolverTest {
                         SourcePathResolver.resolveRegularFile(
                                 roots,
                                 LogicalRoot.MOD_CONFIGURATION,
-                                RelativePath.of("example.toml")));
+                        RelativePath.of("example.toml")));
+    }
+
+    @Test
+    void rejectsEntryWhoseFollowedAndNoFollowCanonicalPathsDiffer() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path file = temporaryDirectory.resolve("logs/client.log");
+        Path redirected = temporaryDirectory.resolve("outside.log");
+        Files.writeString(file, "diagnostic");
+        Files.writeString(redirected, "outside");
+        SourcePathInspection inspection =
+                new DelegatingInspection() {
+                    @Override
+                    public Path realPath(Path path, boolean followLinks) throws IOException {
+                        if (path.equals(file) && followLinks) {
+                            return redirected.toRealPath();
+                        }
+                        return super.realPath(path, followLinks);
+                    }
+                };
+
+        assertFailure(
+                SourcePathResolutionCode.PATH_REDIRECTION,
+                () ->
+                        SourcePathResolver.resolveRegularFile(
+                                roots,
+                                LogicalRoot.GAME_LOGS,
+                                RelativePath.of("client.log"),
+                                inspection));
+    }
+
+    @Test
+    void rejectsFileChangedBeforeFinalPlanningRevalidation() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path file = temporaryDirectory.resolve("logs/client.log");
+        Files.writeString(file, "first");
+        SourcePathInspection inspection =
+                new DelegatingInspection() {
+                    private int noFollowReads;
+
+                    @Override
+                    public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                            throws IOException {
+                        if (path.equals(file) && !followLinks && ++noFollowReads == 2) {
+                            Files.writeString(file, "replacement-with-different-size");
+                        }
+                        return super.readAttributes(path, followLinks);
+                    }
+                };
+
+        assertFailure(
+                SourcePathResolutionCode.PATH_CHANGED_DURING_RESOLUTION,
+                () ->
+                        SourcePathResolver.resolveRegularFile(
+                                roots,
+                                LogicalRoot.GAME_LOGS,
+                                RelativePath.of("client.log"),
+                                inspection));
+    }
+
+    @Test
+    void classifiesDisappearanceDuringRevalidationAsConcurrentChange() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Path file = temporaryDirectory.resolve("logs/client.log");
+        Files.writeString(file, "diagnostic");
+        SourcePathInspection inspection =
+                new DelegatingInspection() {
+                    private int noFollowReads;
+
+                    @Override
+                    public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                            throws IOException {
+                        if (path.equals(file) && !followLinks && ++noFollowReads == 2) {
+                            Files.delete(file);
+                        }
+                        return super.readAttributes(path, followLinks);
+                    }
+                };
+
+        assertFailure(
+                SourcePathResolutionCode.PATH_CHANGED_DURING_RESOLUTION,
+                () ->
+                        SourcePathResolver.resolveRegularFile(
+                                roots,
+                                LogicalRoot.GAME_LOGS,
+                                RelativePath.of("client.log"),
+                                inspection));
     }
 
     private ApprovedSourceRoots createRoots() throws IOException {
@@ -161,5 +249,23 @@ final class SourcePathResolverTest {
                 assertThrows(SourcePathResolutionException.class, operation::run);
         assertEquals(code, exception.code());
         return exception;
+    }
+
+    private static class DelegatingInspection implements SourcePathInspection {
+        @Override
+        public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                throws IOException {
+            return NioSourcePathInspection.INSTANCE.readAttributes(path, followLinks);
+        }
+
+        @Override
+        public Path realPath(Path path, boolean followLinks) throws IOException {
+            return NioSourcePathInspection.INSTANCE.realPath(path, followLinks);
+        }
+
+        @Override
+        public FileStore fileStore(Path path) throws IOException {
+            return NioSourcePathInspection.INSTANCE.fileStore(path);
+        }
     }
 }
