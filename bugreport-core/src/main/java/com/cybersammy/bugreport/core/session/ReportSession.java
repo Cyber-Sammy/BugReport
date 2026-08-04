@@ -3,6 +3,8 @@ package com.cybersammy.bugreport.core.session;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.core.draft.ReportDraft;
+import com.cybersammy.bugreport.core.draft.ResolvedReportDraft;
 import com.cybersammy.bugreport.core.registry.ProviderSupport;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
@@ -48,6 +50,31 @@ public final class ReportSession {
                         0,
                         auditInstant(),
                         providerSpecification.id()));
+    }
+
+    ReportSession(ResolvedReportDraft resolvedDraft, Clock clock) {
+        ResolvedReportDraft resolved = Objects.requireNonNull(resolvedDraft, "resolvedDraft");
+        ReportDraft draft = resolved.draft();
+        id = draft.sessionId();
+        providerSpecification = resolved.providerSpecification();
+        providerSupport = resolved.providerSupport();
+        this.clock = Objects.requireNonNull(clock, "clock");
+        selectedCategory = resolved.category().orElse(null);
+        state = selectedCategory == null
+                ? ReportSessionState.CREATED
+                : ReportSessionState.FORM_IN_PROGRESS;
+        long recoveryRevision = Math.addExact(draft.revision(), 1);
+        revision = recoveryRevision;
+        lastAuditSequence = recoveryRevision;
+        discardedAuditEvents = recoveryRevision;
+        auditEvents.addLast(
+                new SessionAuditEvent.Recovered(
+                        id,
+                        recoveryRevision,
+                        recoveryRevision,
+                        auditInstant(),
+                        draft.recordedState(),
+                        state));
     }
 
     /** Returns an immutable, internally consistent point-in-time snapshot. */

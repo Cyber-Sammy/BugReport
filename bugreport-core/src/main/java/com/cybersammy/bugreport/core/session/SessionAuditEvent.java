@@ -128,4 +128,30 @@ public sealed interface SessionAuditEvent {
             }
         }
     }
+
+    /** Records restart recovery into a deliberately safe lifecycle state. */
+    record Recovered(
+            ReportSessionId sessionId,
+            long sequence,
+            long revision,
+            Instant occurredAt,
+            ReportSessionState recordedState,
+            ReportSessionState state)
+            implements SessionAuditEvent {
+        /** Validates restart-recovery event metadata and safe-state policy. */
+        public Recovered {
+            SessionAuditEventChecks.requireMutationMetadata(
+                    sessionId, sequence, revision, occurredAt);
+            Objects.requireNonNull(recordedState, "recordedState");
+            Objects.requireNonNull(state, "state");
+            if (recordedState.terminal()
+                    || (recordedState == ReportSessionState.CREATED
+                            && state != ReportSessionState.CREATED)
+                    || (recordedState != ReportSessionState.CREATED
+                            && state != ReportSessionState.FORM_IN_PROGRESS)) {
+                throw new IllegalArgumentException(
+                        "Recovery audit event does not follow safe restart policy");
+            }
+        }
+    }
 }

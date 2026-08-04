@@ -100,6 +100,12 @@ public record ReportSessionSnapshot(
                             "Cancellation audit event requires a cancelled snapshot");
                 }
             }
+            case SessionAuditEvent.Recovered recovered -> {
+                if (state != recovered.state()) {
+                    throw new IllegalArgumentException(
+                            "Recovery audit event does not match the session state");
+                }
+            }
         }
     }
 
