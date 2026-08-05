@@ -87,6 +87,19 @@ public final class SourceSelectorPlanner {
     static SourceSelectionPlan plan(
             DiagnosticSourceSpecification source,
             ApprovedSourceRoots roots,
+            SupportedSide side,
+            SourcePathInspection inspection) {
+        return plan(
+                source,
+                roots,
+                side,
+                inspection,
+                SourcePlanningLimits.productDefaults());
+    }
+
+    static SourceSelectionPlan plan(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
             SourcePathInspection inspection,
             SourcePlanningLimits limits) {
         return plan(
