@@ -338,6 +338,42 @@ The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled
 until the bounded callback executor and review flow are implemented.
 
+### Dynamic source paths
+
+Use a dynamic source only when exact log or crash-report filenames cannot be
+declared statically. The callback emits bounded `RelativePath` values below a
+root chosen in advance; it never receives a `Path`, directory, stream, or root
+location:
+
+```java
+DiagnosticSourceSpecification dynamicLogs =
+        DiagnosticSourceSpecification.dynamicFiles(
+                        DiagnosticSourceId.of("active_logs"),
+                        LogicalRoot.GAME_LOGS,
+                        (request, sink) -> {
+                            sink.emit(RelativePath.of("current/client.log"));
+                            sink.emit(RelativePath.of("current/network.log"));
+                        })
+                .labelKey(LocalizationKey.of("my_mod.bugreport.active_logs"))
+                .privacy(PrivacyClassification.PERSONAL)
+                .contentType(DiagnosticContentType.TEXT)
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .constraints(CollectionConstraints.builder()
+                        .maxMatchedFiles(2)
+                        .maxBytesPerFile(4 * 1024 * 1024)
+                        .maxTotalBytes(8 * 1024 * 1024)
+                        .callbackTimeout(Duration.ofMillis(250))
+                        .build())
+                .build();
+```
+
+Dynamic paths are limited to `GAME_LOGS` and `CRASH_REPORTS`. Core runs the
+callback on a virtual worker with a hard two-second product ceiling, rejects
+null, duplicate, asynchronous, late, or over-limit emissions, sorts accepted
+results canonically, and validates every result through the same no-follow
+filesystem resolver as static selectors. One invalid or missing result rejects
+the entire source plan; valid siblings are not collected partially.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own

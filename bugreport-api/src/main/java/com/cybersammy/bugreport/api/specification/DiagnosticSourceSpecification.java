@@ -11,13 +11,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-/** Immutable declarative diagnostic-source specification. */
+/** Immutable diagnostic-source specification with declarative-first selection policy. */
 public final class DiagnosticSourceSpecification {
     private final DiagnosticSourceId id;
     private final DiagnosticSourceKind kind;
     private final LogicalRoot root;
     private final RelativePath path;
     private final FilenamePattern pattern;
+    private final DynamicSourcePathProducer dynamicPathProducer;
     private final LocalizationKey labelKey;
     private final LocalizationKey descriptionKey;
     private final PrivacyClassification privacy;
@@ -34,6 +35,7 @@ public final class DiagnosticSourceSpecification {
         root = builder.root;
         path = builder.path;
         pattern = builder.pattern;
+        dynamicPathProducer = builder.dynamicPathProducer;
         labelKey = builder.labelKey;
         descriptionKey = builder.descriptionKey;
         privacy = builder.privacy;
@@ -101,6 +103,30 @@ public final class DiagnosticSourceSpecification {
                 LogicalRoot.GAME_LOGS,
                 directory,
                 pattern);
+    }
+
+    /**
+     * Selects bounded callback-produced exact files below the logs or crash-reports root.
+     *
+     * <p>The callback receives no root path or filesystem authority. Every emitted {@link
+     * RelativePath} is independently resolved by Core below the root declared here.
+     *
+     * @param id source ID within its provider
+     * @param root approved logs or crash root
+     * @param producer bounded relative-path callback
+     * @return new source builder
+     */
+    public static Builder dynamicFiles(
+            DiagnosticSourceId id,
+            LogicalRoot root,
+            DynamicSourcePathProducer producer) {
+        return new Builder(
+                id,
+                DiagnosticSourceKind.DYNAMIC_FILES,
+                root,
+                null,
+                null,
+                producer);
     }
 
     /**
@@ -219,6 +245,15 @@ public final class DiagnosticSourceSpecification {
     }
 
     /**
+     * Returns the bounded producer only for a dynamic-file selector.
+     *
+     * @return optional dynamic path producer
+     */
+    public Optional<DynamicSourcePathProducer> dynamicPathProducer() {
+        return Optional.ofNullable(dynamicPathProducer);
+    }
+
+    /**
      * Returns localized source label.
      *
      * @return localized source label
@@ -306,6 +341,7 @@ public final class DiagnosticSourceSpecification {
         private final LogicalRoot root;
         private final RelativePath path;
         private final FilenamePattern pattern;
+        private final DynamicSourcePathProducer dynamicPathProducer;
         private final EnumSet<SupportedSide> supportedSides =
                 EnumSet.noneOf(SupportedSide.class);
         private LocalizationKey labelKey;
@@ -323,11 +359,22 @@ public final class DiagnosticSourceSpecification {
                 LogicalRoot root,
                 RelativePath path,
                 FilenamePattern pattern) {
+            this(id, kind, root, path, pattern, null);
+        }
+
+        private Builder(
+                DiagnosticSourceId id,
+                DiagnosticSourceKind kind,
+                LogicalRoot root,
+                RelativePath path,
+                FilenamePattern pattern,
+                DynamicSourcePathProducer dynamicPathProducer) {
             this.id = Objects.requireNonNull(id, "id");
             this.kind = Objects.requireNonNull(kind, "kind");
             this.root = root;
             this.path = path;
             this.pattern = pattern;
+            this.dynamicPathProducer = dynamicPathProducer;
         }
 
         /**
@@ -454,30 +501,56 @@ public final class DiagnosticSourceSpecification {
                         throw new IllegalArgumentException(
                                 "Exact files require the logs or crash-reports root");
                     }
-                    requireSelector(path != null && pattern == null);
+                    requireSelector(
+                            path != null && pattern == null && dynamicPathProducer == null);
                 }
                 case LATEST_FILE -> {
                     if (root != LogicalRoot.GAME_LOGS && root != LogicalRoot.CRASH_REPORTS) {
                         throw new IllegalArgumentException(
                                 "Latest files require the logs or crash-reports root");
                     }
-                    requireSelector(path == null && pattern != null);
+                    requireSelector(
+                            path == null && pattern != null && dynamicPathProducer == null);
                 }
                 case FILTERED_DIRECTORY -> {
                     if (root != LogicalRoot.GAME_LOGS) {
                         throw new IllegalArgumentException(
                                 "Filtered directories are allowed only below game logs");
                     }
-                    requireSelector(pattern != null);
+                    requireSelector(pattern != null && dynamicPathProducer == null);
+                }
+                case DYNAMIC_FILES -> {
+                    if (root != LogicalRoot.GAME_LOGS && root != LogicalRoot.CRASH_REPORTS) {
+                        throw new IllegalArgumentException(
+                                "Dynamic files require the logs or crash-reports root");
+                    }
+                    requireSelector(
+                            path == null && pattern == null && dynamicPathProducer != null);
+                    if (constraints.maxMatchedFiles().isEmpty()
+                            || constraints.callbackTimeout().isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "Dynamic files require explicit result-count and timeout limits");
+                    }
+                    if (constraints.maxTraversalDepth().isPresent()
+                            || constraints.maxGeneratedArtifacts().isPresent()) {
+                        throw new IllegalArgumentException(
+                                "Dynamic files cannot request traversal or artifact constraints");
+                    }
                 }
                 case MOD_CONFIGURATION -> requireSelector(
-                        root == LogicalRoot.MOD_CONFIGURATION && path != null && pattern == null);
+                        root == LogicalRoot.MOD_CONFIGURATION
+                                && path != null
+                                && pattern == null
+                                && dynamicPathProducer == null);
                 case LATEST_LOG,
                         LATEST_CRASH_REPORT,
                         USER_SELECTED_SCREENSHOT,
                         MOD_LIST,
                         ENVIRONMENT_SUMMARY -> requireSelector(
-                                root == null && path == null && pattern == null);
+                                root == null
+                                        && path == null
+                                        && pattern == null
+                                        && dynamicPathProducer == null);
             }
         }
 
@@ -496,6 +569,7 @@ public final class DiagnosticSourceSpecification {
                 case EXACT_FILE,
                         LATEST_FILE,
                         FILTERED_DIRECTORY,
+                        DYNAMIC_FILES,
                         LATEST_LOG,
                         LATEST_CRASH_REPORT -> PrivacyClassification.PERSONAL;
                 case MOD_LIST, ENVIRONMENT_SUMMARY -> PrivacyClassification.LOW;

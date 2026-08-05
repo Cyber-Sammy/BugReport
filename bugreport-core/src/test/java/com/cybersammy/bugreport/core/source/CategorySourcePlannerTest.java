@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.cybersammy.bugreport.api.BugReportProvider;
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.api.constraint.CollectionConstraints;
 import com.cybersammy.bugreport.api.identifier.CapabilityId;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
@@ -33,9 +34,12 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -208,6 +212,7 @@ final class CategorySourcePlannerTest {
                 new CategorySourcePlanner(
                         registry(specification(first, second)),
                         roots,
+                        SupportedSide.PHYSICAL_CLIENT,
                         changingInspection);
 
         CategorySourcePlan plan = planner.plan(PROVIDER_ID, CATEGORY_ID);
@@ -265,7 +270,8 @@ final class CategorySourcePlannerTest {
     void rejectsUntrustedProviderAndUnknownCategoryBeforePlanning() throws IOException {
         ApprovedSourceRoots roots = createRoots();
         ProviderRegistrySnapshot registry = registry(specification());
-        CategorySourcePlanner planner = new CategorySourcePlanner(registry, roots);
+        CategorySourcePlanner planner = new CategorySourcePlanner(
+                registry, roots, SupportedSide.PHYSICAL_CLIENT);
 
         CategorySourcePlanException providerFailure =
                 assertThrows(
@@ -288,12 +294,65 @@ final class CategorySourcePlannerTest {
 
         ProviderSpecification disabledSpecification = disabledSpecification();
         CategorySourcePlanner disabledPlanner =
-                new CategorySourcePlanner(registry(disabledSpecification), roots);
+                new CategorySourcePlanner(
+                        registry(disabledSpecification),
+                        roots,
+                        SupportedSide.PHYSICAL_CLIENT);
         CategorySourcePlanException disabledFailure =
                 assertThrows(
                         CategorySourcePlanException.class,
                         () -> disabledPlanner.plan(PROVIDER_ID, CATEGORY_ID));
         assertEquals(CategorySourcePlanRequestCode.PROVIDER_DISABLED, disabledFailure.code());
+    }
+
+    @Test
+    void propagatesPhysicalSideToDynamicSourcePlanning() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/server.log"), "server");
+        AtomicInteger invocations = new AtomicInteger();
+        AtomicReference<SupportedSide> observedSide = new AtomicReference<>();
+        DiagnosticSourceSpecification dynamic = DiagnosticSourceSpecification.dynamicFiles(
+                        DiagnosticSourceId.of("server_dynamic"),
+                        LogicalRoot.GAME_LOGS,
+                        (request, sink) -> {
+                            invocations.incrementAndGet();
+                            observedSide.set(request.side());
+                            sink.emit(RelativePath.of("server.log"));
+                        })
+                .labelKey(LocalizationKey.of("example.source.server_dynamic"))
+                .privacy(PrivacyClassification.PERSONAL)
+                .contentType(DiagnosticContentType.TEXT)
+                .supportSide(SupportedSide.DEDICATED_SERVER)
+                .constraints(CollectionConstraints.builder()
+                        .maxMatchedFiles(1)
+                        .maxBytesPerFile(1024)
+                        .maxTotalBytes(1024)
+                        .callbackTimeout(Duration.ofMillis(250))
+                        .build())
+                .build();
+        ProviderSpecification specification = specificationForSide(
+                SupportedSide.DEDICATED_SERVER, dynamic);
+
+        CategorySourcePlan serverPlan = new CategorySourcePlanner(
+                        registry(specification),
+                        roots,
+                        SupportedSide.DEDICATED_SERVER)
+                .plan(PROVIDER_ID, CATEGORY_ID);
+
+        assertInstanceOf(FileSourcePlan.class, serverPlan.sources().getFirst().selection());
+        assertEquals(SupportedSide.DEDICATED_SERVER, observedSide.get());
+        assertEquals(1, invocations.get());
+
+        CategorySourcePlan clientPlan = new CategorySourcePlanner(
+                        registry(specification),
+                        roots,
+                        SupportedSide.PHYSICAL_CLIENT)
+                .plan(PROVIDER_ID, CATEGORY_ID);
+        UnavailableSourcePlan unsupported = assertInstanceOf(
+                UnavailableSourcePlan.class,
+                clientPlan.sources().getFirst().selection());
+        assertEquals(SourceSelectionFailureCode.UNSUPPORTED_SIDE, unsupported.code());
+        assertEquals(1, invocations.get());
     }
 
     private static List<String> sourceIds(CategorySourcePlan plan) {
@@ -345,6 +404,11 @@ final class CategorySourcePlannerTest {
 
     private static ProviderSpecification specification(
             DiagnosticSourceSpecification... sources) {
+        return specificationForSide(SupportedSide.PHYSICAL_CLIENT, sources);
+    }
+
+    private static ProviderSpecification specificationForSide(
+            SupportedSide side, DiagnosticSourceSpecification... sources) {
         CategorySpecification.Builder category = CategorySpecification.builder(
                 CATEGORY_ID, LocalizationKey.of("example.category.general"));
         Arrays.stream(sources).forEach(source -> category.useSource(source.id()));
@@ -352,7 +416,7 @@ final class CategorySourcePlannerTest {
                         PROVIDER_ID,
                         PROVIDER_VERSION,
                         LocalizationKey.of("example.provider"))
-                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .supportSide(side)
                 .addCategory(category.build());
         Arrays.stream(sources).forEach(provider::addSource);
         return provider.build();
@@ -379,7 +443,8 @@ final class CategorySourcePlannerTest {
 
     private static CategorySourcePlanner planner(
             ProviderSpecification specification, ApprovedSourceRoots roots) {
-        return new CategorySourcePlanner(registry(specification), roots);
+        return new CategorySourcePlanner(
+                registry(specification), roots, SupportedSide.PHYSICAL_CLIENT);
     }
 
     private static ProviderRegistrySnapshot registry(ProviderSpecification specification) {

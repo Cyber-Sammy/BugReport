@@ -1,5 +1,6 @@
 package com.cybersammy.bugreport.core.source;
 
+import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
@@ -28,20 +29,25 @@ public final class CategorySourcePlanner {
 
     private final ProviderRegistrySnapshot registry;
     private final ApprovedSourceRoots roots;
+    private final SupportedSide side;
     private final SourcePathInspection inspection;
 
-    /** Binds category source planning to accepted providers and approved local roots. */
+    /** Binds category source planning to accepted providers, approved roots, and one physical side. */
     public CategorySourcePlanner(
-            ProviderRegistrySnapshot registry, ApprovedSourceRoots roots) {
-        this(registry, roots, NioSourcePathInspection.INSTANCE);
+            ProviderRegistrySnapshot registry,
+            ApprovedSourceRoots roots,
+            SupportedSide side) {
+        this(registry, roots, side, NioSourcePathInspection.INSTANCE);
     }
 
     CategorySourcePlanner(
             ProviderRegistrySnapshot registry,
             ApprovedSourceRoots roots,
+            SupportedSide side,
             SourcePathInspection inspection) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.roots = Objects.requireNonNull(roots, "roots");
+        this.side = Objects.requireNonNull(side, "side");
         this.inspection = Objects.requireNonNull(inspection, "inspection");
     }
 
@@ -83,7 +89,7 @@ public final class CategorySourcePlanner {
                             specification.sources().get(sourceId);
                     SourceProvenance provenance = provenance(specification, category, source);
                     SourceSelectionPlan selection =
-                            SourceSelectorPlanner.plan(source, roots, inspection);
+                            SourceSelectorPlanner.plan(source, roots, side, inspection);
                     sources.add(new CoordinatedSourcePlan(provenance, selection));
                     if (selection instanceof FileSourcePlan filePlan) {
                         filePlan.files().forEach(

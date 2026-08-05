@@ -1,7 +1,12 @@
 package com.cybersammy.bugreport.core.source;
 
+import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
+import com.cybersammy.bugreport.api.specification.DynamicSourcePathProducer;
+import com.cybersammy.bugreport.api.specification.DynamicSourcePathRequest;
+import com.cybersammy.bugreport.api.specification.DynamicSourcePathSink;
 import com.cybersammy.bugreport.api.specification.FilenamePattern;
 import com.cybersammy.bugreport.api.specification.LogicalRoot;
 import com.cybersammy.bugreport.api.specification.RelativePath;
@@ -14,15 +19,23 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeSet;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Builds one bounded deterministic source-selection plan from a trusted declaration. */
 public final class SourceSelectorPlanner {
-    /** Hard product ceiling for files returned by one filtered-directory selector. */
+    /** Hard product ceiling for files returned by one multi-file selector. */
     public static final int MAX_MATCHED_FILES = SourcePlanningLimits.PRODUCT_MAX_MATCHED_FILES;
     /** Hard product ceiling for one selected file's observed size. */
     public static final long MAX_BYTES_PER_FILE =
@@ -31,6 +44,8 @@ public final class SourceSelectorPlanner {
     public static final long MAX_TOTAL_BYTES = SourcePlanningLimits.PRODUCT_MAX_TOTAL_BYTES;
     /** Hard ceiling for entries inspected during one non-recursive directory scan. */
     public static final int MAX_SCANNED_DIRECTORY_ENTRIES = 512;
+    /** Hard product ceiling for one dynamic path callback. */
+    public static final Duration MAX_DYNAMIC_CALLBACK_TIMEOUT = Duration.ofSeconds(2);
 
     private static final RelativePath LATEST_LOG_PATH = RelativePath.of("latest.log");
     private static final FilenamePattern LATEST_CRASH_PATTERN =
@@ -41,9 +56,18 @@ public final class SourceSelectorPlanner {
     /** Plans one source without reading file contents or granting collection authority. */
     public static SourceSelectionPlan plan(
             DiagnosticSourceSpecification source, ApprovedSourceRoots roots) {
+        return plan(source, roots, SupportedSide.PHYSICAL_CLIENT);
+    }
+
+    /** Plans one source for an explicit physical side. */
+    public static SourceSelectionPlan plan(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
+            SupportedSide side) {
         return plan(
                 source,
                 roots,
+                side,
                 NioSourcePathInspection.INSTANCE,
                 SourcePlanningLimits.productDefaults());
     }
@@ -52,7 +76,25 @@ public final class SourceSelectorPlanner {
             DiagnosticSourceSpecification source,
             ApprovedSourceRoots roots,
             SourcePathInspection inspection) {
-        return plan(source, roots, inspection, SourcePlanningLimits.productDefaults());
+        return plan(
+                source,
+                roots,
+                SupportedSide.PHYSICAL_CLIENT,
+                inspection,
+                SourcePlanningLimits.productDefaults());
+    }
+
+    static SourceSelectionPlan plan(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
+            SupportedSide side,
+            SourcePathInspection inspection) {
+        return plan(
+                source,
+                roots,
+                side,
+                inspection,
+                SourcePlanningLimits.productDefaults());
     }
 
     static SourceSelectionPlan plan(
@@ -60,8 +102,23 @@ public final class SourceSelectorPlanner {
             ApprovedSourceRoots roots,
             SourcePathInspection inspection,
             SourcePlanningLimits limits) {
+        return plan(
+                source,
+                roots,
+                SupportedSide.PHYSICAL_CLIENT,
+                inspection,
+                limits);
+    }
+
+    static SourceSelectionPlan plan(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
+            SupportedSide side,
+            SourcePathInspection inspection,
+            SourcePlanningLimits limits) {
         DiagnosticSourceSpecification declaration = Objects.requireNonNull(source, "source");
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
+        SupportedSide physicalSide = Objects.requireNonNull(side, "side");
         SourcePathInspection pathInspection = Objects.requireNonNull(inspection, "inspection");
         SourcePlanningLimits productLimits = Objects.requireNonNull(limits, "limits");
         return switch (declaration.kind()) {
@@ -93,6 +150,13 @@ public final class SourceSelectorPlanner {
                             false,
                             pathInspection,
                             productLimits);
+            case DYNAMIC_FILES ->
+                    planDynamic(
+                            declaration,
+                            approvedRoots,
+                            physicalSide,
+                            pathInspection,
+                            productLimits);
             case LATEST_LOG ->
                     planExact(
                             declaration,
@@ -114,6 +178,98 @@ public final class SourceSelectorPlanner {
             case USER_SELECTED_SCREENSHOT -> new UserSelectionSourcePlan(declaration);
             case MOD_LIST, ENVIRONMENT_SUMMARY -> new BuiltInSourcePlan(declaration);
         };
+    }
+
+    private static SourceSelectionPlan planDynamic(
+            DiagnosticSourceSpecification source,
+            ApprovedSourceRoots roots,
+            SupportedSide side,
+            SourcePathInspection inspection,
+            SourcePlanningLimits limits) {
+        if (!source.supportedSides().contains(side)) {
+            return new UnavailableSourcePlan(
+                    source, SourceSelectionFailureCode.UNSUPPORTED_SIDE, null);
+        }
+        int resultLimit = effectiveMatchLimit(source, false, limits);
+        Duration requestedTimeout = source.constraints().callbackTimeout().orElseThrow();
+        Duration timeout = requestedTimeout.compareTo(MAX_DYNAMIC_CALLBACK_TIMEOUT) > 0
+                ? MAX_DYNAMIC_CALLBACK_TIMEOUT
+                : requestedTimeout;
+        DynamicPathInvocation invocation = invokeDynamicPaths(
+                source.dynamicPathProducer().orElseThrow(), side, resultLimit, timeout);
+        if (invocation.failureCode() != null) {
+            return new UnavailableSourcePlan(source, invocation.failureCode(), null);
+        }
+        if (invocation.paths().isEmpty()) {
+            return new UnavailableSourcePlan(
+                    source, SourceSelectionFailureCode.NO_MATCH, null);
+        }
+
+        List<ResolvedSourceFile> files = new ArrayList<>();
+        for (RelativePath path : invocation.paths()) {
+            try {
+                ResolvedSourceFile resolved = SourcePathResolver.resolveRegularFile(
+                        roots,
+                        source.root().orElseThrow(),
+                        path,
+                        inspection);
+                if (files.stream()
+                        .anyMatch(file -> file.localPath().equals(resolved.localPath()))) {
+                    return new UnavailableSourcePlan(
+                            source,
+                            SourceSelectionFailureCode.DYNAMIC_RESULT_INVALID,
+                            null);
+                }
+                files.add(resolved);
+            } catch (SourcePathResolutionException exception) {
+                return unavailable(source, exception);
+            }
+        }
+        return filePlan(source, files, limits);
+    }
+
+    private static DynamicPathInvocation invokeDynamicPaths(
+            DynamicSourcePathProducer producer,
+            SupportedSide side,
+            int resultLimit,
+            Duration timeout) {
+        DynamicCancellation cancellation = new DynamicCancellation();
+        BoundedDynamicPathSink sink = new BoundedDynamicPathSink(resultLimit, cancellation);
+        FutureTask<Void> invocation = new FutureTask<>(
+                () -> {
+                    sink.openForCurrentThread();
+                    producer.produce(
+                            new DynamicSourcePathRequest(side, cancellation), sink);
+                    return null;
+                });
+        Thread worker = Thread.ofVirtual()
+                .name("bugreport-dynamic-source-path")
+                .unstarted(invocation);
+        worker.start();
+        try {
+            invocation.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            return sink.closeAndSnapshot();
+        } catch (TimeoutException exception) {
+            cancellation.cancel();
+            sink.close();
+            invocation.cancel(true);
+            return DynamicPathInvocation.failure(
+                    SourceSelectionFailureCode.DYNAMIC_CALLBACK_TIMED_OUT);
+        } catch (InterruptedException exception) {
+            cancellation.cancel();
+            sink.close();
+            invocation.cancel(true);
+            Thread.currentThread().interrupt();
+            return DynamicPathInvocation.failure(
+                    SourceSelectionFailureCode.DYNAMIC_CALLBACK_CANCELLED);
+        } catch (CancellationException exception) {
+            cancellation.cancel();
+            sink.close();
+            return DynamicPathInvocation.failure(
+                    SourceSelectionFailureCode.DYNAMIC_CALLBACK_CANCELLED);
+        } catch (ExecutionException exception) {
+            return sink.closeAfterFailure();
+        }
     }
 
     private static SourceSelectionPlan planExact(
@@ -396,6 +552,113 @@ public final class SourceSelectorPlanner {
                         ? SourceSelectionFailureCode.SOURCE_MISSING
                         : SourceSelectionFailureCode.PATH_REJECTED,
                 code);
+    }
+
+    private record DynamicPathInvocation(
+            List<RelativePath> paths, SourceSelectionFailureCode failureCode) {
+        private DynamicPathInvocation {
+            paths = List.copyOf(paths);
+            if ((failureCode == null) == paths.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "A dynamic invocation must contain either paths or a failure");
+            }
+        }
+
+        private static DynamicPathInvocation success(List<RelativePath> paths) {
+            if (paths.isEmpty()) {
+                return new DynamicPathInvocation(
+                        List.of(), SourceSelectionFailureCode.NO_MATCH);
+            }
+            return new DynamicPathInvocation(paths, null);
+        }
+
+        private static DynamicPathInvocation failure(SourceSelectionFailureCode code) {
+            return new DynamicPathInvocation(List.of(), Objects.requireNonNull(code, "code"));
+        }
+    }
+
+    private static final class DynamicCancellation implements CancellationSignal {
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+
+        @Override
+        public boolean isCancellationRequested() {
+            return cancelled.get();
+        }
+
+        private void cancel() {
+            cancelled.set(true);
+        }
+    }
+
+    private static final class BoundedDynamicPathSink implements DynamicSourcePathSink {
+        private final int resultLimit;
+        private final DynamicCancellation cancellation;
+        private final TreeSet<RelativePath> paths = new TreeSet<>();
+        private Thread owner;
+        private SourceSelectionFailureCode failureCode;
+        private boolean closed;
+
+        private BoundedDynamicPathSink(
+                int resultLimit, DynamicCancellation cancellation) {
+            if (resultLimit <= 0) {
+                throw new IllegalArgumentException("Dynamic result limit must be positive");
+            }
+            this.resultLimit = resultLimit;
+            this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
+        }
+
+        private synchronized void openForCurrentThread() {
+            if (owner != null || closed) {
+                fail(SourceSelectionFailureCode.DYNAMIC_RESULT_INVALID);
+            }
+            owner = Thread.currentThread();
+        }
+
+        @Override
+        public synchronized void emit(RelativePath path) {
+            if (closed
+                    || cancellation.isCancellationRequested()
+                    || owner != Thread.currentThread()
+                    || path == null) {
+                fail(SourceSelectionFailureCode.DYNAMIC_RESULT_INVALID);
+            }
+            if (paths.contains(path)) {
+                fail(SourceSelectionFailureCode.DYNAMIC_RESULT_INVALID);
+            }
+            if (paths.size() == resultLimit) {
+                fail(SourceSelectionFailureCode.MATCH_LIMIT_EXCEEDED);
+            }
+            paths.add(path);
+        }
+
+        private synchronized DynamicPathInvocation closeAndSnapshot() {
+            closed = true;
+            if (failureCode != null) {
+                return DynamicPathInvocation.failure(failureCode);
+            }
+            return DynamicPathInvocation.success(List.copyOf(paths));
+        }
+
+        private synchronized DynamicPathInvocation closeAfterFailure() {
+            closed = true;
+            return DynamicPathInvocation.failure(
+                    failureCode == null
+                            ? SourceSelectionFailureCode.DYNAMIC_CALLBACK_FAILED
+                            : failureCode);
+        }
+
+        private synchronized void close() {
+            closed = true;
+        }
+
+        private void fail(SourceSelectionFailureCode code) {
+            failureCode = Objects.requireNonNull(code, "code");
+            throw new DynamicPathResultException();
+        }
+    }
+
+    private static final class DynamicPathResultException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
     }
 
     private record DirectoryObservation(
