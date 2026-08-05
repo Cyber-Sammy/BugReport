@@ -14,6 +14,7 @@ import java.util.Set;
 /** Immutable declaration of one bounded generated diagnostic callback. */
 public final class DiagnosticGeneratorSpecification {
     private final DiagnosticGeneratorId id;
+    private final DiagnosticGeneratorKind kind;
     private final LocalizationKey labelKey;
     private final LocalizationKey descriptionKey;
     private final PrivacyClassification privacy;
@@ -28,6 +29,7 @@ public final class DiagnosticGeneratorSpecification {
 
     private DiagnosticGeneratorSpecification(Builder builder) {
         id = builder.id;
+        kind = builder.kind;
         labelKey = builder.labelKey;
         descriptionKey = builder.descriptionKey;
         privacy = builder.privacy;
@@ -51,7 +53,23 @@ public final class DiagnosticGeneratorSpecification {
      */
     public static Builder builder(
             DiagnosticGeneratorId id, GeneratedDiagnosticProducer producer) {
-        return new Builder(id, producer);
+        return new Builder(id, DiagnosticGeneratorKind.GENERAL, producer);
+    }
+
+    /**
+     * Creates a bounded high-sensitivity world-state export builder.
+     *
+     * <p>The resulting provider specification must require {@link
+     * StandardCapabilities#boundedWorldStateExport()}. The callback receives only the normal
+     * bounded sink and no filesystem authority.
+     *
+     * @param id generator ID within its provider
+     * @param producer bounded callback
+     * @return new world-state export builder
+     */
+    public static Builder worldStateExport(
+            DiagnosticGeneratorId id, GeneratedDiagnosticProducer producer) {
+        return new Builder(id, DiagnosticGeneratorKind.WORLD_STATE_EXPORT, producer);
     }
 
     /**
@@ -61,6 +79,15 @@ public final class DiagnosticGeneratorSpecification {
      */
     public DiagnosticGeneratorId id() {
         return id;
+    }
+
+    /**
+     * Returns the product-recognized generator purpose.
+     *
+     * @return generator purpose
+     */
+    public DiagnosticGeneratorKind kind() {
+        return kind;
     }
 
     /**
@@ -165,6 +192,7 @@ public final class DiagnosticGeneratorSpecification {
     /** Builder for a generated diagnostic specification. */
     public static final class Builder {
         private final DiagnosticGeneratorId id;
+        private final DiagnosticGeneratorKind kind;
         private final GeneratedDiagnosticProducer producer;
         private final EnumSet<SupportedSide> supportedSides =
                 EnumSet.noneOf(SupportedSide.class);
@@ -179,8 +207,11 @@ public final class DiagnosticGeneratorSpecification {
         private ExtensionMetadata extensions = ExtensionMetadata.empty();
 
         private Builder(
-                DiagnosticGeneratorId id, GeneratedDiagnosticProducer producer) {
+                DiagnosticGeneratorId id,
+                DiagnosticGeneratorKind kind,
+                GeneratedDiagnosticProducer producer) {
             this.id = Objects.requireNonNull(id, "id");
+            this.kind = Objects.requireNonNull(kind, "kind");
             this.producer = Objects.requireNonNull(producer, "producer");
         }
 
@@ -324,7 +355,46 @@ public final class DiagnosticGeneratorSpecification {
                 throw new IllegalArgumentException(
                         "Game-thread snapshot generators require an explicit timeout");
             }
+            validateWorldStateExport();
             return new DiagnosticGeneratorSpecification(this);
+        }
+
+        private void validateWorldStateExport() {
+            if (kind != DiagnosticGeneratorKind.WORLD_STATE_EXPORT) {
+                return;
+            }
+            if (!privacy.isAtLeast(PrivacyClassification.SENSITIVE)) {
+                throw new IllegalArgumentException(
+                        "World-state exports must be classified SENSITIVE");
+            }
+            if (inclusionDefault != InclusionDefault.EXCLUDED) {
+                throw new IllegalArgumentException(
+                        "World-state exports must be excluded by default");
+            }
+            if (constraints.maxTraversalDepth().isPresent()
+                    || constraints.maxMatchedFiles().isPresent()) {
+                throw new IllegalArgumentException(
+                        "World-state exports cannot request filesystem traversal constraints");
+            }
+            if (constraints.maxGeneratedArtifacts().isEmpty()
+                    || constraints.maxBytesPerFile().isEmpty()
+                    || constraints.maxTotalBytes().isEmpty()
+                    || constraints.callbackTimeout().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "World-state exports require explicit artifact, byte, and timeout limits");
+            }
+            if (constraints.maxGeneratedArtifacts().getAsInt()
+                            > StandardCapabilities.WORLD_STATE_MAX_ARTIFACTS
+                    || constraints.maxBytesPerFile().getAsLong()
+                            > StandardCapabilities.WORLD_STATE_MAX_BYTES_PER_ARTIFACT
+                    || constraints.maxTotalBytes().getAsLong()
+                            > StandardCapabilities.WORLD_STATE_MAX_TOTAL_BYTES
+                    || constraints.callbackTimeout().orElseThrow()
+                            .compareTo(StandardCapabilities.WORLD_STATE_MAX_CALLBACK_TIMEOUT)
+                            > 0) {
+                throw new IllegalArgumentException(
+                        "World-state export limits exceed the capability 1.0 ceilings");
+            }
         }
     }
 }

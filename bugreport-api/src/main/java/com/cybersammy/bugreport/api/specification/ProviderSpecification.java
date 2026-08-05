@@ -418,6 +418,7 @@ public final class ProviderSpecification {
             validateOwnedGlobalIds();
             validateChildSides();
             validateCategoryReferences();
+            validateGeneratorCapabilities();
             validateTotalFieldCount();
             return new ProviderSpecification(this);
         }
@@ -450,6 +451,27 @@ public final class ProviderSpecification {
             if (!supportedSides.containsAll(childSides)) {
                 throw new IllegalArgumentException(
                         "Provider supported sides must contain every " + kind + " side");
+            }
+        }
+
+        private void validateGeneratorCapabilities() {
+            boolean hasWorldStateExport = generators.values().stream()
+                    .anyMatch(
+                            generator ->
+                                    generator.kind()
+                                            == DiagnosticGeneratorKind.WORLD_STATE_EXPORT);
+            if (!hasWorldStateExport) {
+                return;
+            }
+            CapabilityRequirement standard =
+                    StandardCapabilities.boundedWorldStateExport();
+            CapabilityRequirement requirement = capabilityRequirements.get(standard.id());
+            if (requirement == null
+                    || !requirement.required()
+                    || requirement.minimumVersion().compareTo(standard.minimumVersion()) < 0) {
+                throw new IllegalArgumentException(
+                        "World-state exports require mandatory bounded world-state capability "
+                                + "1.0 or newer");
             }
         }
 
