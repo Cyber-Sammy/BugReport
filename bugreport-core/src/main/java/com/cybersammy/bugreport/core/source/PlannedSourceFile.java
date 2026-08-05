@@ -15,8 +15,12 @@ public final class PlannedSourceFile {
     private final PrivacyClassification privacy;
     private final ReportQualityRole qualityRole;
     private final InclusionDefault inclusionDefault;
+    private final long maximumBytes;
 
-    PlannedSourceFile(ResolvedSourceFile file, List<SourceProvenance> provenances) {
+    PlannedSourceFile(
+            ResolvedSourceFile file,
+            List<SourceProvenance> provenances,
+            long maximumBytes) {
         this.file = Objects.requireNonNull(file, "file");
         this.provenances = SourcePlanConflict.canonicalProvenances(provenances);
         if (this.provenances.isEmpty()) {
@@ -40,6 +44,11 @@ public final class PlannedSourceFile {
                                         provenance.inclusionDefault() == InclusionDefault.INCLUDED)
                 ? InclusionDefault.INCLUDED
                 : InclusionDefault.EXCLUDED;
+        if (maximumBytes <= 0 || file.observedSize() > maximumBytes) {
+            throw new IllegalArgumentException(
+                    "A planned file requires a positive effective byte ceiling");
+        }
+        this.maximumBytes = maximumBytes;
     }
 
     /** Returns the trusted planning-time file observation used only by Core collection. */
@@ -75,6 +84,11 @@ public final class PlannedSourceFile {
     /** Returns included when at least one declaration requests initial inclusion. */
     public InclusionDefault inclusionDefault() {
         return inclusionDefault;
+    }
+
+    /** Returns the strict effective byte ceiling for streaming this unique file. */
+    public long maximumBytes() {
+        return maximumBytes;
     }
 
     private static ReportQualityRole moreImportant(

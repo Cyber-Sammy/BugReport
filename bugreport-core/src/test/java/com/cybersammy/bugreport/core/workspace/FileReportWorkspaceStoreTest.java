@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -212,6 +213,26 @@ final class FileReportWorkspaceStoreTest {
         @Override
         public void writeNewPrivateMarker(Path path, byte[] contents) throws IOException {
             NioWorkspaceFileOperations.INSTANCE.writeNewPrivateMarker(path, contents);
+        }
+
+        @Override
+        public FileChannel openNewPrivateFile(Path path) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.openNewPrivateFile(path);
+        }
+
+        @Override
+        public void verifyPrivateDirectory(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.verifyPrivateDirectory(path);
+        }
+
+        @Override
+        public void verifyPrivateFile(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.verifyPrivateFile(path);
+        }
+
+        @Override
+        public void replaceAtomically(Path source, Path target) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.replaceAtomically(source, target);
         }
 
         @Override

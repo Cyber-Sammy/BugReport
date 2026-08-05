@@ -8,6 +8,7 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryFlag;
@@ -100,6 +101,47 @@ final class NioWorkspaceFileOperations implements WorkspaceFileOperations {
         }
     }
 
+    @Override
+    public FileChannel openNewPrivateFile(Path path) throws IOException {
+        PermissionModel model = permissionModel(path.getParent());
+        CreatedEntryIdentity created = null;
+        try {
+            FileChannel channel = openPrivateFile(path, model);
+            try {
+                created = observeCreatedEntry(path, false);
+                enforceAndVerifyPrivateAccess(path, model, false);
+                return channel;
+            } catch (IOException | RuntimeException exception) {
+                channel.close();
+                throw exception;
+            }
+        } catch (IOException | RuntimeException exception) {
+            if (created != null) {
+                rollbackNewEntry(path, created, exception);
+            }
+            throw exception;
+        }
+    }
+
+    @Override
+    public void verifyPrivateDirectory(Path path) throws IOException {
+        verifyPrivateAccess(path, permissionModel(path.getParent()), true);
+    }
+
+    @Override
+    public void verifyPrivateFile(Path path) throws IOException {
+        verifyPrivateAccess(path, permissionModel(path.getParent()), false);
+    }
+
+    @Override
+    public void replaceAtomically(Path source, Path target) throws IOException {
+        Files.move(
+                source,
+                target,
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING);
+    }
+
     private static FileChannel openPrivateFile(Path path, PermissionModel model)
             throws IOException {
         Set<StandardOpenOption> options =
@@ -135,6 +177,17 @@ final class NioWorkspaceFileOperations implements WorkspaceFileOperations {
             case BEST_EFFORT -> {
                 // No portable permission model exists for this filesystem. Containment,
                 // identity, and no-redirection checks still apply at the store boundary.
+            }
+        }
+    }
+
+    private static void verifyPrivateAccess(
+            Path path, PermissionModel model, boolean directory) throws IOException {
+        switch (model) {
+            case POSIX -> verifyPosixPermissions(path, directory);
+            case ACL -> verifyOwnerOnlyAcl(path, directory);
+            case BEST_EFFORT -> {
+                // No portable permission model exists for this filesystem.
             }
         }
     }
