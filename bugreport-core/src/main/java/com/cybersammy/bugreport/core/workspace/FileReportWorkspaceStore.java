@@ -87,7 +87,15 @@ public final class FileReportWorkspaceStore {
                 throw new UnsafeWorkspacePathException(
                         "Workspace marker changed while it was being initialized");
             }
-            return new ReportWorkspace(id, currentWorkspace.realPath());
+            return new ReportWorkspace(
+                    id,
+                    currentWorkspace.realPath(),
+                    files,
+                    currentRoot.fileStore(),
+                    currentWorkspace.fileKey(),
+                    currentWorkspace.creationTime(),
+                    currentMarker.fileKey(),
+                    currentMarker.creationTime());
         } catch (FileAlreadyExistsException exception) {
             if (!workspaceCreated) {
                 throw failure(

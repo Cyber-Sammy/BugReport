@@ -44,6 +44,9 @@ Implemented and executable:
   source, with overflow-safe pre-collection size estimates;
 - registry-bound category source coordination with privacy-safe provenance,
   isolated missing-source outcomes, and deterministic duplicate/conflict handling;
+- bounded 64 KiB streaming of trusted planned files into private report
+  workspaces, with source/workspace identity revalidation, effective per-file
+  ceilings, atomic publication, and SHA-256 computed in the same pass;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
@@ -58,8 +61,8 @@ Implemented and executable:
 Not implemented yet:
 
 - execution of diagnostic collection callbacks;
-- interactive report forms, collection, review, sanitization, export, or
-  submission;
+- interactive report forms, collection orchestration, review, sanitization,
+  export, or submission;
 - player commands and UI.
 
 The current build is suitable for testing API packaging, optional installation,
@@ -401,9 +404,35 @@ be established. Filesystems exposing neither POSIX permissions nor ACLs use an
 explicit best-effort fallback and should be mounted with private defaults.
 
 `ReportWorkspace.directory()` is Core-owned authority and must not be passed to
-a provider. The current foundation creates and identifies workspaces only;
-streaming collection, reviewed snapshots, and ownership-verified cleanup are
-separate lifecycle stages.
+a provider. `WorkspaceSourceCollector` accepts only a trusted
+`PlannedSourceFile`, re-resolves the approved logical source before opening and
+after reading, and repeats workspace marker, identity, filesystem-store, and
+private-permission checks. It streams through a fixed 64 KiB buffer, stops at
+the effective provider/product byte ceiling carried by the plan, and computes
+SHA-256 over the exact copied bytes in the same pass.
+
+Copied bytes first enter an owner-only random temporary file. Core then claims
+the deterministic opaque destination name with `CREATE_NEW` and atomically
+replaces only that reservation, so an existing artifact is never overwritten
+even on platforms whose atomic-move implementation replaces destinations by
+default. The result exposes only the opaque artifact name, byte count,
+checksum, provenance, and classification metadata—never an original or
+workspace path. A failed copy removes only temporary or reserved entries whose
+identity still matches; uncertain rollback is reported as `ROLLBACK_FAILED`.
+
+The source-opening boundary also returns identity evidence for the channel it
+opened. On Windows the NIO adapter uses `NOSHARE_DELETE`, preventing rename or
+replacement of that path entry while the handle remains open; its immediate
+observation is therefore bound to the channel for the copy lifetime. Portable
+POSIX Java NIO exposes no file identity directly from `FileChannel`, so the
+current fallback performs immediate and post-copy path identity revalidation
+but cannot prove the opened handle against a malicious same-user ABA rename.
+Supporting a POSIX native handle adapter is tracked explicitly and the current
+boundary must not be described as an OS sandbox.
+
+Progress/cancellation, report-wide aggregate budgets, reviewed snapshots, and
+ownership-verified abandoned-workspace cleanup remain separate lifecycle
+stages.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and

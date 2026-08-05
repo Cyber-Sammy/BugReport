@@ -96,8 +96,11 @@ public final class CategorySourcePlanner {
                                 file ->
                                         groups.computeIfAbsent(
                                                         file.localPath(),
-                                                        ignored -> new FileGroup(file))
-                                                .add(file, provenance));
+                                                ignored -> new FileGroup(file))
+                                                .add(
+                                                        file,
+                                                        provenance,
+                                                        effectiveFileLimit(source)));
                     }
                 });
 
@@ -131,6 +134,20 @@ public final class CategorySourcePlanner {
                 source.inclusionDefault());
     }
 
+    private static long effectiveFileLimit(DiagnosticSourceSpecification source) {
+        long productPerFile = SourcePlanningLimits.PRODUCT_MAX_BYTES_PER_FILE;
+        long productTotal = SourcePlanningLimits.PRODUCT_MAX_TOTAL_BYTES;
+        long requestedPerFile = source.constraints().maxBytesPerFile().isPresent()
+                ? source.constraints().maxBytesPerFile().getAsLong()
+                : productPerFile;
+        long requestedTotal = source.constraints().maxTotalBytes().isPresent()
+                ? source.constraints().maxTotalBytes().getAsLong()
+                : productTotal;
+        return Math.min(
+                Math.min(productPerFile, requestedPerFile),
+                Math.min(productTotal, requestedTotal));
+    }
+
     private static CategorySourcePlanException requestFailure(
             CategorySourcePlanRequestCode code,
             ProviderId providerId,
@@ -142,15 +159,20 @@ public final class CategorySourcePlanner {
     private static final class FileGroup {
         private final ResolvedSourceFile file;
         private final List<SourceProvenance> provenances = new ArrayList<>();
+        private long maximumBytes = Long.MAX_VALUE;
         private boolean identityMismatch;
 
         private FileGroup(ResolvedSourceFile file) {
             this.file = Objects.requireNonNull(file, "file");
         }
 
-        private void add(ResolvedSourceFile candidate, SourceProvenance provenance) {
+        private void add(
+                ResolvedSourceFile candidate,
+                SourceProvenance provenance,
+                long candidateMaximumBytes) {
             identityMismatch |= !sameObservation(file, candidate);
             provenances.add(Objects.requireNonNull(provenance, "provenance"));
+            maximumBytes = Math.min(maximumBytes, candidateMaximumBytes);
         }
 
         private void publish(
@@ -177,17 +199,12 @@ public final class CategorySourcePlanner {
                                 provenances));
                 return;
             }
-            files.add(new PlannedSourceFile(file, provenances));
+            files.add(new PlannedSourceFile(file, provenances, maximumBytes));
         }
 
         private static boolean sameObservation(
                 ResolvedSourceFile first, ResolvedSourceFile second) {
-            return first.localPath().equals(second.localPath())
-                    && first.root() == second.root()
-                    && first.relativePath().equals(second.relativePath())
-                    && first.observedFileKey().equals(second.observedFileKey())
-                    && first.observedSize() == second.observedSize()
-                    && first.observedLastModified().equals(second.observedLastModified());
+            return SourceFileObservations.sameSnapshot(first, second);
         }
     }
 }
