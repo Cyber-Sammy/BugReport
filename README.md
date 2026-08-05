@@ -47,6 +47,8 @@ Implemented and executable:
 - bounded 64 KiB streaming of trusted planned files into private report
   workspaces, with source/workspace identity revalidation, effective per-file
   ceilings, atomic publication, and SHA-256 computed in the same pass;
+- deterministic category file collection with polling progress, cooperative
+  cancellation, isolated typed per-file outcomes, and a 128 MiB run ceiling;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
@@ -430,9 +432,22 @@ but cannot prove the opened handle against a malicious same-user ABA rename.
 Supporting a POSIX native handle adapter is tracked explicitly and the current
 boundary must not be described as an OS sandbox.
 
-Progress/cancellation, report-wide aggregate budgets, reviewed snapshots, and
-ownership-verified abandoned-workspace cleanup remain separate lifecycle
-stages.
+`FileCollectionCoordinator` consumes the conflict-free files of one
+`CategorySourcePlan` in canonical order. A caller retains a one-shot
+`CollectionRunControl`, polls immutable progress, and may request cancellation
+from another thread. Cancellation is checked between bounded chunks and before
+atomic publication; the active temporary artifact is rolled back and every
+unstarted file receives a deterministic `CANCELLED` outcome. An ordinary typed
+failure remains isolated, so unrelated files continue and the final result is
+`COMPLETE`, `PARTIAL`, `FAILED`, or `CANCELLED`.
+
+The file run rejects a planning-time total above 128 MiB before writing and
+enforces the same ceiling again against actual streamed bytes. Progress counts
+processed bytes, including work later discarded after a failed file, and is not
+a retained-workspace-size guarantee. Generated and deferred outputs must join
+this aggregate budget before complete category collection may advance the
+session to sanitization. Reviewed snapshots and ownership-verified abandoned-
+workspace cleanup remain separate lifecycle stages.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
