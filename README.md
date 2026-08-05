@@ -374,6 +374,30 @@ results canonically, and validates every result through the same no-follow
 filesystem resolver as static selectors. One invalid or missing result rejects
 the entire source plan; valid siblings are not collected partially.
 
+### Isolated report workspaces
+
+Core creates collection workspaces below one application-owned absolute root:
+
+```java
+FileReportWorkspaceStore workspaces =
+        new FileReportWorkspaceStore(gameDirectory.resolve("bugreport/workspaces").toAbsolutePath());
+ReportWorkspace workspace = workspaces.create(reportSession.snapshot().id());
+```
+
+Each workspace is a newly claimed directory named by the canonical
+`ReportSessionId` and contains a versioned `.bugreport-workspace` ownership
+marker. Existing paths are never reused or trusted, even if they contain a
+plausible marker. Root components, the session directory, and the marker are
+checked without following filesystem redirections and are revalidated before
+the trusted handle is returned. Creation failure removes only entries whose
+identity Core observed after creating them; uncertain or non-empty paths are
+left in place and reported as `ROLLBACK_FAILED` for later safe recovery.
+
+`ReportWorkspace.directory()` is Core-owned authority and must not be passed to
+a provider. The current foundation creates and identifies workspaces only;
+streaming collection, reviewed snapshots, and ownership-verified cleanup are
+separate lifecycle stages.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
