@@ -1,5 +1,6 @@
 package com.cybersammy.bugreport.core.workspace;
 
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.PlannedSourceFile;
 import com.cybersammy.bugreport.core.source.ResolvedSourceFile;
@@ -42,6 +43,7 @@ public final class WorkspaceSourceCollector {
                 roots,
                 workspace,
                 NioSourceReadOperations.INSTANCE,
+                CancellationSignal.neverCancelled(),
                 copiedBytes -> {});
     }
 
@@ -55,6 +57,7 @@ public final class WorkspaceSourceCollector {
                 roots,
                 workspace,
                 NioSourceReadOperations.INSTANCE,
+                CancellationSignal.neverCancelled(),
                 hook);
     }
 
@@ -64,10 +67,28 @@ public final class WorkspaceSourceCollector {
             ReportWorkspace workspace,
             SourceReadOperations sourceReads,
             CopyChunkHook hook) {
+        return collect(
+                planned,
+                roots,
+                workspace,
+                sourceReads,
+                CancellationSignal.neverCancelled(),
+                hook);
+    }
+
+    static CollectedSourceFile collect(
+            PlannedSourceFile planned,
+            ApprovedSourceRoots roots,
+            ReportWorkspace workspace,
+            SourceReadOperations sourceReads,
+            CancellationSignal cancellation,
+            CopyChunkHook hook) {
         PlannedSourceFile source = Objects.requireNonNull(planned, "planned");
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
         ReportWorkspace destinationWorkspace = Objects.requireNonNull(workspace, "workspace");
         SourceReadOperations readOperations = Objects.requireNonNull(sourceReads, "sourceReads");
+        CancellationSignal cancellationSignal =
+                Objects.requireNonNull(cancellation, "cancellation");
         CopyChunkHook chunkHook = Objects.requireNonNull(hook, "hook");
         ResolvedSourceFile plannedFile = source.file();
         String artifactName = artifactName(source);
@@ -81,6 +102,7 @@ public final class WorkspaceSourceCollector {
         List<CleanupEntry> cleanupEntries = new ArrayList<>();
         EntryIdentity copiedIdentity = null;
         try {
+            requireNotCancelled(cancellationSignal, source, destinationWorkspace);
             requireWorkspace(destinationWorkspace, source);
             ResolvedSourceFile before = resolveCurrent(approvedRoots, plannedFile, source, destinationWorkspace);
             if (!SourceFileObservations.sameSnapshot(plannedFile, before)) {
@@ -107,12 +129,14 @@ public final class WorkspaceSourceCollector {
                         sourceHandle.channel(),
                         output,
                         source.maximumBytes(),
+                        cancellationSignal,
                         chunkHook,
                         source,
                         destinationWorkspace);
                 output.force(true);
             }
 
+            requireNotCancelled(cancellationSignal, source, destinationWorkspace);
             ResolvedSourceFile after = resolveCurrent(
                     approvedRoots, plannedFile, source, destinationWorkspace);
             if (!SourceFileObservations.sameSnapshot(before, after)
@@ -123,6 +147,7 @@ public final class WorkspaceSourceCollector {
                         destinationWorkspace,
                         "Source changed while it was copied");
             }
+            requireNotCancelled(cancellationSignal, source, destinationWorkspace);
             requireWorkspace(destinationWorkspace, source);
             EntryIdentity reservationIdentity;
             try {
@@ -150,6 +175,7 @@ public final class WorkspaceSourceCollector {
                         destinationWorkspace,
                         "Workspace artifact reservation changed before publication");
             }
+            requireNotCancelled(cancellationSignal, source, destinationWorkspace);
             try {
                 destinationWorkspace.files().replaceAtomically(temporary, destination);
             } catch (AtomicMoveNotSupportedException exception) {
@@ -220,6 +246,7 @@ public final class WorkspaceSourceCollector {
             FileChannel input,
             FileChannel output,
             long maximumBytes,
+            CancellationSignal cancellation,
             CopyChunkHook hook,
             PlannedSourceFile source,
             ReportWorkspace workspace)
@@ -228,6 +255,7 @@ public final class WorkspaceSourceCollector {
         ByteBuffer buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES);
         long copied = 0;
         while (true) {
+            requireNotCancelled(cancellation, source, workspace);
             int read = input.read(buffer);
             if (read < 0) {
                 break;
@@ -235,6 +263,7 @@ public final class WorkspaceSourceCollector {
             if (read == 0) {
                 continue;
             }
+            requireNotCancelled(cancellation, source, workspace);
             if (read > maximumBytes - copied) {
                 throw failure(
                         SourceCopyCode.BYTE_LIMIT_EXCEEDED,
@@ -252,6 +281,19 @@ public final class WorkspaceSourceCollector {
             hook.afterChunk(copied);
         }
         return new CopyResult(copied, new Sha256Checksum(HexFormat.of().formatHex(digest.digest())));
+    }
+
+    private static void requireNotCancelled(
+            CancellationSignal cancellation,
+            PlannedSourceFile source,
+            ReportWorkspace workspace) {
+        if (cancellation.isCancellationRequested()) {
+            throw failure(
+                    SourceCopyCode.CANCELLED,
+                    source,
+                    workspace,
+                    "Source collection was cancelled");
+        }
     }
 
     private static ResolvedSourceFile resolveCurrent(

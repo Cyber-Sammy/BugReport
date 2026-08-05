@@ -4,7 +4,9 @@ package com.cybersammy.bugreport.core.workspace;
 public enum SourceCopyCode {
     SOURCE_CHANGED,
     SOURCE_UNSAFE,
+    CANCELLED,
     BYTE_LIMIT_EXCEEDED,
+    COLLECTION_BYTE_LIMIT_EXCEEDED,
     WORKSPACE_CHANGED,
     DESTINATION_ALREADY_EXISTS,
     ATOMIC_MOVE_UNSUPPORTED,
