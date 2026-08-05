@@ -8,6 +8,8 @@ public enum DiagnosticSourceKind {
     LATEST_FILE,
     /** Bounded non-recursive matches below one relative directory. */
     FILTERED_DIRECTORY,
+    /** Bounded callback-produced exact paths below one approved logs or crash root. */
+    DYNAMIC_FILES,
     /** Product-owned latest client log selector. */
     LATEST_LOG,
     /** Product-owned latest crash-report selector. */

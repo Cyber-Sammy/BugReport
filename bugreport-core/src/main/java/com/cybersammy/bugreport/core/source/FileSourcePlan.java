@@ -22,9 +22,10 @@ public final class FileSourcePlan implements SourceSelectionPlan {
             throw new IllegalArgumentException("A file source plan requires selected files");
         }
         if (source.kind() != DiagnosticSourceKind.FILTERED_DIRECTORY
+                && source.kind() != DiagnosticSourceKind.DYNAMIC_FILES
                 && this.files.size() != 1) {
             throw new IllegalArgumentException(
-                    "A non-directory selector must resolve to exactly one file");
+                    "A single-file selector must resolve to exactly one file");
         }
         if (!estimate.complete() || estimate.selectedFileCount() != this.files.size()) {
             throw new IllegalArgumentException(
