@@ -13,9 +13,9 @@ interface WorkspaceFileOperations {
 
     FileStore fileStore(Path path) throws IOException;
 
-    void createDirectory(Path path) throws IOException;
+    void createPrivateDirectory(Path path) throws IOException;
 
-    void writeNewMarker(Path path, byte[] contents) throws IOException;
+    void writeNewPrivateMarker(Path path, byte[] contents) throws IOException;
 
     byte[] readBounded(Path path, int maximumBytes) throws IOException;
 

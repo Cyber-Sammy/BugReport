@@ -60,14 +60,14 @@ public final class FileReportWorkspaceStore {
         ObservedFile markerObservation = null;
         Path marker = workspace.resolve(MARKER_FILENAME);
         try {
-            files.createDirectory(workspace);
+            files.createPrivateDirectory(workspace);
             workspaceCreated = true;
             workspaceObservation = inspectDirectory(workspace);
             requireSameStore(rootObservation, workspaceObservation);
             requireContained(rootObservation, workspaceObservation);
 
             byte[] markerBytes = markerContents(id);
-            files.writeNewMarker(marker, markerBytes);
+            files.writeNewPrivateMarker(marker, markerBytes);
             markerCreated = true;
             markerObservation = inspectMarker(
                     marker, rootObservation.fileStore(), markerBytes);
@@ -166,7 +166,7 @@ public final class FileReportWorkspaceStore {
                     throw exception;
                 }
                 try {
-                    files.createDirectory(current);
+                    files.createPrivateDirectory(current);
                 } catch (FileAlreadyExistsException race) {
                     // A concurrent creator is acceptable only if the resulting entry is safe.
                 }

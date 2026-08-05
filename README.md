@@ -393,6 +393,13 @@ the trusted handle is returned. Creation failure removes only entries whose
 identity Core observed after creating them; uncertain or non-empty paths are
 left in place and reported as `ROLLBACK_FAILED` for later safe recovery.
 
+On POSIX filesystems, newly created root segments and session directories use
+atomic `0700` permissions and markers use atomic `0600` permissions. On
+ACL-capable non-POSIX filesystems, Core applies and verifies an owner-only ACL
+before writing marker contents and fails creation if the restrictive ACL cannot
+be established. Filesystems exposing neither POSIX permissions nor ACLs use an
+explicit best-effort fallback and should be mounted with private defaults.
+
 `ReportWorkspace.directory()` is Core-owned authority and must not be passed to
 a provider. The current foundation creates and identifies workspaces only;
 streaming collection, reviewed snapshots, and ownership-verified cleanup are

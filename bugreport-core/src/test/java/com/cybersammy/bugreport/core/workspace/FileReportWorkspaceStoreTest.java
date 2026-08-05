@@ -11,8 +11,13 @@ import com.cybersammy.bugreport.core.session.ReportSessionId;
 import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Set;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +51,37 @@ final class FileReportWorkspaceStoreTest {
                 FileReportWorkspaceStore.markerContents(SECOND),
                 Files.readAllBytes(second.directory().resolve(
                         FileReportWorkspaceStore.MARKER_FILENAME)));
+    }
+
+    @Test
+    void createsOwnerOnlyPosixDirectoriesAndMarkerWhenSupported() throws IOException {
+        Assumptions.assumeTrue(Files.getFileStore(temporaryDirectory)
+                .supportsFileAttributeView(PosixFileAttributeView.class));
+        Path firstRootSegment = temporaryDirectory.resolve("private");
+        Path root = firstRootSegment.resolve("workspaces");
+
+        ReportWorkspace workspace =
+                new FileReportWorkspaceStore(root.toAbsolutePath()).create(FIRST);
+
+        Set<PosixFilePermission> privateDirectory =
+                PosixFilePermissions.fromString("rwx------");
+        assertEquals(
+                privateDirectory,
+                Files.getPosixFilePermissions(
+                        firstRootSegment, LinkOption.NOFOLLOW_LINKS));
+        assertEquals(
+                privateDirectory,
+                Files.getPosixFilePermissions(root, LinkOption.NOFOLLOW_LINKS));
+        assertEquals(
+                privateDirectory,
+                Files.getPosixFilePermissions(
+                        workspace.directory(), LinkOption.NOFOLLOW_LINKS));
+        assertEquals(
+                PosixFilePermissions.fromString("rw-------"),
+                Files.getPosixFilePermissions(
+                        workspace.directory().resolve(
+                                FileReportWorkspaceStore.MARKER_FILENAME),
+                        LinkOption.NOFOLLOW_LINKS));
     }
 
     @Test
@@ -94,7 +130,7 @@ final class FileReportWorkspaceStoreTest {
         Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
         WorkspaceFileOperations failing = new DelegatingWorkspaceFileOperations() {
             @Override
-            public void writeNewMarker(Path path, byte[] contents) throws IOException {
+            public void writeNewPrivateMarker(Path path, byte[] contents) throws IOException {
                 throw new IOException("injected marker failure");
             }
         };
@@ -109,12 +145,34 @@ final class FileReportWorkspaceStoreTest {
     }
 
     @Test
+    void failsWhenPrivateWorkspaceCreationCannotBeEnforced() throws IOException {
+        Path root = Files.createDirectory(
+                temporaryDirectory.resolve("workspaces")).toAbsolutePath();
+        WorkspaceFileOperations failing = new DelegatingWorkspaceFileOperations() {
+            @Override
+            public void createPrivateDirectory(Path path) throws IOException {
+                if (path.getFileName().toString().equals(FIRST.toString())) {
+                    throw new IOException("injected restrictive-permission failure");
+                }
+                super.createPrivateDirectory(path);
+            }
+        };
+
+        WorkspaceCreationException failure = assertThrows(
+                WorkspaceCreationException.class,
+                () -> new FileReportWorkspaceStore(root, failing).create(FIRST));
+
+        assertEquals(WorkspaceCreationCode.IO_FAILURE, failure.code());
+        assertFalse(Files.exists(root.resolve(FIRST.toString())));
+    }
+
+    @Test
     void reportsRollbackFailureWithoutDeletingUnknownContents() {
         Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
         Path workspace = root.resolve(FIRST.toString());
         WorkspaceFileOperations failing = new DelegatingWorkspaceFileOperations() {
             @Override
-            public void writeNewMarker(Path path, byte[] contents) throws IOException {
+            public void writeNewPrivateMarker(Path path, byte[] contents) throws IOException {
                 Files.writeString(workspace.resolve("unexpected"), "external");
                 throw new IOException("injected marker failure");
             }
@@ -147,13 +205,13 @@ final class FileReportWorkspaceStoreTest {
         }
 
         @Override
-        public void createDirectory(Path path) throws IOException {
-            NioWorkspaceFileOperations.INSTANCE.createDirectory(path);
+        public void createPrivateDirectory(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.createPrivateDirectory(path);
         }
 
         @Override
-        public void writeNewMarker(Path path, byte[] contents) throws IOException {
-            NioWorkspaceFileOperations.INSTANCE.writeNewMarker(path, contents);
+        public void writeNewPrivateMarker(Path path, byte[] contents) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.writeNewPrivateMarker(path, contents);
         }
 
         @Override
