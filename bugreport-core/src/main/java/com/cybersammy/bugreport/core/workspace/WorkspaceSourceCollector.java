@@ -11,10 +11,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.LinkOption;
-import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
@@ -23,7 +20,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 
 /** Revalidates and streams one planned source into its isolated report workspace. */
@@ -41,7 +37,12 @@ public final class WorkspaceSourceCollector {
             PlannedSourceFile planned,
             ApprovedSourceRoots roots,
             ReportWorkspace workspace) {
-        return collect(planned, roots, workspace, copiedBytes -> {});
+        return collect(
+                planned,
+                roots,
+                workspace,
+                NioSourceReadOperations.INSTANCE,
+                copiedBytes -> {});
     }
 
     static CollectedSourceFile collect(
@@ -49,9 +50,24 @@ public final class WorkspaceSourceCollector {
             ApprovedSourceRoots roots,
             ReportWorkspace workspace,
             CopyChunkHook hook) {
+        return collect(
+                planned,
+                roots,
+                workspace,
+                NioSourceReadOperations.INSTANCE,
+                hook);
+    }
+
+    static CollectedSourceFile collect(
+            PlannedSourceFile planned,
+            ApprovedSourceRoots roots,
+            ReportWorkspace workspace,
+            SourceReadOperations sourceReads,
+            CopyChunkHook hook) {
         PlannedSourceFile source = Objects.requireNonNull(planned, "planned");
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
         ReportWorkspace destinationWorkspace = Objects.requireNonNull(workspace, "workspace");
+        SourceReadOperations readOperations = Objects.requireNonNull(sourceReads, "sourceReads");
         CopyChunkHook chunkHook = Objects.requireNonNull(hook, "hook");
         ResolvedSourceFile plannedFile = source.file();
         String artifactName = artifactName(source);
@@ -76,20 +92,24 @@ public final class WorkspaceSourceCollector {
             }
 
             CopyResult copied;
-            try (FileChannel input = openSource(before.localPath());
+            try (SourceReadHandle sourceHandle = readOperations.open(approvedRoots, before);
                     FileChannel output = destinationWorkspace.files().openNewPrivateFile(temporary)) {
                 copiedIdentity = observeRegularFile(temporary, destinationWorkspace.files());
                 cleanupEntries.add(new CleanupEntry(temporary, copiedIdentity));
-                ResolvedSourceFile opened = resolveCurrent(
-                        approvedRoots, plannedFile, source, destinationWorkspace);
-                if (!SourceFileObservations.sameSnapshot(before, opened)) {
+                if (!SourceFileObservations.sameSnapshot(before, sourceHandle.openedFile())) {
                     throw failure(
                             SourceCopyCode.SOURCE_CHANGED,
                             source,
                             destinationWorkspace,
-                            "Source changed while it was opened");
+                            "Opened source identity did not match the planned file");
                 }
-                copied = copyBounded(input, output, source.maximumBytes(), chunkHook, source, destinationWorkspace);
+                copied = copyBounded(
+                        sourceHandle.channel(),
+                        output,
+                        source.maximumBytes(),
+                        chunkHook,
+                        source,
+                        destinationWorkspace);
                 output.force(true);
             }
 
@@ -169,6 +189,18 @@ public final class WorkspaceSourceCollector {
                     source,
                     destinationWorkspace,
                     exception);
+        } catch (SourcePathResolutionException exception) {
+            SourceCopyException failure = failure(
+                    SourceCopyCode.SOURCE_UNSAFE,
+                    source,
+                    destinationWorkspace,
+                    "Opened source could not be safely revalidated",
+                    exception);
+            throw cleanupOrPreserve(
+                    cleanupEntries,
+                    source,
+                    destinationWorkspace,
+                    failure);
         } catch (IOException | SecurityException exception) {
             SourceCopyException failure = failure(
                     SourceCopyCode.IO_FAILURE,
@@ -220,11 +252,6 @@ public final class WorkspaceSourceCollector {
             hook.afterChunk(copied);
         }
         return new CopyResult(copied, new Sha256Checksum(HexFormat.of().formatHex(digest.digest())));
-    }
-
-    private static FileChannel openSource(Path path) throws IOException {
-        Set<OpenOption> options = Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
-        return FileChannel.open(path, options);
     }
 
     private static ResolvedSourceFile resolveCurrent(

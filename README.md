@@ -420,6 +420,16 @@ checksum, provenance, and classification metadata—never an original or
 workspace path. A failed copy removes only temporary or reserved entries whose
 identity still matches; uncertain rollback is reported as `ROLLBACK_FAILED`.
 
+The source-opening boundary also returns identity evidence for the channel it
+opened. On Windows the NIO adapter uses `NOSHARE_DELETE`, preventing rename or
+replacement of that path entry while the handle remains open; its immediate
+observation is therefore bound to the channel for the copy lifetime. Portable
+POSIX Java NIO exposes no file identity directly from `FileChannel`, so the
+current fallback performs immediate and post-copy path identity revalidation
+but cannot prove the opened handle against a malicious same-user ABA rename.
+Supporting a POSIX native handle adapter is tracked explicitly and the current
+boundary must not be described as an OS sandbox.
+
 Progress/cancellation, report-wide aggregate budgets, reviewed snapshots, and
 ownership-verified abandoned-workspace cleanup remain separate lifecycle
 stages.

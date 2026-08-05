@@ -28,6 +28,8 @@ import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.PlannedSourceFile;
+import com.cybersammy.bugreport.core.source.ResolvedSourceFile;
+import com.cybersammy.bugreport.core.source.SourcePathResolver;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -44,6 +46,8 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 final class WorkspaceSourceCollectorTest {
@@ -133,6 +137,56 @@ final class WorkspaceSourceCollectorTest {
                         }));
         assertEquals(SourceCopyCode.SOURCE_CHANGED, duringFailure.code());
         assertOnlyMarker(changedDuring.workspace());
+    }
+
+    @Test
+    void rejectsOpenedHandleWhoseIdentityDiffersFromTheRevalidatedPath()
+            throws IOException {
+        Fixture fixture = fixture("file-a", 1024, NioWorkspaceFileOperations.INSTANCE);
+        Path alternate = fixture.source().resolveSibling("alternate.log");
+        Files.writeString(alternate, "file-b");
+        ResolvedSourceFile alternateObservation = SourcePathResolver.resolveRegularFile(
+                fixture.roots(),
+                LogicalRoot.GAME_LOGS,
+                RelativePath.of("alternate.log"));
+        SourceReadOperations mismatchedHandle = (roots, planned) -> new SourceReadHandle(
+                FileChannel.open(
+                        alternate,
+                        StandardOpenOption.READ,
+                        LinkOption.NOFOLLOW_LINKS),
+                alternateObservation,
+                SourceReadIdentityAssurance.HANDLE_STABILIZED);
+
+        SourceCopyException failure = assertThrows(
+                SourceCopyException.class,
+                () -> WorkspaceSourceCollector.collect(
+                        fixture.planned(),
+                        fixture.roots(),
+                        fixture.workspace(),
+                        mismatchedHandle,
+                        copied -> {}));
+
+        assertEquals(SourceCopyCode.SOURCE_CHANGED, failure.code());
+        assertOnlyMarker(fixture.workspace());
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void windowsSourceHandlePreventsPathReplacementUntilClosed() throws IOException {
+        Fixture fixture = fixture("locked", 1024, NioWorkspaceFileOperations.INSTANCE);
+        ResolvedSourceFile planned = fixture.planned().file();
+
+        try (SourceReadHandle handle =
+                NioSourceReadOperations.INSTANCE.open(fixture.roots(), planned)) {
+            assertEquals(
+                    SourceReadIdentityAssurance.HANDLE_STABILIZED,
+                    handle.identityAssurance());
+            assertThrows(
+                    IOException.class,
+                    () -> Files.move(
+                            fixture.source(),
+                            fixture.source().resolveSibling("replacement-window.log")));
+        }
     }
 
     @Test
