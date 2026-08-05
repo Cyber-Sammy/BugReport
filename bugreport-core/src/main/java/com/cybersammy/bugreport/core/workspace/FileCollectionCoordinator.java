@@ -179,10 +179,17 @@ public final class FileCollectionCoordinator {
             List<FileCollectionResult.SourceOutcome> outcomes,
             Counters counters,
             CollectionRunControl control) {
-        FileCollectionResult.Status status = status(counters);
-        CollectionProgressSnapshot terminal = counters.snapshot(
-                CollectionProgressSnapshot.State.valueOf(status.name()));
-        control.publish(terminal);
+        FileCollectionResult.Status ordinaryStatus = status(counters);
+        CollectionProgressSnapshot ordinaryTerminal = counters.snapshot(
+                CollectionProgressSnapshot.State.valueOf(ordinaryStatus.name()));
+        CollectionProgressSnapshot cancelledTerminal = ordinaryStatus
+                        == FileCollectionResult.Status.CANCELLED
+                ? ordinaryTerminal
+                : counters.snapshot(CollectionProgressSnapshot.State.CANCELLED);
+        CollectionProgressSnapshot terminal =
+                control.finish(ordinaryTerminal, cancelledTerminal);
+        FileCollectionResult.Status status =
+                FileCollectionResult.Status.valueOf(terminal.state().name());
         return new FileCollectionResult(
                 plan.providerId(),
                 plan.providerVersion(),

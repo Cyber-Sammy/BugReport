@@ -86,10 +86,8 @@ public record CollectionProgressSnapshot(
                 }
             }
             case CANCELLED -> {
-                if (cancelledFiles == 0) {
-                    throw new IllegalArgumentException(
-                            "Cancelled collection requires cancelled files");
-                }
+                // Cancellation can win its atomic race with terminal publication after the
+                // final file has already been retained, leaving no file outcome to cancel.
             }
         }
     }

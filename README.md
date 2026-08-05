@@ -441,6 +441,12 @@ unstarted file receives a deterministic `CANCELLED` outcome. An ordinary typed
 failure remains isolated, so unrelated files continue and the final result is
 `COMPLETE`, `PARTIAL`, `FAILED`, or `CANCELLED`.
 
+Cancellation and terminal publication are linearized through the same atomic
+control state. A request that loses to terminal publication returns `false` and
+does not leave the signal set. If cancellation wins, the run is `CANCELLED`;
+files already published atomically remain successful outcomes even when no file
+outcome itself remains to cancel.
+
 The file run rejects a planning-time total above 128 MiB before writing and
 enforces the same ceiling again against actual streamed bytes. Progress counts
 processed bytes, including work later discarded after a failed file, and is not
