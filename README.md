@@ -530,6 +530,29 @@ filesystem redirection quarantine that workspace without blocking unrelated
 sessions. Partial failures remain explicit because recursive filesystem
 deletion cannot be transactional.
 
+### Sanitization pipeline foundation
+
+Core provides a deterministic streaming `SanitizationPipeline` for trusted
+product text rules. Stages execute by explicit numeric order and stable stage
+ID, process one bounded logical line at a time, and never receive a path or
+workspace handle. The pipeline preserves `LF`, `CRLF`, and `CR` terminators,
+checks cancellation while reading, and independently limits line, input,
+output, match, finding, failure, and stage counts.
+
+Automatic replacements and unresolved warnings both produce path-safe
+`SanitizationFinding` metadata containing only the artifact name, stage ID,
+original one-based UTF-16 location, classification, and action. Matched text is
+never copied into a finding or stage-failure result. A broken, null-returning,
+or invalid stage is recorded once and disabled for the remainder of that
+artifact; healthy stages continue in canonical order.
+
+The pipeline reads from and writes to caller-owned streams. Orchestration must
+read only the exact artifacts in a current `ReviewedWorkspaceSnapshot`, write
+to a separate private temporary artifact, and atomically publish it only after
+successful sanitization. On cancellation, I/O failure, or a product ceiling,
+the caller must discard partial output. Concrete privacy detectors and the
+workspace publication coordinator are subsequent M2 slices.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
