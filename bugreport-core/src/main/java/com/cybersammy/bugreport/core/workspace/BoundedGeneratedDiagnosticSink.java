@@ -1,6 +1,5 @@
 package com.cybersammy.bugreport.core.workspace;
 
-import com.cybersammy.bugreport.api.constraint.CollectionConstraints;
 import com.cybersammy.bugreport.api.extension.ExtensionMetadata;
 import com.cybersammy.bugreport.api.identifier.GeneratedArtifactId;
 import com.cybersammy.bugreport.api.specification.CancellationSignal;
@@ -27,7 +26,7 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
     private final GeneratedDiagnosticInvocation invocation;
     private final ReportWorkspace workspace;
     private final CancellationSignal cancellation;
-    private final EffectiveLimits limits;
+    private final GeneratedDiagnosticLimits limits;
     private final TreeMap<GeneratedArtifactId, CollectedGeneratedArtifact> artifacts =
             new TreeMap<>();
     private final List<WorkspaceGeneratedArtifactPublisher.PublishedArtifact> published =
@@ -44,12 +43,11 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
             GeneratedDiagnosticInvocation invocation,
             ReportWorkspace workspace,
             CancellationSignal cancellation,
-            long remainingCollectionBytes) {
+            GeneratedDiagnosticLimits limits) {
         this.invocation = Objects.requireNonNull(invocation, "invocation");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
         this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
-        limits = EffectiveLimits.from(
-                invocation.generator().constraints(), remainingCollectionBytes);
+        this.limits = Objects.requireNonNull(limits, "limits");
     }
 
     @Override
@@ -275,6 +273,10 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
                 || terminal.get() instanceof GeneratedSinkViolation;
     }
 
+    boolean isRevoked() {
+        return terminal.get() instanceof GeneratedSinkViolation;
+    }
+
     private String artifactName(
             GeneratedArtifactId artifactId, DiagnosticContentType contentType) {
         MessageDigest digest = sha256();
@@ -302,36 +304,4 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
         }
     }
 
-    private record EffectiveLimits(
-            int maxArtifacts,
-            long maxBytesPerArtifact,
-            long maxTotalBytes,
-            long remainingCollectionBytes) {
-        private static EffectiveLimits from(
-                CollectionConstraints constraints, long remainingCollectionBytes) {
-            int requestedArtifacts = constraints.maxGeneratedArtifacts().isPresent()
-                    ? constraints.maxGeneratedArtifacts().getAsInt()
-                    : GeneratedDiagnosticCollector.PRODUCT_MAX_ARTIFACTS;
-            long requestedPerArtifact = constraints.maxBytesPerFile().isPresent()
-                    ? constraints.maxBytesPerFile().getAsLong()
-                    : GeneratedDiagnosticCollector.PRODUCT_MAX_BYTES_PER_ARTIFACT;
-            long requestedTotal = constraints.maxTotalBytes().isPresent()
-                    ? constraints.maxTotalBytes().getAsLong()
-                    : GeneratedDiagnosticCollector.PRODUCT_MAX_GENERATOR_BYTES;
-            long effectiveTotal = Math.min(
-                    GeneratedDiagnosticCollector.PRODUCT_MAX_GENERATOR_BYTES,
-                    requestedTotal);
-            return new EffectiveLimits(
-                    Math.min(
-                            GeneratedDiagnosticCollector.PRODUCT_MAX_ARTIFACTS,
-                            requestedArtifacts),
-                    Math.min(
-                            Math.min(
-                                    GeneratedDiagnosticCollector.PRODUCT_MAX_BYTES_PER_ARTIFACT,
-                                    requestedPerArtifact),
-                            effectiveTotal),
-                    effectiveTotal,
-                    remainingCollectionBytes);
-        }
-    }
 }

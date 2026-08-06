@@ -368,9 +368,24 @@ interruption and the provided cancellation signal. If timeout occurs inside an
 active emission, the deadline path does not wait for the sink monitor: encoding
 and publication observe the lock-free revocation, final publication is denied,
 and the worker removes invocation-owned temporary or previously published
-artifacts after the active operation unwinds. `GAME_THREAD_SNAPSHOT` callbacks
-are reported as execution-context unavailable until the platform game-thread
-handoff layer is installed; they are never silently run on a worker.
+artifacts after the active operation unwinds.
+
+Production orchestration uses `CategoryGeneratedDiagnosticExecutor.executeAsync`
+so registry work, callback coordination, encoding, checksums, and filesystem I/O
+run on a virtual worker. `GAME_THREAD_SNAPSHOT` callbacks alone are submitted
+through a platform `GameThreadDispatcher`. They receive a capture-only sink
+that has no workspace authority, materializes TEXT as an immutable `String`,
+and accepts already-immutable bounded JSON metadata. The game-thread phase has
+a separate 50 ms product ceiling, including dispatch queue delay. Successful
+captured values are replayed through the normal bounded workspace sink on the
+worker. A rejected or unavailable dispatcher produces a typed outcome; Core
+never silently runs the callback on the wrong thread.
+
+The NeoForge adapter routes physical-client capture through Minecraft's client
+executor and enables dedicated-server capture only between server-started and
+server-stopping lifecycle events. Timeout revokes capture authority but cannot
+forcibly terminate arbitrary in-process provider code already executing on the
+game thread, so providers must keep snapshot callbacks short and cooperative.
 
 The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled
