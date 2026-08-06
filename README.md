@@ -554,6 +554,28 @@ successful sanitization. On stage failure, cancellation, I/O failure, or a
 product ceiling, the caller must discard partial output. Concrete privacy
 detectors and the workspace publication coordinator are subsequent M2 slices.
 
+`HomeDirectoryMaskingStage` and `UsernameMaskingStage` provide the first
+product identity rules. Core never reads `user.home`, `user.name`, environment
+variables, or loader state itself; a platform adapter supplies the already
+selected values and an explicit `SENSITIVE` or `INSENSITIVE` comparison policy:
+
+```java
+SanitizationPipeline pipeline = new SanitizationPipeline(List.of(
+        new HomeDirectoryMaskingStage(homeDirectory, caseSensitivity),
+        new UsernameMaskingStage(username, caseSensitivity)));
+```
+
+The home stage runs first, accepts only bounded non-root absolute paths without
+`.`/`..` traversal, recognizes Windows, POSIX, UNC, alternate, and repeated
+escaped separators, and replaces the complete prefix with `<home>`. The
+username stage uses Unicode letter/number token boundaries and replaces exact
+remaining identities with `<user>` without changing larger words. Usernames
+shorter than three Unicode code points are rejected because unrestricted
+automatic replacement would corrupt ordinary diagnostic text; orchestration
+must treat that configuration as unsupported rather than silently omit privacy
+protection. Inserted safe replacements are protected from all later stages, so
+a username such as `home` cannot rewrite `<home>`.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own

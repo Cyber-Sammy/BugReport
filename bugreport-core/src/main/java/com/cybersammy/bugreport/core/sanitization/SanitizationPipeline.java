@@ -231,6 +231,9 @@ public final class SanitizationPipeline {
         List<SanitizationMatch> validated;
         try {
             validated = validateMatches(matches, line.value().length());
+            validated = validated.stream()
+                    .filter(match -> !line.overlapsProtected(match.start(), match.end()))
+                    .toList();
             line.requireApplicable(validated, maximumLineCharacters);
         } catch (RuntimeException exception) {
             throw stageFailure(
@@ -324,10 +327,12 @@ public final class SanitizationPipeline {
     private static final class MappedLine {
         private String value;
         private int[] originalBoundaries;
+        private boolean[] protectedCharacters;
 
         private MappedLine(String value) {
             this.value = value;
             this.originalBoundaries = new int[value.length() + 1];
+            this.protectedCharacters = new boolean[value.length()];
             for (int index = 0; index <= value.length(); index++) {
                 originalBoundaries[index] = index;
             }
@@ -339,6 +344,15 @@ public final class SanitizationPipeline {
 
         private int originalBoundary(int index) {
             return originalBoundaries[index];
+        }
+
+        private boolean overlapsProtected(int start, int end) {
+            for (int index = start; index < end; index++) {
+                if (protectedCharacters[index]) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void requireApplicable(
@@ -372,6 +386,7 @@ public final class SanitizationPipeline {
             }
             StringBuilder updatedValue = new StringBuilder(newLength);
             int[] updatedBoundaries = new int[newLength + 1];
+            boolean[] updatedProtected = new boolean[newLength];
             int oldCursor = 0;
             int newCursor = 0;
             updatedBoundaries[0] = originalBoundaries[0];
@@ -380,6 +395,12 @@ public final class SanitizationPipeline {
                 for (int index = oldCursor + 1; index <= match.start(); index++) {
                     updatedBoundaries[++newCursor] = originalBoundaries[index];
                 }
+                System.arraycopy(
+                        protectedCharacters,
+                        oldCursor,
+                        updatedProtected,
+                        newCursor - (match.start() - oldCursor),
+                        match.start() - oldCursor);
                 String replacement = match.replacement().orElseThrow();
                 updatedValue.append(replacement);
                 if (replacement.isEmpty()) {
@@ -389,6 +410,11 @@ public final class SanitizationPipeline {
                         updatedBoundaries[++newCursor] = originalBoundaries[match.start()];
                     }
                     updatedBoundaries[++newCursor] = originalBoundaries[match.end()];
+                    java.util.Arrays.fill(
+                            updatedProtected,
+                            newCursor - replacement.length(),
+                            newCursor,
+                            true);
                 }
                 oldCursor = match.end();
             }
@@ -396,8 +422,15 @@ public final class SanitizationPipeline {
             for (int index = oldCursor + 1; index < originalBoundaries.length; index++) {
                 updatedBoundaries[++newCursor] = originalBoundaries[index];
             }
+            System.arraycopy(
+                    protectedCharacters,
+                    oldCursor,
+                    updatedProtected,
+                    newCursor - (value.length() - oldCursor),
+                    value.length() - oldCursor);
             value = updatedValue.toString();
             originalBoundaries = updatedBoundaries;
+            protectedCharacters = updatedProtected;
         }
     }
 }
