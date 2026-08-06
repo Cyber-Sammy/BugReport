@@ -165,6 +165,27 @@ final class ProductSanitizationTest {
     }
 
     @Test
+    void invalidHostnamePortsDoNotExposeTheHostname() {
+        SanitizationPipeline strictLog = ProductSanitization.textPipeline(
+                SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
+                "/home/alice",
+                "alice",
+                SanitizationCaseSensitivity.SENSITIVE);
+        SanitizationPipeline standardConfiguration = ProductSanitization.textPipeline(
+                SanitizationPolicy.standard(SanitizationArtifactPolicy.CONFIGURATION),
+                "/home/alice",
+                "alice",
+                SanitizationCaseSensitivity.SENSITIVE);
+        String input = "serverAddress=private.example.test:70000 "
+                + "hostname=localhost:0 address=family.example.net:99999";
+        String expected = "serverAddress=<server-address>:70000 "
+                + "hostname=<server-address>:0 address=<server-address>:99999";
+
+        assertEquals(expected, sanitize(strictLog, input).output());
+        assertEquals(expected, sanitize(standardConfiguration, input).output());
+    }
+
+    @Test
     void customReviewCannotWeakenProhibitedCredentialHandling() {
         SanitizationPolicy policy = SanitizationPolicy.customReview(
                 SanitizationArtifactPolicy.LOG,

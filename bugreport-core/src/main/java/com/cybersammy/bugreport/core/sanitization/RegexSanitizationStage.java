@@ -53,7 +53,7 @@ abstract class RegexSanitizationStage implements TextSanitizationStage {
         List<SanitizationMatch> matches = new ArrayList<>();
         while (matcher.find()) {
             int start = matcher.start(matchedGroup);
-            int end = matcher.end(matchedGroup);
+            int end = matchEnd(matcher, matcher.end(matchedGroup));
             if (start >= 0 && end > start && accept(line, matcher, start, end)) {
                 matches.add(SanitizationStageSupport.match(
                         start, end, classification, action, replacement));
@@ -64,5 +64,9 @@ abstract class RegexSanitizationStage implements TextSanitizationStage {
 
     boolean accept(String line, Matcher matcher, int start, int end) {
         return true;
+    }
+
+    int matchEnd(Matcher matcher, int defaultEnd) {
+        return defaultEnd;
     }
 }
