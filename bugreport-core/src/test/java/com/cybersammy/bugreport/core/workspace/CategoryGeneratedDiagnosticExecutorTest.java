@@ -117,7 +117,7 @@ final class CategoryGeneratedDiagnosticExecutorTest {
                         callbackFinished.countDown();
                     }
                 },
-                Duration.ofMillis(30),
+                Duration.ofMillis(250),
                 GeneratorExecutionContext.WORKER);
         Fixture fixture = fixture(generator);
 

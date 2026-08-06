@@ -18,12 +18,24 @@ public final class HomeDirectoryMaskingStage implements TextSanitizationStage {
     private static final Pattern DRIVE_PREFIX = Pattern.compile("^[A-Za-z]:[\\\\/]");
 
     private final Pattern homePattern;
+    private final SanitizationAction action;
 
     public HomeDirectoryMaskingStage(
             String homeDirectory, SanitizationCaseSensitivity caseSensitivity) {
+        this(
+                homeDirectory,
+                caseSensitivity,
+                SanitizationAction.AUTOMATIC_REDACTION);
+    }
+
+    public HomeDirectoryMaskingStage(
+            String homeDirectory,
+            SanitizationCaseSensitivity caseSensitivity,
+            SanitizationAction action) {
         String home = requireSafeHome(homeDirectory);
         SanitizationCaseSensitivity sensitivity =
                 Objects.requireNonNull(caseSensitivity, "caseSensitivity");
+        this.action = Objects.requireNonNull(action, "action");
         int flags = sensitivity == SanitizationCaseSensitivity.INSENSITIVE
                 ? Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
                 : 0;
@@ -48,10 +60,11 @@ public final class HomeDirectoryMaskingStage implements TextSanitizationStage {
         while (matcher.find()) {
             if (isStartBoundary(value, matcher.start())
                     && isEndBoundary(value, matcher.end())) {
-                matches.add(SanitizationMatch.redact(
+                matches.add(SanitizationStageSupport.match(
                         matcher.start(),
                         matcher.end(),
                         PrivacyClassification.PERSONAL,
+                        action,
                         REPLACEMENT));
             }
         }

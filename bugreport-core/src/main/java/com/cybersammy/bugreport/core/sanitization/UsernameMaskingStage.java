@@ -17,12 +17,21 @@ public final class UsernameMaskingStage implements TextSanitizationStage {
     private static final int MAXIMUM_USERNAME_CHARACTERS = 256;
 
     private final Pattern usernamePattern;
+    private final SanitizationAction action;
 
     public UsernameMaskingStage(
             String username, SanitizationCaseSensitivity caseSensitivity) {
+        this(username, caseSensitivity, SanitizationAction.AUTOMATIC_REDACTION);
+    }
+
+    public UsernameMaskingStage(
+            String username,
+            SanitizationCaseSensitivity caseSensitivity,
+            SanitizationAction action) {
         String value = requireSafeUsername(username);
         SanitizationCaseSensitivity sensitivity =
                 Objects.requireNonNull(caseSensitivity, "caseSensitivity");
+        this.action = Objects.requireNonNull(action, "action");
         int flags = Pattern.UNICODE_CHARACTER_CLASS;
         if (sensitivity == SanitizationCaseSensitivity.INSENSITIVE) {
             flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
@@ -49,10 +58,11 @@ public final class UsernameMaskingStage implements TextSanitizationStage {
         Matcher matcher = usernamePattern.matcher(Objects.requireNonNull(line, "line"));
         List<SanitizationMatch> matches = new ArrayList<>();
         while (matcher.find()) {
-            matches.add(SanitizationMatch.redact(
+            matches.add(SanitizationStageSupport.match(
                     matcher.start(),
                     matcher.end(),
                     PrivacyClassification.PERSONAL,
+                    action,
                     REPLACEMENT));
         }
         return List.copyOf(matches);
