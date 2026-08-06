@@ -57,7 +57,6 @@ final class SanitizationPipelineTest {
         assertEquals(14, result.findings().get(1).startColumn());
         assertEquals(19, result.findings().get(1).endColumn());
         assertTrue(result.hasUnresolvedWarnings());
-        assertFalse(result.hasStageFailures());
         assertEquals(25, result.inputCharacters());
         assertEquals(19, result.outputCharacters());
     }
@@ -99,61 +98,50 @@ final class SanitizationPipelineTest {
         };
         SanitizationPipeline pipeline = new SanitizationPipeline(List.of(unstable));
 
-        SanitizationResult result = pipeline.sanitize(
-                ARTIFACT,
-                new StringReader("value"),
-                new StringWriter(),
-                CancellationSignal.neverCancelled());
+        SanitizationException failure = assertThrows(
+                SanitizationException.class,
+                () -> pipeline.sanitize(
+                        ARTIFACT,
+                        new StringReader("value"),
+                        new StringWriter(),
+                        CancellationSignal.neverCancelled()));
 
         assertEquals(List.of(new SanitizationStageId("stable")), pipeline.stageOrder());
-        assertEquals(
-                new SanitizationStageId("stable"),
-                result.stageFailures().getFirst().stageId());
+        assertEquals(new SanitizationStageId("stable"), failure.stageId().orElseThrow());
         assertEquals(1, identityReads.get());
     }
 
     @Test
-    void isolatesThrowingNullAndInvalidStagesWithoutLeakingInput() {
+    void stageFailureIsTerminalBeforeLaterSecretsCanBypassRedaction() {
         String secret = "bearer-super-secret";
-        TextSanitizationStage throwing = stage("throwing", 1, line -> {
-            throw new IOException("provider included " + line);
+        TextSanitizationStage credentials = stage("credentials", 1, line -> {
+            if (line.equals("break")) {
+                throw new IOException("stage accidentally included " + secret);
+            }
+            return line.equals(secret)
+                    ? List.of(SanitizationMatch.redact(
+                            0,
+                            line.length(),
+                            PrivacyClassification.PROHIBITED,
+                            "<redacted>"))
+                    : List.of();
         });
-        TextSanitizationStage nullResult = stage("null_result", 2, line -> null);
-        TextSanitizationStage invalid = stage(
-                "invalid",
-                3,
-                line -> List.of(
-                        SanitizationMatch.warn(4, 10, PrivacyClassification.SENSITIVE),
-                        SanitizationMatch.warn(2, 5, PrivacyClassification.SENSITIVE)));
-        TextSanitizationStage healthy = stage("healthy", 4, line -> List.of(
-                SanitizationMatch.redact(
-                        0,
-                        line.length(),
-                        PrivacyClassification.PROHIBITED,
-                        "<redacted>")));
         StringWriter output = new StringWriter();
 
-        SanitizationResult result = new SanitizationPipeline(
-                        List.of(healthy, invalid, nullResult, throwing))
-                .sanitize(
+        SanitizationException failure = assertThrows(
+                SanitizationException.class,
+                () -> new SanitizationPipeline(List.of(credentials)).sanitize(
                         ARTIFACT,
-                        new StringReader(secret),
+                        new StringReader(secret + "\nbreak\n" + secret),
                         output,
-                        CancellationSignal.neverCancelled());
+                        CancellationSignal.neverCancelled()));
 
-        assertEquals("<redacted>", output.toString());
-        assertEquals(
-                List.of(
-                        SanitizationStageFailureCode.CALLBACK_FAILED,
-                        SanitizationStageFailureCode.NULL_RESULT,
-                        SanitizationStageFailureCode.INVALID_RESULT),
-                result.stageFailures().stream()
-                        .map(SanitizationStageFailure::code)
-                        .toList());
-        assertTrue(result.hasStageFailures());
-        assertFalse(result.toString().contains(secret));
-        result.stageFailures().forEach(failure -> assertFalse(failure.toString().contains(secret)));
-        result.findings().forEach(finding -> assertFalse(finding.toString().contains(secret)));
+        assertEquals(SanitizationCode.STAGE_FAILED, failure.code());
+        assertEquals(new SanitizationStageId("credentials"), failure.stageId().orElseThrow());
+        assertEquals(2, failure.line().orElseThrow());
+        assertEquals("<redacted>\n", output.toString());
+        assertFalse(failure.getMessage().contains(secret));
+        assertFalse(failure.toString().contains(secret));
     }
 
     @Test
@@ -176,27 +164,32 @@ final class SanitizationPipelineTest {
     }
 
     @Test
-    void rejectsOverlappingOutOfBoundsAndNullMatchesAsInvalidStageResults() {
-        List<TextSanitizationStage> stages = List.of(
+    void linkageNullAndInvalidResultsFailClosed() {
+        List<TextSanitizationStage> failingStages = List.of(
+                stage("linkage", 1, line -> {
+                    throw new NoClassDefFoundError("missing optional dependency");
+                }),
+                stage("null_result", 1, line -> null),
                 stage("overlap", 1, line -> List.of(
                         SanitizationMatch.warn(0, 2, PrivacyClassification.PERSONAL),
                         SanitizationMatch.warn(1, 3, PrivacyClassification.PERSONAL))),
-                stage("out_of_bounds", 2, line -> List.of(
+                stage("out_of_bounds", 1, line -> List.of(
                         SanitizationMatch.warn(0, 4, PrivacyClassification.PERSONAL))),
-                stage("null_match", 3, line -> java.util.Arrays.asList((SanitizationMatch) null)));
-        StringWriter output = new StringWriter();
+                stage("null_match", 1, line ->
+                        java.util.Arrays.asList((SanitizationMatch) null)));
 
-        SanitizationResult result = new SanitizationPipeline(stages).sanitize(
-                ARTIFACT,
-                new StringReader("abc"),
-                output,
-                CancellationSignal.neverCancelled());
-
-        assertEquals("abc", output.toString());
-        assertEquals(3, result.stageFailures().size());
-        assertTrue(result.stageFailures().stream()
-                .allMatch(failure ->
-                        failure.code() == SanitizationStageFailureCode.INVALID_RESULT));
+        for (TextSanitizationStage invalid : failingStages) {
+            SanitizationException failure = assertThrows(
+                    SanitizationException.class,
+                    () -> new SanitizationPipeline(List.of(invalid)).sanitize(
+                            ARTIFACT,
+                            new StringReader("abc"),
+                            new StringWriter(),
+                            CancellationSignal.neverCancelled()));
+            assertEquals(SanitizationCode.STAGE_FAILED, failure.code());
+            assertEquals(invalid.id(), failure.stageId().orElseThrow());
+            assertEquals(1, failure.line().orElseThrow());
+        }
     }
 
     @Test
@@ -224,18 +217,17 @@ final class SanitizationPipelineTest {
     }
 
     @Test
-    void rejectsStageExpansionBoundsOutputAndDisablesFailedStage() {
+    void rejectsStageExpansionAndBoundsTotalOutput() {
         TextSanitizationStage expansion = stage("expansion", 1, line -> List.of(
                 SanitizationMatch.redact(
                         0, 1, PrivacyClassification.PERSONAL, "expanded")));
-        StringWriter expansionOutput = new StringWriter();
-        SanitizationResult expansionResult = new SanitizationPipeline(
-                        List.of(expansion), 3, 20, 20)
-                .sanitize(
+        SanitizationException expansionFailure = assertThrows(
+                SanitizationException.class,
+                () -> new SanitizationPipeline(List.of(expansion), 3, 20, 20).sanitize(
                         ARTIFACT,
                         new StringReader("a"),
-                        expansionOutput,
-                        CancellationSignal.neverCancelled());
+                        new StringWriter(),
+                        CancellationSignal.neverCancelled()));
         SanitizationException outputFailure = assertThrows(
                 SanitizationException.class,
                 () -> new SanitizationPipeline(List.of(), 20, 20, 3).sanitize(
@@ -243,21 +235,8 @@ final class SanitizationPipelineTest {
                         new StringReader("four"),
                         new StringWriter(),
                         CancellationSignal.neverCancelled()));
-        TextSanitizationStage broken = stage("broken", 1, line -> {
-            throw new IllegalStateException("failure");
-        });
-        SanitizationResult failedStageResult = new SanitizationPipeline(List.of(broken)).sanitize(
-                ARTIFACT,
-                new StringReader("x\nx\nx"),
-                new StringWriter(),
-                CancellationSignal.neverCancelled());
-
-        assertEquals("a", expansionOutput.toString());
-        assertEquals(
-                SanitizationStageFailureCode.INVALID_RESULT,
-                expansionResult.stageFailures().getFirst().code());
+        assertEquals(SanitizationCode.STAGE_FAILED, expansionFailure.code());
         assertEquals(SanitizationCode.OUTPUT_LIMIT_EXCEEDED, outputFailure.code());
-        assertEquals(1, failedStageResult.stageFailures().size());
     }
 
     @Test

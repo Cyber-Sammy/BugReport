@@ -96,8 +96,6 @@ public final class SanitizationPipeline {
         Writer destination = Objects.requireNonNull(output, "output");
         CancellationSignal signal = Objects.requireNonNull(cancellation, "cancellation");
         List<SanitizationFinding> findings = new ArrayList<>();
-        List<SanitizationStageFailure> failures = new ArrayList<>();
-        Set<SanitizationStageId> failedStages = new HashSet<>();
         long inputCharacters = 0;
         long outputCharacters = 0;
         long lineNumber = 0;
@@ -113,16 +111,7 @@ public final class SanitizationPipeline {
                 inputCharacters = Math.addExact(inputCharacters, line.characterCount());
                 MappedLine mapped = new MappedLine(line.content());
                 for (ConfiguredStage stage : stages) {
-                    if (!failedStages.contains(stage.id())
-                            && !applyStage(
-                                    safeArtifact,
-                                    lineNumber,
-                                    mapped,
-                                    stage,
-                                    findings,
-                                    failures)) {
-                        failedStages.add(stage.id());
-                    }
+                    applyStage(safeArtifact, lineNumber, mapped, stage, findings);
                 }
                 requireNotCancelled(signal, safeArtifact);
                 long nextOutput = Math.addExact(
@@ -144,8 +133,7 @@ public final class SanitizationPipeline {
                     safeArtifact,
                     inputCharacters,
                     outputCharacters,
-                    findings,
-                    failures);
+                    findings);
         } catch (SanitizationException exception) {
             throw exception;
         } catch (IOException | ArithmeticException exception) {
@@ -217,49 +205,39 @@ public final class SanitizationPipeline {
         return new Line(content.toString(), terminator);
     }
 
-    private boolean applyStage(
+    private void applyStage(
             String artifactName,
             long lineNumber,
             MappedLine line,
             ConfiguredStage stage,
-            List<SanitizationFinding> findings,
-            List<SanitizationStageFailure> failures) {
+            List<SanitizationFinding> findings) {
         List<SanitizationMatch> matches;
         try {
             matches = stage.implementation().findMatches(line.value());
         } catch (Exception | LinkageError exception) {
-            addFailure(
+            throw stageFailure(
                     artifactName,
-                    failures,
-                    new SanitizationStageFailure(
-                            stage.id(),
-                            lineNumber,
-                            SanitizationStageFailureCode.CALLBACK_FAILED));
-            return false;
+                    stage.id(),
+                    lineNumber,
+                    "Sanitization stage callback failed");
         }
         if (matches == null) {
-            addFailure(
+            throw stageFailure(
                     artifactName,
-                    failures,
-                    new SanitizationStageFailure(
-                            stage.id(),
-                            lineNumber,
-                            SanitizationStageFailureCode.NULL_RESULT));
-            return false;
+                    stage.id(),
+                    lineNumber,
+                    "Sanitization stage returned null");
         }
         List<SanitizationMatch> validated;
         try {
             validated = validateMatches(matches, line.value().length());
             line.requireApplicable(validated, maximumLineCharacters);
         } catch (RuntimeException exception) {
-            addFailure(
+            throw stageFailure(
                     artifactName,
-                    failures,
-                    new SanitizationStageFailure(
-                            stage.id(),
-                            lineNumber,
-                            SanitizationStageFailureCode.INVALID_RESULT));
-            return false;
+                    stage.id(),
+                    lineNumber,
+                    "Sanitization stage returned an invalid result");
         }
         List<SanitizationFinding> stageFindings = new ArrayList<>(validated.size());
         for (SanitizationMatch match : validated) {
@@ -281,7 +259,6 @@ public final class SanitizationPipeline {
         }
         line.apply(validated);
         findings.addAll(stageFindings);
-        return true;
     }
 
     private static List<SanitizationMatch> validateMatches(
@@ -301,18 +278,18 @@ public final class SanitizationPipeline {
         return copy;
     }
 
-    private static void addFailure(
+    private static SanitizationException stageFailure(
             String artifactName,
-            List<SanitizationStageFailure> failures,
-            SanitizationStageFailure failure) {
-        if (failures.size() == PRODUCT_MAX_STAGES) {
-            throw failure(
-                    SanitizationCode.METADATA_LIMIT_EXCEEDED,
-                    artifactName,
-                    "Sanitization stage failures exceeded the product limit",
-                    null);
-        }
-        failures.add(failure);
+            SanitizationStageId stageId,
+            long line,
+            String message) {
+        return new SanitizationException(
+                SanitizationCode.STAGE_FAILED,
+                artifactName,
+                stageId,
+                line,
+                message,
+                null);
     }
 
     private static String requireArtifactName(String artifactName) {

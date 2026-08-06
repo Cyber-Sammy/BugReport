@@ -1,17 +1,14 @@
 package com.cybersammy.bugreport.core.sanitization;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /** Immutable metadata for one successful streaming sanitization pass. */
 public record SanitizationResult(
         String artifactName,
         long inputCharacters,
         long outputCharacters,
-        List<SanitizationFinding> findings,
-        List<SanitizationStageFailure> stageFailures) {
+        List<SanitizationFinding> findings) {
     public SanitizationResult {
         String canonicalArtifact = SanitizationContract.requireArtifactName(artifactName);
         artifactName = canonicalArtifact;
@@ -23,13 +20,10 @@ public record SanitizationResult(
                     "Sanitization character counts must be within product limits");
         }
         findings = List.copyOf(Objects.requireNonNull(findings, "findings"));
-        stageFailures = List.copyOf(Objects.requireNonNull(stageFailures, "stageFailures"));
-        if (findings.stream().anyMatch(Objects::isNull)
-                || stageFailures.stream().anyMatch(Objects::isNull)) {
+        if (findings.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("Sanitization metadata must not contain null");
         }
-        if (findings.size() > SanitizationPipeline.PRODUCT_MAX_FINDINGS
-                || stageFailures.size() > SanitizationPipeline.PRODUCT_MAX_STAGES) {
+        if (findings.size() > SanitizationPipeline.PRODUCT_MAX_FINDINGS) {
             throw new IllegalArgumentException(
                     "Sanitization metadata exceeded product limits");
         }
@@ -40,23 +34,11 @@ public record SanitizationResult(
         }
         requireNonDecreasingLines(
                 findings.stream().mapToLong(SanitizationFinding::line).toArray());
-        requireNonDecreasingLines(
-                stageFailures.stream().mapToLong(SanitizationStageFailure::line).toArray());
-        Set<SanitizationStageId> failedStages = new HashSet<>();
-        if (stageFailures.stream()
-                .anyMatch(failure -> !failedStages.add(failure.stageId()))) {
-            throw new IllegalArgumentException(
-                    "Sanitization result must contain at most one failure per stage");
-        }
     }
 
     public boolean hasUnresolvedWarnings() {
         return findings.stream()
                 .anyMatch(finding -> finding.action() == SanitizationAction.UNRESOLVED_WARNING);
-    }
-
-    public boolean hasStageFailures() {
-        return !stageFailures.isEmpty();
     }
 
     private static void requireNonDecreasingLines(long[] lines) {

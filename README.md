@@ -542,16 +542,17 @@ output, match, finding, failure, and stage counts.
 Automatic replacements and unresolved warnings both produce path-safe
 `SanitizationFinding` metadata containing only the artifact name, stage ID,
 original one-based UTF-16 location, classification, and action. Matched text is
-never copied into a finding or stage-failure result. A broken, null-returning,
-or invalid stage is recorded once and disabled for the remainder of that
-artifact; healthy stages continue in canonical order.
+never copied into finding metadata. A throwing, null-returning, or invalid stage
+fails the artifact closed with `STAGE_FAILED`; its safe stage ID and line are
+carried by the exception, while the original exception message is discarded.
+No ordinary `SanitizationResult` can represent an incompletely checked output.
 
 The pipeline reads from and writes to caller-owned streams. Orchestration must
 read only the exact artifacts in a current `ReviewedWorkspaceSnapshot`, write
 to a separate private temporary artifact, and atomically publish it only after
-successful sanitization. On cancellation, I/O failure, or a product ceiling,
-the caller must discard partial output. Concrete privacy detectors and the
-workspace publication coordinator are subsequent M2 slices.
+successful sanitization. On stage failure, cancellation, I/O failure, or a
+product ceiling, the caller must discard partial output. Concrete privacy
+detectors and the workspace publication coordinator are subsequent M2 slices.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
