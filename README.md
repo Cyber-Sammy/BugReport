@@ -600,6 +600,32 @@ is not proof of safety or permission to package an artifact. All inserted
 replacement ranges are opaque to later stages, and findings never retain raw
 matched values.
 
+### Manifest schema v1
+
+Core now defines the first portable report manifest as the immutable
+`ReportManifest` model and deterministic `ReportManifestJsonCodec`. Writers emit
+schema `bugreport:report_manifest` version `1.0`; readers reject another schema
+ID or major version and safely ignore bounded additive members from a newer
+minor version. The UTF-8 JSON boundary rejects duplicate members, malformed
+numbers, excessive nesting, oversized input, invalid identifiers, and
+non-canonical archive paths.
+
+The manifest records the report and producer identity, optional exact provider
+target, physical environment, reviewed typed fields, capabilities, included
+entry sizes and SHA-256 checksums, collection and sanitization outcomes,
+bounded provenance, safe error codes, and namespaced extensions. Collections
+are canonically ordered, aggregate counts and uncompressed bytes are bounded,
+and an entry cannot weaken its declared privacy floor or contain prohibited
+content. Raw source paths, matched secrets, provider exception messages,
+credentials, and excluded artifacts are not part of the portable model.
+
+Constructing or decoding a structurally valid manifest does not authorize
+packaging. Decoded manifests are untrusted portable data. The package writer
+must accept a current `ReviewedWorkspaceSnapshot`, derive every entry's size,
+checksum, and provenance from that snapshot, and read only those exact reviewed
+workspace artifacts. Streaming ZIP creation and archive validation are the
+next M2 slice.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
