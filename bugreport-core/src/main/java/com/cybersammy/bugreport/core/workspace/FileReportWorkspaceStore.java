@@ -10,8 +10,10 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /** Creates isolated report workspaces below one product-owned local directory. */
 public final class FileReportWorkspaceStore {
@@ -22,6 +24,7 @@ public final class FileReportWorkspaceStore {
 
     private final Path root;
     private final WorkspaceFileOperations files;
+    private final Set<ReportSessionId> activeSessions = new HashSet<>();
 
     /** Binds workspace creation to one absolute product-owned directory without touching it. */
     public FileReportWorkspaceStore(Path root) {
@@ -87,7 +90,7 @@ public final class FileReportWorkspaceStore {
                 throw new UnsafeWorkspacePathException(
                         "Workspace marker changed while it was being initialized");
             }
-            return new ReportWorkspace(
+            ReportWorkspace created = new ReportWorkspace(
                     id,
                     currentWorkspace.realPath(),
                     files,
@@ -96,6 +99,8 @@ public final class FileReportWorkspaceStore {
                     currentWorkspace.creationTime(),
                     currentMarker.fileKey(),
                     currentMarker.creationTime());
+            activeSessions.add(id);
+            return created;
         } catch (FileAlreadyExistsException exception) {
             if (!workspaceCreated) {
                 throw failure(
@@ -137,6 +142,25 @@ public final class FileReportWorkspaceStore {
                     "Could not initialize report workspace",
                     exception);
         }
+    }
+
+    /**
+     * Removes workspaces whose session IDs trusted lifecycle state has confirmed abandoned.
+     *
+     * <p>The marker is evidence of product ownership, not authority to decide abandonment.
+     * Workspaces created by this live store instance are never removed. The bounded pass is
+     * deterministic and isolates failures so one quarantined workspace does not stop others.
+     */
+    public synchronized AbandonedWorkspaceCleanupResult cleanupAbandoned(
+            Set<ReportSessionId> abandonedSessionIds) {
+        Set<ReportSessionId> supplied =
+                Objects.requireNonNull(abandonedSessionIds, "abandonedSessionIds");
+        if (supplied.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("Abandoned session IDs must not contain null");
+        }
+        Set<ReportSessionId> requested = Set.copyOf(supplied);
+        return new AbandonedWorkspaceCleaner(root, files)
+                .cleanup(requested, Set.copyOf(activeSessions));
     }
 
     private ObservedDirectory ensureSafeRoot(ReportSessionId sessionId) {
