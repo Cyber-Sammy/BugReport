@@ -1,5 +1,6 @@
 package com.cybersammy.bugreport.core.workspace;
 
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import java.io.IOException;
 import java.io.Serial;
 import java.nio.channels.FileChannel;
@@ -18,11 +19,15 @@ final class WorkspaceGeneratedArtifactPublisher {
     private WorkspaceGeneratedArtifactPublisher() {}
 
     static PublishedArtifact publish(
-            ReportWorkspace workspace, String artifactName, ContentWriter writer)
+            ReportWorkspace workspace,
+            String artifactName,
+            ContentWriter writer,
+            CancellationSignal cancellation)
             throws IOException {
         Objects.requireNonNull(workspace, "workspace");
         Objects.requireNonNull(artifactName, "artifactName");
         Objects.requireNonNull(writer, "writer");
+        Objects.requireNonNull(cancellation, "cancellation");
         Path destination = directChild(workspace, artifactName);
         Path temporary = directChild(
                 workspace, "." + artifactName + "." + UUID.randomUUID() + ".part");
@@ -35,8 +40,10 @@ final class WorkspaceGeneratedArtifactPublisher {
                 temporaryIdentity = observeRegularFile(temporary, workspace.files());
                 cleanup.add(new OwnedEntry(temporary, temporaryIdentity));
                 result = Objects.requireNonNull(writer.write(output), "writer result");
+                requireNotCancelled(cancellation);
                 output.force(true);
             }
+            requireNotCancelled(cancellation);
             workspace.files().verifyPrivateFile(temporary);
             workspace.requireCurrentOwnership();
 
@@ -59,6 +66,7 @@ final class WorkspaceGeneratedArtifactPublisher {
                         GeneratedDiagnosticCode.WORKSPACE_CHANGED,
                         "Generated artifact reservation changed before publication");
             }
+            requireNotCancelled(cancellation);
             try {
                 workspace.files().replaceAtomically(temporary, destination);
             } catch (AtomicMoveNotSupportedException exception) {
@@ -77,8 +85,10 @@ final class WorkspaceGeneratedArtifactPublisher {
             }
             cleanup.clear();
             cleanup.add(new OwnedEntry(destination, publishedIdentity));
+            requireNotCancelled(cancellation);
             workspace.files().verifyPrivateFile(destination);
             workspace.requireCurrentOwnership();
+            requireNotCancelled(cancellation);
             cleanup.clear();
             return new PublishedArtifact(destination, publishedIdentity, result);
         } catch (IOException exception) {
@@ -101,6 +111,15 @@ final class WorkspaceGeneratedArtifactPublisher {
                         exception);
             }
             throw exception;
+        }
+    }
+
+    private static void requireNotCancelled(CancellationSignal cancellation)
+            throws PublicationException {
+        if (cancellation.isCancellationRequested()) {
+            throw new PublicationException(
+                    GeneratedDiagnosticCode.CANCELLED,
+                    "Generated artifact publication was cancelled");
         }
     }
 
