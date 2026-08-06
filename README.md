@@ -339,6 +339,22 @@ This contract constrains Bug Report orchestration and cooperating providers. It
 is not a JVM sandbox: an installed Java mod executes in the same process and can
 independently access APIs that are not exposed by Bug Report.
 
+Core executes an explicitly requested generator only after resolving it through
+the trusted registry and selected category. Each `emitText` or `emitJson` call
+is UTF-8 encoded under the tighter of provider and product ceilings, checks
+cancellation during output, computes SHA-256 while writing, and atomically
+publishes an owner-private `generated-<sha>.txt` or `.json` artifact. Duplicate
+IDs, representation mismatch, malformed Unicode, count or byte overflow,
+callback failure, and cancellation roll back every artifact from that
+invocation. Results expose canonical provenance and never expose local paths.
+Serious JVM `Error` values also trigger best-effort rollback but are rethrown
+unchanged; a rollback failure is retained as suppressed diagnostic context.
+
+The single-generator collector accepts the remaining report-wide byte budget.
+The next orchestration layer will schedule all category generators, apply
+execution-context time budgets, isolate their outcomes, and share progress with
+file collection.
+
 The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled
 until the bounded callback executor and review flow are implemented.
