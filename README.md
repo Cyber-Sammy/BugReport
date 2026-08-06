@@ -551,8 +551,8 @@ The pipeline reads from and writes to caller-owned streams. Orchestration must
 read only the exact artifacts in a current `ReviewedWorkspaceSnapshot`, write
 to a separate private temporary artifact, and atomically publish it only after
 successful sanitization. On stage failure, cancellation, I/O failure, or a
-product ceiling, the caller must discard partial output. Concrete privacy
-detectors and the workspace publication coordinator are subsequent M2 slices.
+product ceiling, the caller must discard partial output. The workspace
+publication coordinator remains a subsequent M2 slice.
 
 `HomeDirectoryMaskingStage` and `UsernameMaskingStage` provide the first
 product identity rules. Core never reads `user.home`, `user.name`, environment
@@ -575,6 +575,30 @@ automatic replacement would corrupt ordinary diagnostic text; orchestration
 must treat that configuration as unsupported rather than silently omit privacy
 protection. Inserted safe replacements are protected from all later stages, so
 a username such as `home` cannot rewrite `<home>`.
+
+`ProductSanitization.textPipeline(...)` assembles the complete ordered product
+policy. It detects email addresses, IPv4/IPv6 endpoints, context-labelled server
+addresses and session identifiers, bearer credentials, API keys, Discord/Slack
+webhooks, and known Minecraft access/client-token keys. Credential stages are
+classified `PROHIBITED`, always redact, and cannot be weakened by a custom
+profile. Detectors use bounded, context-aware syntax and intentionally avoid
+guessing arbitrary UUIDs, domains, or high-entropy strings.
+
+Three profiles are available per `LOG` or `CONFIGURATION` artifact policy:
+
+- `STANDARD` redacts high-confidence identity and every credential; ambiguous
+  network/server locations in logs remain visible with unresolved warnings;
+- `STRICT_PRIVACY` redacts every supported match;
+- `CUSTOM_REVIEW` uses caller-selected actions for non-prohibited stages and
+  defaults unspecified matches to unresolved warnings.
+
+Configuration policy redacts supported personal locations by default because
+key/value context makes them more likely to be durable user data. Binary
+content never enters the text pipeline: `assessBinary(...)` raises its privacy
+floor to `SENSITIVE` and keeps it excluded pending explicit review. A warning
+is not proof of safety or permission to package an artifact. All inserted
+replacement ranges are opaque to later stages, and findings never retain raw
+matched values.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
