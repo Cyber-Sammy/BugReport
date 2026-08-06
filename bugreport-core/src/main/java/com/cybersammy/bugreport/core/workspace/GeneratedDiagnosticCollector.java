@@ -39,30 +39,51 @@ public final class GeneratedDiagnosticCollector {
             ReportWorkspace workspace,
             CancellationSignal cancellation,
             long remainingCollectionBytes) {
-        GeneratedDiagnosticInvocation invocation = resolve(
+        return execute(prepare(
                 registry,
                 providerId,
                 categoryId,
                 generatorId,
                 side,
-                workspace);
+                workspace,
+                cancellation,
+                remainingCollectionBytes));
+    }
+
+    static GeneratedDiagnosticTask prepare(
+            ProviderRegistrySnapshot registry,
+            ProviderId providerId,
+            CategoryId categoryId,
+            DiagnosticGeneratorId generatorId,
+            SupportedSide side,
+            ReportWorkspace workspace,
+            CancellationSignal cancellation,
+            long remainingCollectionBytes) {
+        GeneratedDiagnosticInvocation invocation = resolve(
+                registry, providerId, categoryId, generatorId, side, workspace);
         if (remainingCollectionBytes < 0
                 || remainingCollectionBytes
                         > FileCollectionCoordinator.PRODUCT_MAX_COLLECTION_BYTES) {
             throw new IllegalArgumentException(
                     "Remaining collection bytes must be within the report product ceiling");
         }
-        CancellationSignal cancellationSignal =
-                Objects.requireNonNull(cancellation, "cancellation");
-        BoundedGeneratedDiagnosticSink sink = new BoundedGeneratedDiagnosticSink(
+        return new GeneratedDiagnosticTask(
                 invocation,
+                side,
                 workspace,
-                cancellationSignal,
+                Objects.requireNonNull(cancellation, "cancellation"),
                 remainingCollectionBytes);
+    }
+
+    static GeneratedDiagnosticResult execute(GeneratedDiagnosticTask task) {
+        GeneratedDiagnosticInvocation invocation = task.invocation();
+        ReportWorkspace workspace = task.workspace();
+        CancellationSignal cancellationSignal = task.cancellation();
+        BoundedGeneratedDiagnosticSink sink = task.sink();
         try {
             requireNotCancelled(invocation, workspace, cancellationSignal, null);
             invocation.generator().producer().generate(
-                    new GeneratedDiagnosticRequest(side, cancellationSignal), sink);
+                    new GeneratedDiagnosticRequest(task.side(), cancellationSignal), sink);
             return sink.finish();
         } catch (GeneratedSinkViolation exception) {
             throw sink.rollback(failure(
@@ -134,7 +155,7 @@ public final class GeneratedDiagnosticCollector {
                 cause);
     }
 
-    private static GeneratedDiagnosticInvocation resolve(
+    static GeneratedDiagnosticInvocation resolve(
             ProviderRegistrySnapshot registry,
             ProviderId providerId,
             CategoryId categoryId,

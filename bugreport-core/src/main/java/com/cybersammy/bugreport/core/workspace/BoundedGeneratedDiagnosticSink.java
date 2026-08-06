@@ -30,6 +30,9 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
     private long totalBytes;
     private GeneratedSinkViolation violation;
     private boolean closed;
+    private boolean completed;
+    private boolean rollbackAttempted;
+    private GeneratedDiagnosticException rollbackFailure;
 
     BoundedGeneratedDiagnosticSink(
             GeneratedDiagnosticInvocation invocation,
@@ -62,6 +65,7 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
         GeneratedDiagnosticCollector.requireNotCancelled(
                 invocation, workspace, cancellation, null);
         closed = true;
+        completed = true;
         return new GeneratedDiagnosticResult(
                 invocation.provider().id(),
                 invocation.provider().version(),
@@ -71,21 +75,40 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
                 totalBytes);
     }
 
-    GeneratedDiagnosticException rollback(GeneratedDiagnosticException original) {
+    synchronized GeneratedDiagnosticException rollback(GeneratedDiagnosticException original) {
+        Objects.requireNonNull(original, "original");
         closed = true;
+        if (rollbackAttempted) {
+            return rollbackFailure == null ? original : rollbackFailure;
+        }
+        rollbackAttempted = true;
         try {
             WorkspaceGeneratedArtifactPublisher.rollback(workspace, published);
+            published.clear();
             return original;
         } catch (IOException | RuntimeException exception) {
             original.addSuppressed(exception);
-            return GeneratedDiagnosticCollector.failure(
+            rollbackFailure = GeneratedDiagnosticCollector.failure(
                     GeneratedDiagnosticCode.ROLLBACK_FAILED,
                     invocation,
                     workspace,
                     original.artifactId().orElse(null),
                     "Generated artifacts could not be safely rolled back",
                     original);
+            return rollbackFailure;
         }
+    }
+
+    synchronized GeneratedDiagnosticException revoke(
+            GeneratedDiagnosticCode code, String message) {
+        if (completed) {
+            return null;
+        }
+        if (violation == null) {
+            violation = new GeneratedSinkViolation(code, null, message);
+        }
+        return rollback(GeneratedDiagnosticCollector.failure(
+                code, invocation, workspace, null, message, null));
     }
 
     private void emit(

@@ -350,10 +350,23 @@ invocation. Results expose canonical provenance and never expose local paths.
 Serious JVM `Error` values also trigger best-effort rollback but are rethrown
 unchanged; a rollback failure is retained as suppressed diagnostic context.
 
-The single-generator collector accepts the remaining report-wide byte budget.
-The next orchestration layer will schedule all category generators, apply
-execution-context time budgets, isolate their outcomes, and share progress with
-file collection.
+The category executor runs `WORKER` generators in canonical ID order on virtual
+threads. It applies the tighter of the declared callback timeout and the
+two-second product ceiling, revokes the sink before returning a timeout or
+cancellation outcome, rolls back that invocation, continues after an isolated
+ordinary provider failure, and charges only retained successful artifacts to
+the shared report byte budget. Each generator produces a typed collected,
+failed, timed-out, cancelled, budget-rejected, or execution-context-unavailable
+outcome. JVM `Error` values remain fatal after best-effort rollback.
+
+Timeout is an in-process containment boundary, not forced thread termination.
+Core interrupts the virtual worker and permanently closes its sink, so a
+callback that ignores interruption cannot publish late output through Bug
+Report. Java cannot forcibly terminate arbitrary mod code that ignores both
+interruption and the provided cancellation signal. `GAME_THREAD_SNAPSHOT`
+callbacks are therefore reported as execution-context unavailable until the
+platform game-thread handoff layer is installed; they are never silently run on
+a worker.
 
 The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled
