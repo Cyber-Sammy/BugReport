@@ -13,6 +13,7 @@ import com.cybersammy.bugreport.api.specification.ProviderSpecification;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
+import java.util.List;
 import java.util.Objects;
 
 /** Executes one trusted provider generator through a private bounded workspace sink. */
@@ -76,14 +77,33 @@ public final class GeneratedDiagnosticCollector {
     }
 
     static GeneratedDiagnosticResult execute(GeneratedDiagnosticTask task) {
+        return execute(task, sink -> task.invocation()
+                .generator()
+                .producer()
+                .generate(
+                        new GeneratedDiagnosticRequest(task.side(), task.cancellation()), sink));
+    }
+
+    static GeneratedDiagnosticResult executeCaptured(
+            GeneratedDiagnosticTask task, List<CapturedGeneratedEmission> emissions) {
+        List<CapturedGeneratedEmission> captured =
+                List.copyOf(Objects.requireNonNull(emissions, "emissions"));
+        return execute(task, sink -> {
+            for (CapturedGeneratedEmission emission : captured) {
+                emission.replay(sink);
+            }
+        });
+    }
+
+    private static GeneratedDiagnosticResult execute(
+            GeneratedDiagnosticTask task, GeneratedDiagnosticAction action) {
         GeneratedDiagnosticInvocation invocation = task.invocation();
         ReportWorkspace workspace = task.workspace();
         CancellationSignal cancellationSignal = task.cancellation();
         BoundedGeneratedDiagnosticSink sink = task.sink();
         try {
             requireNotCancelled(invocation, workspace, cancellationSignal, null);
-            invocation.generator().producer().generate(
-                    new GeneratedDiagnosticRequest(task.side(), cancellationSignal), sink);
+            action.execute(sink);
             return sink.finish();
         } catch (GeneratedSinkViolation exception) {
             throw sink.rollback(failure(
@@ -122,6 +142,11 @@ public final class GeneratedDiagnosticCollector {
             }
             throw error;
         }
+    }
+
+    @FunctionalInterface
+    private interface GeneratedDiagnosticAction {
+        void execute(BoundedGeneratedDiagnosticSink sink) throws Exception;
     }
 
     static void requireNotCancelled(

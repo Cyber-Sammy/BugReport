@@ -2,6 +2,8 @@ package com.cybersammy.bugreport.core.workspace;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,9 +35,13 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -204,6 +210,150 @@ final class CategoryGeneratedDiagnosticExecutorTest {
     }
 
     @Test
+    void asyncHandoffCapturesOnGameThreadAndPublishesFromWorker() throws Exception {
+        AtomicReference<Thread> callbackThread = new AtomicReference<>();
+        AtomicReference<Thread> characterReadThread = new AtomicReference<>();
+        CharSequence snapshotText = new CharSequence() {
+            @Override
+            public int length() {
+                return 4;
+            }
+
+            @Override
+            public char charAt(int index) {
+                characterReadThread.compareAndSet(null, Thread.currentThread());
+                return "safe".charAt(index);
+            }
+
+            @Override
+            public CharSequence subSequence(int start, int end) {
+                return "safe".subSequence(start, end);
+            }
+        };
+        Fixture fixture = fixture(generator(
+                "snapshot",
+                (request, sink) -> {
+                    callbackThread.set(Thread.currentThread());
+                    sink.emitText(GeneratedArtifactId.of("state"), snapshotText);
+                },
+                Duration.ofSeconds(1),
+                GeneratorExecutionContext.GAME_THREAD_SNAPSHOT));
+
+        try (ExecutorService gameThread = readySingleThreadExecutor()) {
+            CompletableFuture<CategoryGeneratedDiagnosticResult> execution =
+                    executeAsync(fixture, 1_000, command -> {
+                        gameThread.execute(command);
+                        return true;
+                    });
+            CategoryGeneratedDiagnosticResult result = execution.get(2, TimeUnit.SECONDS);
+
+            assertEquals(GeneratedDiagnosticOutcomeStatus.COLLECTED, result.outcomes().get(0).status());
+            assertEquals(4, result.retainedBytes());
+            assertSame(callbackThread.get(), characterReadThread.get());
+            assertTrue(callbackThread.get().getName().startsWith("bugreport-test-game-thread"));
+            assertFalse(callbackThread.get().isVirtual());
+            assertEquals(2, workspaceEntryCount(fixture.workspace()));
+        }
+    }
+
+    @Test
+    void asyncEntrypointKeepsWorkerGeneratorOffCallingThread() throws Exception {
+        Thread caller = Thread.currentThread();
+        AtomicReference<Thread> callbackThread = new AtomicReference<>();
+        Fixture fixture = fixture(generator(
+                "worker",
+                (request, sink) -> {
+                    callbackThread.set(Thread.currentThread());
+                    sink.emitText(GeneratedArtifactId.of("state"), "worker-data");
+                },
+                Duration.ofSeconds(1),
+                GeneratorExecutionContext.WORKER));
+
+        CategoryGeneratedDiagnosticResult result =
+                executeAsync(fixture, 1_000, command -> false).get(1, TimeUnit.SECONDS);
+
+        assertEquals(GeneratedDiagnosticOutcomeStatus.COLLECTED, result.outcomes().get(0).status());
+        assertNotSame(caller, callbackThread.get());
+        assertTrue(callbackThread.get().isVirtual());
+    }
+
+    @Test
+    void asyncHandoffReturnsTimeoutWhileCaptureRemainsBlocked() throws Exception {
+        CountDownLatch characterReadStarted = new CountDownLatch(1);
+        CountDownLatch allowCharacterRead = new CountDownLatch(1);
+        CountDownLatch callbackFinished = new CountDownLatch(1);
+        CharSequence blockingContent = new CharSequence() {
+            @Override
+            public int length() {
+                return 1;
+            }
+
+            @Override
+            public char charAt(int index) {
+                characterReadStarted.countDown();
+                awaitIgnoringInterrupts(allowCharacterRead);
+                return 'x';
+            }
+
+            @Override
+            public CharSequence subSequence(int start, int end) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        Fixture fixture = fixture(generator(
+                "snapshot",
+                (request, sink) -> {
+                    try {
+                        sink.emitText(GeneratedArtifactId.of("state"), blockingContent);
+                    } finally {
+                        callbackFinished.countDown();
+                    }
+                },
+                Duration.ofSeconds(1),
+                GeneratorExecutionContext.GAME_THREAD_SNAPSHOT));
+
+        try (ExecutorService gameThread = readySingleThreadExecutor()) {
+            long startedAt = System.nanoTime();
+            CategoryGeneratedDiagnosticResult result = executeAsync(
+                            fixture,
+                            1_000,
+                            command -> {
+                                gameThread.execute(command);
+                                return true;
+                            })
+                    .get(1, TimeUnit.SECONDS);
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            assertTrue(characterReadStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(elapsed.compareTo(Duration.ofMillis(500)) < 0, () -> "elapsed=" + elapsed);
+            assertEquals(GeneratedDiagnosticOutcomeStatus.TIMED_OUT, result.outcomes().get(0).status());
+            assertEquals(1, workspaceEntryCount(fixture.workspace()));
+
+            allowCharacterRead.countDown();
+            assertTrue(callbackFinished.await(1, TimeUnit.SECONDS));
+            assertEquals(1, workspaceEntryCount(fixture.workspace()));
+        }
+    }
+
+    @Test
+    void rejectedGameThreadDispatchIsTypedAndDoesNotInvokeProvider() throws Exception {
+        AtomicBoolean invoked = new AtomicBoolean();
+        Fixture fixture = fixture(generator(
+                "snapshot",
+                (request, sink) -> invoked.set(true),
+                Duration.ofSeconds(1),
+                GeneratorExecutionContext.GAME_THREAD_SNAPSHOT));
+
+        CategoryGeneratedDiagnosticResult result =
+                executeAsync(fixture, 1_000, command -> false).get(1, TimeUnit.SECONDS);
+
+        assertEquals(
+                GeneratedDiagnosticOutcomeStatus.EXECUTION_CONTEXT_UNAVAILABLE,
+                result.outcomes().get(0).status());
+        assertFalse(invoked.get());
+    }
+
+    @Test
     void cancellationSkipsEveryRemainingGenerator() throws IOException {
         AtomicBoolean invoked = new AtomicBoolean();
         Fixture fixture = fixture(
@@ -261,6 +411,19 @@ final class CategoryGeneratedDiagnosticExecutorTest {
                 fixture.workspace(),
                 CancellationSignal.neverCancelled(),
                 remainingBytes);
+    }
+
+    private CompletableFuture<CategoryGeneratedDiagnosticResult> executeAsync(
+            Fixture fixture, long remainingBytes, GameThreadDispatcher dispatcher) {
+        return CategoryGeneratedDiagnosticExecutor.executeAsync(
+                fixture.registry(),
+                PROVIDER_ID,
+                CATEGORY_ID,
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                CancellationSignal.neverCancelled(),
+                remainingBytes,
+                dispatcher);
     }
 
     private Fixture fixture(DiagnosticGeneratorSpecification... generators)
@@ -335,6 +498,18 @@ final class CategoryGeneratedDiagnosticExecutorTest {
         if (interrupted) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private static ExecutorService readySingleThreadExecutor() throws InterruptedException {
+        ExecutorService executor = Executors.newSingleThreadExecutor(
+                Thread.ofPlatform().name("bugreport-test-game-thread").factory());
+        CountDownLatch ready = new CountDownLatch(1);
+        executor.execute(ready::countDown);
+        if (!ready.await(1, TimeUnit.SECONDS)) {
+            executor.close();
+            throw new AssertionError("Game-thread fixture did not start");
+        }
+        return executor;
     }
 
     private static int workspaceEntryCount(ReportWorkspace workspace) throws IOException {

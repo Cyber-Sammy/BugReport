@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
 @Mod(BugReportMod.MOD_ID)
@@ -15,6 +16,8 @@ public final class BugReportMod {
     public BugReportMod(IEventBus modEventBus) {
         runtime = new BugReportRuntime();
         modEventBus.addListener(this::onCommonSetup);
+        NeoForge.EVENT_BUS.addListener(NeoForgeGameThreadDispatchers.shared()::onServerStarted);
+        NeoForge.EVENT_BUS.addListener(NeoForgeGameThreadDispatchers.shared()::onServerStopping);
     }
 
     private void onCommonSetup(FMLCommonSetupEvent event) {

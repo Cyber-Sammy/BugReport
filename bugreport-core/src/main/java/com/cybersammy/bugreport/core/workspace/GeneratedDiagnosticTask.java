@@ -10,6 +10,7 @@ final class GeneratedDiagnosticTask {
     private final SupportedSide side;
     private final ReportWorkspace workspace;
     private final CancellationSignal cancellation;
+    private final GeneratedDiagnosticLimits limits;
     private final BoundedGeneratedDiagnosticSink sink;
 
     GeneratedDiagnosticTask(
@@ -22,8 +23,9 @@ final class GeneratedDiagnosticTask {
         this.side = Objects.requireNonNull(side, "side");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
         this.cancellation = Objects.requireNonNull(cancellation, "cancellation");
-        sink = new BoundedGeneratedDiagnosticSink(
-                invocation, workspace, cancellation, remainingCollectionBytes);
+        limits = GeneratedDiagnosticLimits.from(
+                invocation.generator().constraints(), remainingCollectionBytes);
+        sink = new BoundedGeneratedDiagnosticSink(invocation, workspace, cancellation, limits);
     }
 
     GeneratedDiagnosticInvocation invocation() {
@@ -42,8 +44,16 @@ final class GeneratedDiagnosticTask {
         return cancellation;
     }
 
+    CancellationSignal effectiveCancellation() {
+        return () -> cancellation.isCancellationRequested() || sink.isRevoked();
+    }
+
     BoundedGeneratedDiagnosticSink sink() {
         return sink;
+    }
+
+    GeneratedDiagnosticLimits limits() {
+        return limits;
     }
 
     GeneratedDiagnosticCode requestRevocation(GeneratedDiagnosticCode code, String message) {
