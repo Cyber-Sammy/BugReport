@@ -10,15 +10,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.ByteBuffer;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -187,6 +192,147 @@ final class FileReportWorkspaceStoreTest {
         assertTrue(Files.exists(workspace.resolve("unexpected")));
     }
 
+    @Test
+    void removesOnlyExplicitlyConfirmedAbandonedWorkspaces() throws IOException {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        FileReportWorkspaceStore creator = new FileReportWorkspaceStore(root);
+        ReportWorkspace abandoned = creator.create(FIRST);
+        ReportWorkspace retained = creator.create(SECOND);
+        Path artifact = abandoned.directory().resolve("source-" + "a".repeat(64) + ".data");
+        try (FileChannel output = abandoned.files().openNewPrivateFile(artifact)) {
+            output.write(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+
+        AbandonedWorkspaceCleanupResult result =
+                new FileReportWorkspaceStore(root).cleanupAbandoned(Set.of(FIRST));
+
+        assertEquals(1, result.removedCount());
+        assertEquals(
+                AbandonedWorkspaceCleanupCode.REMOVED,
+                result.outcomes().getFirst().code());
+        assertFalse(Files.exists(abandoned.directory()));
+        assertTrue(Files.isDirectory(retained.directory()));
+    }
+
+    @Test
+    void refusesToRemoveWorkspaceActiveInThisStoreInstance() {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        FileReportWorkspaceStore store = new FileReportWorkspaceStore(root);
+        ReportWorkspace workspace = store.create(FIRST);
+
+        AbandonedWorkspaceCleanupResult result = store.cleanupAbandoned(Set.of(FIRST));
+
+        assertEquals(
+                AbandonedWorkspaceCleanupCode.ACTIVE_SESSION,
+                result.outcomes().getFirst().code());
+        assertTrue(Files.isDirectory(workspace.directory()));
+    }
+
+    @Test
+    void quarantinesInvalidMarkerAndUnknownEntryWithoutDeletingEither() throws IOException {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        FileReportWorkspaceStore creator = new FileReportWorkspaceStore(root);
+        ReportWorkspace invalidMarker = creator.create(FIRST);
+        ReportWorkspace unknownEntry = creator.create(SECOND);
+        Files.writeString(
+                invalidMarker.directory().resolve(FileReportWorkspaceStore.MARKER_FILENAME),
+                "invalid\n");
+        Path unknown = unknownEntry.directory().resolve("foreign.txt");
+        Files.writeString(unknown, "do not delete");
+
+        LinkedHashSet<ReportSessionId> reversed = new LinkedHashSet<>();
+        reversed.add(SECOND);
+        reversed.add(FIRST);
+        AbandonedWorkspaceCleanupResult result =
+                new FileReportWorkspaceStore(root).cleanupAbandoned(reversed);
+
+        assertEquals(List.of(FIRST, SECOND), result.outcomes().stream()
+                .map(AbandonedWorkspaceCleanupOutcome::sessionId)
+                .toList());
+        assertEquals(AbandonedWorkspaceCleanupCode.MARKER_INVALID, result.outcomes().get(0).code());
+        assertEquals(
+                AbandonedWorkspaceCleanupCode.UNEXPECTED_ENTRY,
+                result.outcomes().get(1).code());
+        assertTrue(Files.exists(invalidMarker.directory()));
+        assertEquals("do not delete", Files.readString(unknown));
+    }
+
+    @Test
+    void reportsMissingWorkspaceIdempotently() throws IOException {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        FileReportWorkspaceStore store = new FileReportWorkspaceStore(root);
+
+        AbandonedWorkspaceCleanupResult first = store.cleanupAbandoned(Set.of(FIRST));
+        store.create(SECOND);
+        AbandonedWorkspaceCleanupResult second = store.cleanupAbandoned(Set.of(FIRST));
+
+        assertEquals(AbandonedWorkspaceCleanupCode.NOT_FOUND, first.outcomes().getFirst().code());
+        assertEquals(AbandonedWorkspaceCleanupCode.NOT_FOUND, second.outcomes().getFirst().code());
+    }
+
+    @Test
+    void rejectsRedirectedArtifactWithoutFollowingOrDeletingIt() throws IOException {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        ReportWorkspace workspace = new FileReportWorkspaceStore(root).create(FIRST);
+        Path outside = temporaryDirectory.resolve("outside.txt");
+        Files.writeString(outside, "outside");
+        Path redirected = workspace.directory().resolve("source-" + "b".repeat(64) + ".data");
+        try {
+            Files.createSymbolicLink(redirected, outside);
+        } catch (UnsupportedOperationException | IOException | SecurityException exception) {
+            Assumptions.abort("Symbolic links are unavailable in this test environment");
+        }
+
+        AbandonedWorkspaceCleanupResult result =
+                new FileReportWorkspaceStore(root).cleanupAbandoned(Set.of(FIRST));
+
+        assertEquals(
+                AbandonedWorkspaceCleanupCode.WORKSPACE_UNSAFE,
+                result.outcomes().getFirst().code());
+        assertEquals("outside", Files.readString(outside));
+        assertTrue(Files.isSymbolicLink(redirected));
+    }
+
+    @Test
+    void quarantinesMarkerSubstitutionDuringRevalidation() throws IOException {
+        Path root = temporaryDirectory.resolve("workspaces").toAbsolutePath();
+        ReportWorkspace workspace = new FileReportWorkspaceStore(root).create(FIRST);
+        Path marker = workspace.directory().resolve(FileReportWorkspaceStore.MARKER_FILENAME);
+        AtomicInteger markerReads = new AtomicInteger();
+        WorkspaceFileOperations replacing = new DelegatingWorkspaceFileOperations() {
+            private boolean replaced;
+
+            @Override
+            public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                    throws IOException {
+                BasicFileAttributes attributes = super.readAttributes(path, followLinks);
+                return replaced && path.equals(marker) && !followLinks
+                        ? new ReplacedFileAttributes(attributes)
+                        : attributes;
+            }
+
+            @Override
+            public byte[] readBounded(Path path, int maximumBytes) throws IOException {
+                byte[] contents = super.readBounded(path, maximumBytes);
+                if (path.equals(marker) && markerReads.incrementAndGet() == 2) {
+                    Files.delete(marker);
+                    NioWorkspaceFileOperations.INSTANCE.writeNewPrivateMarker(marker, contents);
+                    replaced = true;
+                }
+                return contents;
+            }
+        };
+
+        AbandonedWorkspaceCleanupResult result =
+                new FileReportWorkspaceStore(root, replacing).cleanupAbandoned(Set.of(FIRST));
+
+        assertEquals(
+                AbandonedWorkspaceCleanupCode.ENTRY_CHANGED,
+                result.outcomes().getFirst().code());
+        assertTrue(Files.isDirectory(workspace.directory()));
+        assertTrue(Files.isRegularFile(marker));
+    }
+
     private static class DelegatingWorkspaceFileOperations
             implements WorkspaceFileOperations {
         @Override
@@ -255,6 +401,54 @@ final class FileReportWorkspaceStoreTest {
         @Override
         public boolean deleteIfExists(Path path) throws IOException {
             return NioWorkspaceFileOperations.INSTANCE.deleteIfExists(path);
+        }
+    }
+
+    private record ReplacedFileAttributes(BasicFileAttributes delegate)
+            implements BasicFileAttributes {
+        @Override
+        public FileTime lastModifiedTime() {
+            return delegate.lastModifiedTime();
+        }
+
+        @Override
+        public FileTime lastAccessTime() {
+            return delegate.lastAccessTime();
+        }
+
+        @Override
+        public FileTime creationTime() {
+            return delegate.creationTime();
+        }
+
+        @Override
+        public boolean isRegularFile() {
+            return delegate.isRegularFile();
+        }
+
+        @Override
+        public boolean isDirectory() {
+            return delegate.isDirectory();
+        }
+
+        @Override
+        public boolean isSymbolicLink() {
+            return delegate.isSymbolicLink();
+        }
+
+        @Override
+        public boolean isOther() {
+            return delegate.isOther();
+        }
+
+        @Override
+        public long size() {
+            return delegate.size();
+        }
+
+        @Override
+        public Object fileKey() {
+            return "replacement-file-key";
         }
     }
 }

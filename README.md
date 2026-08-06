@@ -512,8 +512,23 @@ SHA-256 fail closed. The resulting `ReviewedWorkspaceSnapshot` is path-free,
 canonically ordered, byte-bound, and has no public constructor. Later consumers
 must call `ReviewedWorkspaceSnapshotFactory.requireCurrent` before reading; a
 same-user process or in-process mod is not treated as a filesystem sandbox.
-Ownership-verified abandoned-workspace cleanup remains a separate lifecycle
-stage.
+Trusted lifecycle/history code authorizes abandoned-workspace cleanup with
+exact session IDs; Core never infers abandonment from directory age or from the
+marker alone:
+
+```java
+AbandonedWorkspaceCleanupResult cleanup =
+        workspaces.cleanupAbandoned(confirmedAbandonedSessionIds);
+```
+
+The bounded pass processes IDs in canonical order, refuses sessions created by
+the live store instance, validates every root component without following
+symlinks or junctions, and requires the exact versioned marker. Only canonical
+source, generated, and invocation-temporary artifact names are eligible for
+deletion. Unknown entries, changed identities, unsafe permissions, or
+filesystem redirection quarantine that workspace without blocking unrelated
+sessions. Partial failures remain explicit because recursive filesystem
+deletion cannot be transactional.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
