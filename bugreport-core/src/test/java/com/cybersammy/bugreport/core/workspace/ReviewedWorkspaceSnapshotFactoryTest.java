@@ -229,6 +229,38 @@ final class ReviewedWorkspaceSnapshotFactoryTest {
         fixture.workspace().beginMutation().close();
     }
 
+    @Test
+    void rejectsGeneratedArtifactOwnedByAnotherProvider() {
+        CollectedGeneratedArtifact artifact = generatedArtifact(
+                ProviderId.parse("other_mod"), CATEGORY_ID);
+
+        ReviewedWorkspaceSnapshotException failure = assertThrows(
+                ReviewedWorkspaceSnapshotException.class,
+                () -> ReviewedWorkspaceSnapshotFactory.validateGeneratedArtifact(
+                        session(), artifact));
+
+        assertEquals(ReviewedWorkspaceSnapshotCode.CATEGORY_MISMATCH, failure.code());
+        assertEquals(
+                "Generated artifact provenance does not match the reviewed session",
+                failure.getMessage());
+    }
+
+    @Test
+    void rejectsGeneratedArtifactOwnedByAnotherCategory() {
+        CollectedGeneratedArtifact artifact = generatedArtifact(
+                PROVIDER_ID, CategoryId.of("diagnostics"));
+
+        ReviewedWorkspaceSnapshotException failure = assertThrows(
+                ReviewedWorkspaceSnapshotException.class,
+                () -> ReviewedWorkspaceSnapshotFactory.validateGeneratedArtifact(
+                        session(), artifact));
+
+        assertEquals(ReviewedWorkspaceSnapshotCode.CATEGORY_MISMATCH, failure.code());
+        assertEquals(
+                "Generated artifact provenance does not match the reviewed session",
+                failure.getMessage());
+    }
+
     private Fixture fixture() throws IOException {
         ReportWorkspace workspace = new FileReportWorkspaceStore(
                         temporaryDirectory.resolve("workspaces").toAbsolutePath())
@@ -333,19 +365,7 @@ final class ReviewedWorkspaceSnapshotFactoryTest {
 
     private static CategoryGeneratedDiagnosticResult generatedResult() {
         DiagnosticGeneratorId generatorId = DiagnosticGeneratorId.of("runtime");
-        CollectedGeneratedArtifact artifact = new CollectedGeneratedArtifact(
-                GENERATED_NAME,
-                GeneratedArtifactId.of("state"),
-                GENERATED_BYTES.length,
-                checksum(GENERATED_BYTES),
-                PROVIDER_ID,
-                PROVIDER_VERSION,
-                CATEGORY_ID,
-                generatorId,
-                DiagnosticContentType.TEXT,
-                PrivacyClassification.PERSONAL,
-                ReportQualityRole.OPTIONAL,
-                InclusionDefault.EXCLUDED);
+        CollectedGeneratedArtifact artifact = generatedArtifact(PROVIDER_ID, CATEGORY_ID);
         GeneratedDiagnosticResult result = new GeneratedDiagnosticResult(
                 PROVIDER_ID,
                 PROVIDER_VERSION,
@@ -358,6 +378,23 @@ final class ReviewedWorkspaceSnapshotFactoryTest {
                 CATEGORY_ID,
                 List.of(GeneratedDiagnosticOutcome.collected(result)),
                 GENERATED_BYTES.length);
+    }
+
+    private static CollectedGeneratedArtifact generatedArtifact(
+            ProviderId providerId, CategoryId categoryId) {
+        return new CollectedGeneratedArtifact(
+                GENERATED_NAME,
+                GeneratedArtifactId.of("state"),
+                GENERATED_BYTES.length,
+                checksum(GENERATED_BYTES),
+                providerId,
+                PROVIDER_VERSION,
+                categoryId,
+                DiagnosticGeneratorId.of("runtime"),
+                DiagnosticContentType.TEXT,
+                PrivacyClassification.PERSONAL,
+                ReportQualityRole.OPTIONAL,
+                InclusionDefault.EXCLUDED);
     }
 
     private static SourceProvenance sourceProvenance() {

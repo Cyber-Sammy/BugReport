@@ -57,7 +57,9 @@ public final class ReviewedWorkspaceSnapshotFactory {
      *
      * <p>A successful snapshot closes product-owned mutation authority, but an in-process mod or
      * same-user process is not a filesystem sandbox. Consumers therefore fail closed when the
-     * sealed workspace no longer matches the reviewed checksums.
+     * sealed workspace no longer matches the reviewed checksums. A consumer must read only the
+     * artifact names carried by {@link ReviewedWorkspaceSnapshot#artifacts()} and must never
+     * archive the workspace directory by enumeration.
      */
     public static void requireCurrent(
             ReviewedWorkspaceSnapshot snapshot, ReportWorkspace workspace) {
@@ -250,30 +252,40 @@ public final class ReviewedWorkspaceSnapshotFactory {
                 .map(ReviewedWorkspaceArtifact.Generated::new)
                 .forEach(artifact -> {
                     CollectedGeneratedArtifact value = artifact.collected();
-                    DiagnosticGeneratorSpecification declaration = session
-                            .providerSpecification()
-                            .generators()
-                            .get(value.generatorId());
-                    if (!session.providerSpecification().version().equals(value.providerVersion())
-                            || !session.selectedCategory()
-                                    .orElseThrow()
-                                    .generatorIds()
-                                    .contains(value.generatorId())
-                            || declaration == null
-                            || declaration.contentType() != value.contentType()
-                            || declaration.privacy() != value.privacy()
-                            || declaration.qualityRole() != value.qualityRole()
-                            || declaration.inclusionDefault() != value.inclusionDefault()) {
-                        throw failure(
-                                ReviewedWorkspaceSnapshotCode.CATEGORY_MISMATCH,
-                                session.id(),
-                                value.artifactName(),
-                                "Generated artifact provider version does not match the session",
-                                null);
-                    }
+                    validateGeneratedArtifact(session, value);
                     addCollected(session, collected, artifact);
                 });
         return collected;
+    }
+
+    static void validateGeneratedArtifact(
+            ReportSessionSnapshot session, CollectedGeneratedArtifact value) {
+        ReportSessionSnapshot trustedSession = Objects.requireNonNull(session, "session");
+        CollectedGeneratedArtifact artifact = Objects.requireNonNull(value, "value");
+        var category = trustedSession.selectedCategory().orElseThrow();
+        DiagnosticGeneratorSpecification declaration = trustedSession
+                .providerSpecification()
+                .generators()
+                .get(artifact.generatorId());
+        if (!trustedSession.providerSpecification().id().equals(artifact.providerId())
+                || !trustedSession
+                        .providerSpecification()
+                        .version()
+                        .equals(artifact.providerVersion())
+                || !category.id().equals(artifact.categoryId())
+                || !category.generatorIds().contains(artifact.generatorId())
+                || declaration == null
+                || declaration.contentType() != artifact.contentType()
+                || declaration.privacy() != artifact.privacy()
+                || declaration.qualityRole() != artifact.qualityRole()
+                || declaration.inclusionDefault() != artifact.inclusionDefault()) {
+            throw failure(
+                    ReviewedWorkspaceSnapshotCode.CATEGORY_MISMATCH,
+                    trustedSession.id(),
+                    artifact.artifactName(),
+                    "Generated artifact provenance does not match the reviewed session",
+                    null);
+        }
     }
 
     private static void addCollected(
