@@ -101,46 +101,60 @@ public final class GeneratedDiagnosticCollector {
         ReportWorkspace workspace = task.workspace();
         CancellationSignal cancellationSignal = task.cancellation();
         BoundedGeneratedDiagnosticSink sink = task.sink();
+        WorkspaceMutationGate.Lease mutation;
         try {
-            requireNotCancelled(invocation, workspace, cancellationSignal, null);
-            action.execute(sink);
-            return sink.finish();
-        } catch (GeneratedSinkViolation exception) {
-            throw sink.rollback(failure(
-                    exception.code(),
-                    invocation,
-                    workspace,
-                    exception.artifactId(),
-                    exception.getMessage(),
-                    exception));
-        } catch (Exception exception) {
-            throw sink.rollback(failure(
-                    GeneratedDiagnosticCode.PROVIDER_FAILURE,
+            mutation = workspace.beginMutation();
+        } catch (WorkspaceMutationRejectedException exception) {
+            throw failure(
+                    GeneratedDiagnosticCode.WORKSPACE_CHANGED,
                     invocation,
                     workspace,
                     null,
-                    "Generated diagnostic provider callback failed",
-                    exception));
-        } catch (Error error) {
-            GeneratedDiagnosticException rollbackResult;
+                    "Report workspace no longer accepts generated artifacts",
+                    exception);
+        }
+        try (mutation) {
             try {
-                rollbackResult = sink.rollback(failure(
+                requireNotCancelled(invocation, workspace, cancellationSignal, null);
+                action.execute(sink);
+                return sink.finish();
+            } catch (GeneratedSinkViolation exception) {
+                throw sink.rollback(failure(
+                        exception.code(),
+                        invocation,
+                        workspace,
+                        exception.artifactId(),
+                        exception.getMessage(),
+                        exception));
+            } catch (Exception exception) {
+                throw sink.rollback(failure(
                         GeneratedDiagnosticCode.PROVIDER_FAILURE,
                         invocation,
                         workspace,
                         null,
                         "Generated diagnostic provider callback failed",
-                        null));
-            } catch (Error rollbackError) {
-                if (rollbackError != error) {
-                    error.addSuppressed(rollbackError);
+                        exception));
+            } catch (Error error) {
+                GeneratedDiagnosticException rollbackResult;
+                try {
+                    rollbackResult = sink.rollback(failure(
+                            GeneratedDiagnosticCode.PROVIDER_FAILURE,
+                            invocation,
+                            workspace,
+                            null,
+                            "Generated diagnostic provider callback failed",
+                            null));
+                } catch (Error rollbackError) {
+                    if (rollbackError != error) {
+                        error.addSuppressed(rollbackError);
+                    }
+                    throw error;
+                }
+                if (rollbackResult.code() == GeneratedDiagnosticCode.ROLLBACK_FAILED) {
+                    error.addSuppressed(rollbackResult);
                 }
                 throw error;
             }
-            if (rollbackResult.code() == GeneratedDiagnosticCode.ROLLBACK_FAILED) {
-                error.addSuppressed(rollbackResult);
-            }
-            throw error;
         }
     }
 
