@@ -51,7 +51,11 @@ public record ManifestEntry(
         Objects.requireNonNull(extensions, "extensions");
         validatePrivacy(effectivePrivacy, provenances);
         validateCollection(collectionStatus, provenances);
-        validateSanitization(contentType, sanitizationStatus, sanitizationFindings);
+        validateSanitization(
+                contentType,
+                effectivePrivacy,
+                sanitizationStatus,
+                sanitizationFindings);
     }
 
     @Override
@@ -130,10 +134,24 @@ public record ManifestEntry(
 
     private static void validateSanitization(
             DiagnosticContentType contentType,
+            PrivacyClassification effectivePrivacy,
             ManifestSanitizationStatus status,
             List<SanitizationFinding> findings) {
         boolean unresolved = findings.stream()
                 .anyMatch(finding -> finding.action() == SanitizationAction.UNRESOLVED_WARNING);
+        for (SanitizationFinding finding : findings) {
+            if (finding.action() != SanitizationAction.UNRESOLVED_WARNING) {
+                continue;
+            }
+            if (finding.classification() == PrivacyClassification.PROHIBITED) {
+                throw new IllegalArgumentException(
+                        "Prohibited sanitization findings cannot remain unresolved");
+            }
+            if (!effectivePrivacy.isAtLeast(finding.classification())) {
+                throw new IllegalArgumentException(
+                        "Manifest privacy cannot weaken unresolved sanitization findings");
+            }
+        }
         if (status == ManifestSanitizationStatus.NOT_REQUIRED && !findings.isEmpty()) {
             throw new IllegalArgumentException(
                     "Unsanitized manifest entries cannot contain sanitization findings");

@@ -318,6 +318,40 @@ final class ReportManifestJsonCodecTest {
                         PrivacyClassification.SENSITIVE,
                         ManifestSanitizationStatus.SANITIZED,
                         List.of(warning)));
+
+        SanitizationFinding sensitiveWarning = new SanitizationFinding(
+                "config.data",
+                new SanitizationStageId("server_address"),
+                1,
+                1,
+                10,
+                PrivacyClassification.SENSITIVE,
+                SanitizationAction.UNRESOLVED_WARNING);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> entry(
+                        "content/config.data",
+                        sensitive,
+                        PrivacyClassification.PERSONAL,
+                        ManifestSanitizationStatus.REVIEWED_WITH_WARNINGS,
+                        List.of(sensitiveWarning)));
+
+        SanitizationFinding prohibitedWarning = new SanitizationFinding(
+                "config.data",
+                new SanitizationStageId("credential"),
+                1,
+                1,
+                10,
+                PrivacyClassification.PROHIBITED,
+                SanitizationAction.UNRESOLVED_WARNING);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> entry(
+                        "content/config.data",
+                        sensitive,
+                        PrivacyClassification.SENSITIVE,
+                        ManifestSanitizationStatus.REVIEWED_WITH_WARNINGS,
+                        List.of(prohibitedWarning)));
     }
 
     @Test

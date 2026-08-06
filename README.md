@@ -610,6 +610,10 @@ minor version. The UTF-8 JSON boundary rejects duplicate members, malformed
 numbers, excessive nesting, oversized input, invalid identifiers, and
 non-canonical archive paths.
 
+`DecodedReportManifest.newerMinorVersion()` means that the known subset is safe
+to inspect; it does not promise a lossless proxy round-trip. Encoding always
+writes the current `1.0` schema and cannot preserve unknown future members.
+
 The manifest records the report and producer identity, optional exact provider
 target, physical environment, reviewed typed fields, capabilities, included
 entry sizes and SHA-256 checksums, collection and sanitization outcomes,
