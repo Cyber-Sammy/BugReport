@@ -347,6 +347,8 @@ publishes an owner-private `generated-<sha>.txt` or `.json` artifact. Duplicate
 IDs, representation mismatch, malformed Unicode, count or byte overflow,
 callback failure, and cancellation roll back every artifact from that
 invocation. Results expose canonical provenance and never expose local paths.
+Serious JVM `Error` values also trigger best-effort rollback but are rethrown
+unchanged; a rollback failure is retained as suppressed diagnostic context.
 
 The single-generator collector accepts the remaining report-wide byte budget.
 The next orchestration layer will schedule all category generators, apply

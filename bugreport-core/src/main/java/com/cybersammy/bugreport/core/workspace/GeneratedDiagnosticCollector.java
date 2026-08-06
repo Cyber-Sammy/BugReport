@@ -80,6 +80,26 @@ public final class GeneratedDiagnosticCollector {
                     null,
                     "Generated diagnostic provider callback failed",
                     exception));
+        } catch (Error error) {
+            GeneratedDiagnosticException rollbackResult;
+            try {
+                rollbackResult = sink.rollback(failure(
+                        GeneratedDiagnosticCode.PROVIDER_FAILURE,
+                        invocation,
+                        workspace,
+                        null,
+                        "Generated diagnostic provider callback failed",
+                        null));
+            } catch (Error rollbackError) {
+                if (rollbackError != error) {
+                    error.addSuppressed(rollbackError);
+                }
+                throw error;
+            }
+            if (rollbackResult.code() == GeneratedDiagnosticCode.ROLLBACK_FAILED) {
+                error.addSuppressed(rollbackResult);
+            }
+            throw error;
         }
     }
 

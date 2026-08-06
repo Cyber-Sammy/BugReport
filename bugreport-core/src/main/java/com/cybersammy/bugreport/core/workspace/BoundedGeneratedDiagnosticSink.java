@@ -76,7 +76,7 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
         try {
             WorkspaceGeneratedArtifactPublisher.rollback(workspace, published);
             return original;
-        } catch (IOException | SecurityException exception) {
+        } catch (IOException | RuntimeException exception) {
             original.addSuppressed(exception);
             return GeneratedDiagnosticCollector.failure(
                     GeneratedDiagnosticCode.ROLLBACK_FAILED,

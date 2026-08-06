@@ -30,9 +30,12 @@ import com.cybersammy.bugreport.core.registry.ProviderRegistry;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -243,6 +246,54 @@ final class GeneratedDiagnosticCollectorTest {
     }
 
     @Test
+    void callbackErrorAfterEmissionIsRethrownAfterRollback() throws IOException {
+        Fixture fixture = fixture(
+                DiagnosticContentType.TEXT,
+                (request, sink) -> {
+                    sink.emitText(GeneratedArtifactId.of("state"), "generated");
+                    throw new AssertionError("provider failure");
+                },
+                constraints(1, 100, 100),
+                SupportedSide.PHYSICAL_CLIENT);
+
+        AssertionError failure = assertThrows(AssertionError.class, () -> collect(fixture));
+
+        assertEquals("provider failure", failure.getMessage());
+        assertEquals(0, failure.getSuppressed().length);
+        assertOnlyMarker(fixture.workspace());
+    }
+
+    @Test
+    void callbackErrorPreservesRollbackFailureAsSuppressedInformation() throws IOException {
+        WorkspaceFileOperations failingRollback = new DelegatingWorkspaceFileOperations() {
+            @Override
+            public boolean deleteIfExists(Path path) throws IOException {
+                if (path.getFileName().toString().startsWith("generated-")) {
+                    throw new IOException("simulated rollback failure");
+                }
+                return super.deleteIfExists(path);
+            }
+        };
+        Fixture fixture = fixture(
+                DiagnosticContentType.TEXT,
+                (request, sink) -> {
+                    sink.emitText(GeneratedArtifactId.of("state"), "generated");
+                    throw new AssertionError("provider failure");
+                },
+                constraints(1, 100, 100),
+                SupportedSide.PHYSICAL_CLIENT,
+                failingRollback);
+
+        AssertionError failure = assertThrows(AssertionError.class, () -> collect(fixture));
+
+        assertEquals(1, failure.getSuppressed().length);
+        GeneratedDiagnosticException rollback =
+                (GeneratedDiagnosticException) failure.getSuppressed()[0];
+        assertEquals(GeneratedDiagnosticCode.ROLLBACK_FAILED, rollback.code());
+        assertEquals(2, workspaceEntryCount(fixture.workspace()));
+    }
+
+    @Test
     void rejectsUnsupportedPhysicalSideBeforeInvokingProvider() throws IOException {
         AtomicBoolean invoked = new AtomicBoolean();
         Fixture fixture = fixture(
@@ -357,6 +408,21 @@ final class GeneratedDiagnosticCollectorTest {
             CollectionConstraints constraints,
             SupportedSide generatorSide)
             throws IOException {
+        return fixture(
+                contentType,
+                producer,
+                constraints,
+                generatorSide,
+                NioWorkspaceFileOperations.INSTANCE);
+    }
+
+    private Fixture fixture(
+            DiagnosticContentType contentType,
+            GeneratedDiagnosticProducer producer,
+            CollectionConstraints constraints,
+            SupportedSide generatorSide,
+            WorkspaceFileOperations workspaceFiles)
+            throws IOException {
         DiagnosticGeneratorSpecification generator = DiagnosticGeneratorSpecification.builder(
                         GENERATOR_ID, producer)
                 .labelKey(LocalizationKey.of("example.generator.environment"))
@@ -383,7 +449,8 @@ final class GeneratedDiagnosticCollectorTest {
         ReportSessionId sessionId = ReportSessionId.parse(
                 "22222222-2222-2222-2222-" + String.format("%012d", Suffix.next()));
         ReportWorkspace workspace = new FileReportWorkspaceStore(
-                        temporaryDirectory.resolve("workspaces-" + Suffix.next()).toAbsolutePath())
+                        temporaryDirectory.resolve("workspaces-" + Suffix.next()).toAbsolutePath(),
+                        workspaceFiles)
                 .create(sessionId);
         return new Fixture(registry, workspace);
     }
@@ -443,6 +510,65 @@ final class GeneratedDiagnosticCollectorTest {
     }
 
     private record Fixture(ProviderRegistrySnapshot registry, ReportWorkspace workspace) {}
+
+    private static class DelegatingWorkspaceFileOperations
+            implements WorkspaceFileOperations {
+        @Override
+        public BasicFileAttributes readAttributes(Path path, boolean followLinks)
+                throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.readAttributes(path, followLinks);
+        }
+
+        @Override
+        public Path realPath(Path path, boolean followLinks) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.realPath(path, followLinks);
+        }
+
+        @Override
+        public FileStore fileStore(Path path) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.fileStore(path);
+        }
+
+        @Override
+        public void createPrivateDirectory(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.createPrivateDirectory(path);
+        }
+
+        @Override
+        public void writeNewPrivateMarker(Path path, byte[] contents) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.writeNewPrivateMarker(path, contents);
+        }
+
+        @Override
+        public FileChannel openNewPrivateFile(Path path) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.openNewPrivateFile(path);
+        }
+
+        @Override
+        public void verifyPrivateDirectory(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.verifyPrivateDirectory(path);
+        }
+
+        @Override
+        public void verifyPrivateFile(Path path) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.verifyPrivateFile(path);
+        }
+
+        @Override
+        public void replaceAtomically(Path source, Path target) throws IOException {
+            NioWorkspaceFileOperations.INSTANCE.replaceAtomically(source, target);
+        }
+
+        @Override
+        public byte[] readBounded(Path path, int maximumBytes) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.readBounded(path, maximumBytes);
+        }
+
+        @Override
+        public boolean deleteIfExists(Path path) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.deleteIfExists(path);
+        }
+    }
 
     private static final class Suffix {
         private static int value;
