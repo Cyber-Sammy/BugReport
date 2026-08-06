@@ -352,21 +352,25 @@ unchanged; a rollback failure is retained as suppressed diagnostic context.
 
 The category executor runs `WORKER` generators in canonical ID order on virtual
 threads. It applies the tighter of the declared callback timeout and the
-two-second product ceiling, revokes the sink before returning a timeout or
-cancellation outcome, rolls back that invocation, continues after an isolated
-ordinary provider failure, and charges only retained successful artifacts to
-the shared report byte budget. Each generator produces a typed collected,
-failed, timed-out, cancelled, budget-rejected, or execution-context-unavailable
-outcome. JVM `Error` values remain fatal after best-effort rollback.
+two-second product ceiling, atomically revokes the sink and interrupts its
+worker before returning a timeout or cancellation outcome, continues after an
+isolated ordinary provider failure, and charges only retained successful
+artifacts to the shared report byte budget. Each generator produces a typed
+collected, failed, timed-out, cancelled, budget-rejected, or
+execution-context-unavailable outcome. JVM `Error` values remain fatal after
+best-effort rollback.
 
 Timeout is an in-process containment boundary, not forced thread termination.
 Core interrupts the virtual worker and permanently closes its sink, so a
 callback that ignores interruption cannot publish late output through Bug
 Report. Java cannot forcibly terminate arbitrary mod code that ignores both
-interruption and the provided cancellation signal. `GAME_THREAD_SNAPSHOT`
-callbacks are therefore reported as execution-context unavailable until the
-platform game-thread handoff layer is installed; they are never silently run on
-a worker.
+interruption and the provided cancellation signal. If timeout occurs inside an
+active emission, the deadline path does not wait for the sink monitor: encoding
+and publication observe the lock-free revocation, final publication is denied,
+and the worker removes invocation-owned temporary or previously published
+artifacts after the active operation unwinds. `GAME_THREAD_SNAPSHOT` callbacks
+are reported as execution-context unavailable until the platform game-thread
+handoff layer is installed; they are never silently run on a worker.
 
 The current foundation validates and negotiates this declaration but does not
 advertise the runtime capability yet. Providers that declare it remain disabled

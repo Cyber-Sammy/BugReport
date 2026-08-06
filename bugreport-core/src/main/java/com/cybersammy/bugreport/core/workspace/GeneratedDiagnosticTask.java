@@ -46,7 +46,7 @@ final class GeneratedDiagnosticTask {
         return sink;
     }
 
-    GeneratedDiagnosticException revoke(GeneratedDiagnosticCode code, String message) {
-        return sink.revoke(code, message);
+    GeneratedDiagnosticCode requestRevocation(GeneratedDiagnosticCode code, String message) {
+        return sink.requestRevocation(code, message);
     }
 }

@@ -16,9 +16,14 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Transactional product-owned implementation of one generated diagnostic sink. */
 final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
+    private static final Object COMPLETED = new Object();
+
     private final GeneratedDiagnosticInvocation invocation;
     private final ReportWorkspace workspace;
     private final CancellationSignal cancellation;
@@ -27,10 +32,11 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
             new TreeMap<>();
     private final List<WorkspaceGeneratedArtifactPublisher.PublishedArtifact> published =
             new ArrayList<>();
+    private final AtomicInteger activeEmissions = new AtomicInteger();
+    private final AtomicBoolean externallyRevoked = new AtomicBoolean();
+    private final AtomicBoolean revocationRollbackScheduled = new AtomicBoolean();
     private long totalBytes;
-    private GeneratedSinkViolation violation;
-    private boolean closed;
-    private boolean completed;
+    private final AtomicReference<Object> terminal = new AtomicReference<>();
     private boolean rollbackAttempted;
     private GeneratedDiagnosticException rollbackFailure;
 
@@ -47,25 +53,29 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
     }
 
     @Override
-    public synchronized void emitText(GeneratedArtifactId id, CharSequence content) {
+    public void emitText(GeneratedArtifactId id, CharSequence content) {
         Objects.requireNonNull(content, "content");
-        emit(id, DiagnosticContentType.TEXT, output -> GeneratedContentEncoder.writeText(
-                output, content, outputLimits(), cancellation));
+        emitSynchronized(id, DiagnosticContentType.TEXT, output ->
+                GeneratedContentEncoder.writeText(
+                        output, content, outputLimits(), effectiveCancellation()));
     }
 
     @Override
-    public synchronized void emitJson(GeneratedArtifactId id, ExtensionMetadata content) {
+    public void emitJson(GeneratedArtifactId id, ExtensionMetadata content) {
         Objects.requireNonNull(content, "content");
-        emit(id, DiagnosticContentType.JSON, output -> GeneratedContentEncoder.writeJson(
-                output, content, outputLimits(), cancellation));
+        emitSynchronized(id, DiagnosticContentType.JSON, output ->
+                GeneratedContentEncoder.writeJson(
+                        output, content, outputLimits(), effectiveCancellation()));
     }
 
     synchronized GeneratedDiagnosticResult finish() {
         requireUsable(null);
         GeneratedDiagnosticCollector.requireNotCancelled(
                 invocation, workspace, cancellation, null);
-        closed = true;
-        completed = true;
+        if (!terminal.compareAndSet(null, COMPLETED)) {
+            requireUsable(null);
+            throw new IllegalStateException("Generated diagnostic sink completion raced");
+        }
         return new GeneratedDiagnosticResult(
                 invocation.provider().id(),
                 invocation.provider().version(),
@@ -77,7 +87,13 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
 
     synchronized GeneratedDiagnosticException rollback(GeneratedDiagnosticException original) {
         Objects.requireNonNull(original, "original");
-        closed = true;
+        terminal.compareAndSet(
+                null,
+                new GeneratedSinkViolation(
+                        original.code(),
+                        original.artifactId().orElse(null),
+                        original.getMessage(),
+                        original));
         if (rollbackAttempted) {
             return rollbackFailure == null ? original : rollbackFailure;
         }
@@ -99,16 +115,48 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
         }
     }
 
-    synchronized GeneratedDiagnosticException revoke(
+    GeneratedDiagnosticCode requestRevocation(
             GeneratedDiagnosticCode code, String message) {
-        if (completed) {
+        if (!terminal.compareAndSet(
+                null, new GeneratedSinkViolation(code, null, message))) {
             return null;
         }
-        if (violation == null) {
-            violation = new GeneratedSinkViolation(code, null, message);
+        externallyRevoked.set(true);
+        scheduleRevocationRollbackIfIdle();
+        return code;
+    }
+
+    private void emitSynchronized(
+            GeneratedArtifactId artifactId,
+            DiagnosticContentType representation,
+            WorkspaceGeneratedArtifactPublisher.ContentWriter writer) {
+        activeEmissions.incrementAndGet();
+        try {
+            synchronized (this) {
+                emit(artifactId, representation, writer);
+            }
+        } finally {
+            if (activeEmissions.decrementAndGet() == 0) {
+                scheduleRevocationRollbackIfIdle();
+            }
         }
-        return rollback(GeneratedDiagnosticCollector.failure(
-                code, invocation, workspace, null, message, null));
+    }
+
+    private void scheduleRevocationRollbackIfIdle() {
+        Object state = terminal.get();
+        if (!externallyRevoked.get()
+                || activeEmissions.get() != 0
+                || !(state instanceof GeneratedSinkViolation violation)
+                || !revocationRollbackScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        Thread.startVirtualThread(() -> rollback(GeneratedDiagnosticCollector.failure(
+                violation.code(),
+                invocation,
+                workspace,
+                violation.artifactId(),
+                violation.getMessage(),
+                violation)));
     }
 
     private void emit(
@@ -140,8 +188,10 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
         String artifactName = artifactName(id, representation);
         try {
             WorkspaceGeneratedArtifactPublisher.PublishedArtifact stored =
-                    WorkspaceGeneratedArtifactPublisher.publish(workspace, artifactName, writer);
+                    WorkspaceGeneratedArtifactPublisher.publish(
+                            workspace, artifactName, writer, effectiveCancellation());
             published.add(stored);
+            requireUsable(id);
             WorkspaceGeneratedArtifactPublisher.WriteResult result = stored.result();
             totalBytes = Math.addExact(totalBytes, result.byteCount());
             artifacts.put(id, metadata(artifactName, id, result, representation));
@@ -186,10 +236,11 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
     }
 
     private void requireUsable(GeneratedArtifactId artifactId) {
-        if (violation != null) {
+        Object state = terminal.get();
+        if (state instanceof GeneratedSinkViolation violation) {
             throw violation;
         }
-        if (closed) {
+        if (state == COMPLETED) {
             throw new GeneratedSinkViolation(
                     GeneratedDiagnosticCode.PROVIDER_FAILURE,
                     artifactId,
@@ -209,8 +260,19 @@ final class BoundedGeneratedDiagnosticSink implements GeneratedDiagnosticSink {
             GeneratedArtifactId artifactId,
             String message,
             Throwable cause) {
-        violation = new GeneratedSinkViolation(code, artifactId, message, cause);
-        throw violation;
+        GeneratedSinkViolation proposed =
+                new GeneratedSinkViolation(code, artifactId, message, cause);
+        terminal.compareAndSet(null, proposed);
+        Object state = terminal.get();
+        if (state instanceof GeneratedSinkViolation violation) {
+            throw violation;
+        }
+        throw proposed;
+    }
+
+    private CancellationSignal effectiveCancellation() {
+        return () -> cancellation.isCancellationRequested()
+                || terminal.get() instanceof GeneratedSinkViolation;
     }
 
     private String artifactName(

@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -121,12 +122,64 @@ final class CategoryGeneratedDiagnosticExecutorTest {
         assertEquals(
                 GeneratedDiagnosticCode.CALLBACK_TIMED_OUT,
                 result.outcomes().get(0).failureCode().orElseThrow());
-        assertEquals(1, workspaceEntryCount(fixture.workspace()));
+        awaitWorkspaceEntryCount(fixture.workspace(), 1);
 
         allowLateEmission.countDown();
         assertTrue(callbackFinished.await(1, TimeUnit.SECONDS));
         assertTrue(lateEmissionRejected.get());
-        assertEquals(1, workspaceEntryCount(fixture.workspace()));
+        awaitWorkspaceEntryCount(fixture.workspace(), 1);
+    }
+
+    @Test
+    void timeoutReturnsWhileProviderIsBlockedInsideTextEmission() throws Exception {
+        CountDownLatch characterReadStarted = new CountDownLatch(1);
+        CountDownLatch allowCharacterRead = new CountDownLatch(1);
+        CountDownLatch callbackFinished = new CountDownLatch(1);
+        CharSequence blockingContent = new CharSequence() {
+            @Override
+            public int length() {
+                return 1;
+            }
+
+            @Override
+            public char charAt(int index) {
+                characterReadStarted.countDown();
+                awaitIgnoringInterrupts(allowCharacterRead);
+                return 'x';
+            }
+
+            @Override
+            public CharSequence subSequence(int start, int end) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        DiagnosticGeneratorSpecification generator = generator(
+                "blocked_emit",
+                (request, sink) -> {
+                    try {
+                        sink.emitText(GeneratedArtifactId.of("blocked"), blockingContent);
+                    } finally {
+                        callbackFinished.countDown();
+                    }
+                },
+                Duration.ofMillis(250),
+                GeneratorExecutionContext.WORKER);
+        Fixture fixture = fixture(generator);
+
+        long startedAt = System.nanoTime();
+        CategoryGeneratedDiagnosticResult result = execute(fixture, 1_000);
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        assertTrue(characterReadStarted.await(1, TimeUnit.SECONDS));
+        assertTrue(elapsed.compareTo(Duration.ofSeconds(1)) < 0, () -> "elapsed=" + elapsed);
+        assertEquals(GeneratedDiagnosticOutcomeStatus.TIMED_OUT, result.outcomes().get(0).status());
+        assertEquals(
+                GeneratedDiagnosticCode.CALLBACK_TIMED_OUT,
+                result.outcomes().get(0).failureCode().orElseThrow());
+
+        allowCharacterRead.countDown();
+        assertTrue(callbackFinished.await(1, TimeUnit.SECONDS));
+        awaitWorkspaceEntryCount(fixture.workspace(), 1);
     }
 
     @Test
@@ -288,6 +341,15 @@ final class CategoryGeneratedDiagnosticExecutorTest {
         try (var entries = Files.list(workspace.directory())) {
             return Math.toIntExact(entries.count());
         }
+    }
+
+    private static void awaitWorkspaceEntryCount(ReportWorkspace workspace, int expected)
+            throws IOException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (workspaceEntryCount(workspace) != expected && System.nanoTime() < deadline) {
+            LockSupport.parkNanos(Duration.ofMillis(1).toNanos());
+        }
+        assertEquals(expected, workspaceEntryCount(workspace));
     }
 
     private record Fixture(ProviderRegistrySnapshot registry, ReportWorkspace workspace) {}

@@ -163,8 +163,8 @@ public final class CategoryGeneratedDiagnosticExecutor {
             GeneratedDiagnosticOutcomeStatus status,
             GeneratedDiagnosticCode code,
             String message) {
-        GeneratedDiagnosticException revoked = task.revoke(code, message);
-        if (revoked == null) {
+        GeneratedDiagnosticCode revocationCode = task.requestRevocation(code, message);
+        if (revocationCode == null) {
             try {
                 return GeneratedDiagnosticOutcome.collected(future.get());
             } catch (InterruptedException exception) {
@@ -180,7 +180,7 @@ public final class CategoryGeneratedDiagnosticExecutor {
         }
         future.cancel(true);
         return GeneratedDiagnosticOutcome.failed(
-                task.invocation().generator().id(), status, revoked.code());
+                task.invocation().generator().id(), status, revocationCode);
     }
 
     private static GeneratedDiagnosticOutcome completedFailure(
