@@ -221,6 +221,18 @@ final class FileReportWorkspaceStoreTest {
         }
 
         @Override
+        public FileChannel openExistingPrivateFile(Path path) throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.openExistingPrivateFile(path);
+        }
+
+        @Override
+        public java.util.List<Path> listDirectChildren(Path directory, int maximumEntries)
+                throws IOException {
+            return NioWorkspaceFileOperations.INSTANCE.listDirectChildren(
+                    directory, maximumEntries);
+        }
+
+        @Override
         public void verifyPrivateDirectory(Path path) throws IOException {
             NioWorkspaceFileOperations.INSTANCE.verifyPrivateDirectory(path);
         }

@@ -500,8 +500,20 @@ enforces the same ceiling again against actual streamed bytes. Progress counts
 processed bytes, including work later discarded after a failed file, and is not
 a retained-workspace-size guarantee. Generated and deferred outputs must join
 this aggregate budget before complete category collection may advance the
-session to sanitization. Reviewed snapshots and ownership-verified abandoned-
-workspace cleanup remain separate lifecycle stages.
+session to sanitization.
+
+`ReviewedWorkspaceSnapshotFactory` accepts only a `REVIEW_REQUIRED` session,
+its matching file/generated collection results, and the exact artifact names
+chosen during review. It terminally seals the workspace, rejects new Core write
+authority, waits up to two seconds for already-started publication and rollback
+operations, and quarantines the workspace when quiescence cannot be proven.
+Unknown workspace entries, mismatched provenance, changed identity, size, or
+SHA-256 fail closed. The resulting `ReviewedWorkspaceSnapshot` is path-free,
+canonically ordered, byte-bound, and has no public constructor. Later consumers
+must call `ReviewedWorkspaceSnapshotFactory.requireCurrent` before reading; a
+same-user process or in-process mod is not treated as a filesystem sandbox.
+Ownership-verified abandoned-workspace cleanup remains a separate lifecycle
+stage.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and

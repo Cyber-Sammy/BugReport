@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -21,6 +22,7 @@ import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -121,6 +123,31 @@ final class NioWorkspaceFileOperations implements WorkspaceFileOperations {
             }
             throw exception;
         }
+    }
+
+    @Override
+    public FileChannel openExistingPrivateFile(Path path) throws IOException {
+        return FileChannel.open(
+                path,
+                Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+    }
+
+    @Override
+    public List<Path> listDirectChildren(Path directory, int maximumEntries)
+            throws IOException {
+        if (maximumEntries < 0) {
+            throw new IllegalArgumentException("Maximum directory entries must be non-negative");
+        }
+        List<Path> entries = new ArrayList<>(Math.min(maximumEntries, 64));
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+            for (Path entry : stream) {
+                if (entries.size() == maximumEntries) {
+                    throw new IOException("Workspace contains more entries than expected");
+                }
+                entries.add(entry);
+            }
+        }
+        return List.copyOf(entries);
     }
 
     @Override

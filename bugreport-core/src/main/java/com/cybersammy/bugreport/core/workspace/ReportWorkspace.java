@@ -6,6 +6,7 @@ import java.nio.file.FileStore;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -17,6 +18,7 @@ public final class ReportWorkspace {
     private final FileStore fileStore;
     private final EntryIdentity directoryIdentity;
     private final EntryIdentity markerIdentity;
+    private final WorkspaceMutationGate mutations = new WorkspaceMutationGate();
 
     ReportWorkspace(
             ReportSessionId sessionId,
@@ -63,6 +65,18 @@ public final class ReportWorkspace {
 
     WorkspaceFileOperations files() {
         return files;
+    }
+
+    WorkspaceMutationGate.Lease beginMutation() {
+        return mutations.begin();
+    }
+
+    void seal(Duration timeout) throws WorkspaceQuiescenceException {
+        mutations.seal(timeout);
+    }
+
+    boolean sealed() {
+        return mutations.sealed();
     }
 
     void requireCurrentOwnership() throws IOException {

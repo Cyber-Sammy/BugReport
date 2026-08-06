@@ -84,6 +84,34 @@ public final class WorkspaceSourceCollector {
             CancellationSignal cancellation,
             CopyChunkHook hook) {
         PlannedSourceFile source = Objects.requireNonNull(planned, "planned");
+        ReportWorkspace destinationWorkspace = Objects.requireNonNull(workspace, "workspace");
+        WorkspaceMutationGate.Lease mutation;
+        try {
+            mutation = destinationWorkspace.beginMutation();
+        } catch (WorkspaceMutationRejectedException exception) {
+            throw failure(
+                    SourceCopyCode.WORKSPACE_CHANGED,
+                    source,
+                    destinationWorkspace,
+                    "Report workspace no longer accepts collected artifacts",
+                    exception);
+        }
+        try {
+            return collectWithMutation(
+                    source, roots, destinationWorkspace, sourceReads, cancellation, hook);
+        } finally {
+            mutation.close();
+        }
+    }
+
+    private static CollectedSourceFile collectWithMutation(
+            PlannedSourceFile planned,
+            ApprovedSourceRoots roots,
+            ReportWorkspace workspace,
+            SourceReadOperations sourceReads,
+            CancellationSignal cancellation,
+            CopyChunkHook hook) {
+        PlannedSourceFile source = Objects.requireNonNull(planned, "planned");
         ApprovedSourceRoots approvedRoots = Objects.requireNonNull(roots, "roots");
         ReportWorkspace destinationWorkspace = Objects.requireNonNull(workspace, "workspace");
         SourceReadOperations readOperations = Objects.requireNonNull(sourceReads, "sourceReads");
