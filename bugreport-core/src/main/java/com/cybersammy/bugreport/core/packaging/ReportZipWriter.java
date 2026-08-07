@@ -22,7 +22,6 @@ import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
-import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
@@ -237,6 +236,7 @@ public final class ReportZipWriter {
                         "Report archive destination is not a safe canonical path",
                         null);
             }
+            requirePrivateOutputSupport(parent);
             if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
                 throw failure(
                         ReportZipCode.OUTPUT_ALREADY_EXISTS,
@@ -247,6 +247,12 @@ public final class ReportZipWriter {
             return target;
         } catch (ReportZipException exception) {
             throw exception;
+        } catch (PrivateOutputUnsupportedException exception) {
+            throw failure(
+                    ReportZipCode.PRIVATE_OUTPUT_UNSUPPORTED,
+                    null,
+                    "Report archive destination cannot prove owner-only access",
+                    exception);
         } catch (IOException | SecurityException exception) {
             throw failure(
                     ReportZipCode.INVALID_DESTINATION,
@@ -258,8 +264,9 @@ public final class ReportZipWriter {
 
     private static Path createPrivateTemporary(Path parent) throws IOException {
         FileStore store = Files.getFileStore(parent);
+        PrivateArchivePermissionModel model = PrivateArchivePermissionModel.select(store);
         Path path;
-        if (store.supportsFileAttributeView(PosixFileAttributeView.class)) {
+        if (model == PrivateArchivePermissionModel.POSIX) {
             path = Files.createTempFile(
                     parent,
                     ".bugreport-",
@@ -269,7 +276,7 @@ public final class ReportZipWriter {
             path = Files.createTempFile(parent, ".bugreport-", ".part");
         }
         try {
-            enforcePrivateFile(path, store);
+            enforcePrivateFile(path, model);
             return path;
         } catch (IOException | RuntimeException exception) {
             try {
@@ -281,8 +288,9 @@ public final class ReportZipWriter {
         }
     }
 
-    private static void enforcePrivateFile(Path path, FileStore store) throws IOException {
-        if (store.supportsFileAttributeView(PosixFileAttributeView.class)) {
+    private static void enforcePrivateFile(Path path, PrivateArchivePermissionModel model)
+            throws IOException {
+        if (model == PrivateArchivePermissionModel.POSIX) {
             Set<PosixFilePermission> permissions =
                     Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS);
             if (!permissions.equals(PRIVATE_FILE_PERMISSIONS)) {
@@ -290,7 +298,7 @@ public final class ReportZipWriter {
             }
             return;
         }
-        if (store.supportsFileAttributeView(AclFileAttributeView.class)) {
+        if (model == PrivateArchivePermissionModel.ACL) {
             AclFileAttributeView view = Files.getFileAttributeView(
                     path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
             if (view == null) {
@@ -316,7 +324,16 @@ public final class ReportZipWriter {
                 || !path.equals(path.toRealPath())) {
             throw new IOException("Published report archive is not a safe regular file");
         }
-        enforcePrivateFile(path, Files.getFileStore(path));
+        enforcePrivateFile(path, PrivateArchivePermissionModel.select(Files.getFileStore(path)));
+    }
+
+    private static void requirePrivateOutputSupport(Path directory)
+            throws IOException, PrivateOutputUnsupportedException {
+        try {
+            PrivateArchivePermissionModel.select(Files.getFileStore(directory));
+        } catch (IOException exception) {
+            throw new PrivateOutputUnsupportedException(exception);
+        }
     }
 
     private static void verifyOwnerOnlyAcl(AclFileAttributeView view, UserPrincipal owner)
@@ -468,6 +485,14 @@ public final class ReportZipWriter {
             if (length > maximum - written) {
                 throw new IOException("Encoded report archive exceeds the product limit");
             }
+        }
+    }
+
+    private static final class PrivateOutputUnsupportedException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private PrivateOutputUnsupportedException(IOException cause) {
+            super(cause.getMessage(), cause);
         }
     }
 }

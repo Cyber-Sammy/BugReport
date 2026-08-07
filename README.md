@@ -668,7 +668,10 @@ bounded chunks. ZIP entries use fixed metadata and canonical plan order, so
 identical inputs produce byte-identical archives. The writer creates an
 owner-only sibling temporary file, never overwrites an existing destination,
 and publishes only a complete validated archive through an atomic no-replace
-filesystem link. Failure or cancellation removes the temporary output.
+filesystem link. The destination filesystem must prove owner-only file access
+through POSIX permissions or ACLs; filesystems without either supported model
+are rejected before the temporary archive is created. Failure or cancellation
+removes the temporary output.
 
 `ReportZipValidator` is a separate bounded read pass over the finished archive.
 It rejects invalid ZIP structure, unsafe absolute or traversal names,

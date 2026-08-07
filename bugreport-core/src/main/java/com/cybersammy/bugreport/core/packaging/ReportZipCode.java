@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.core.packaging;
 /** Stable reason for rejecting ZIP creation, validation, or publication. */
 public enum ReportZipCode {
     INVALID_DESTINATION,
+    PRIVATE_OUTPUT_UNSUPPORTED,
     OUTPUT_ALREADY_EXISTS,
     PLAN_LIMIT_EXCEEDED,
     SNAPSHOT_CHANGED,
