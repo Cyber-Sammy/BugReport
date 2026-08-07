@@ -49,6 +49,14 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
+import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
+import com.cybersammy.bugreport.core.transport.LocalExportConsent;
+import com.cybersammy.bugreport.core.transport.LocalZipTransport;
+import com.cybersammy.bugreport.core.transport.ReportTransportRequest;
+import com.cybersammy.bugreport.core.transport.ReportTransportResult;
+import com.cybersammy.bugreport.core.transport.TransportFailureCode;
+import com.cybersammy.bugreport.core.transport.TransportProgressSnapshot;
+import com.cybersammy.bugreport.core.transport.TransportRunControl;
 import java.io.OutputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
@@ -277,6 +285,29 @@ final class ReportPackagePlanFactoryTest {
     }
 
     @Test
+    void progressCallbackErrorRollsBackTemporaryArchiveAndPreservesTheError() throws Exception {
+        Fixture fixture = fixture();
+        Path destination = temporaryDirectory.resolve("callback-error.bugreport.zip");
+
+        AssertionError failure = assertThrows(
+                AssertionError.class,
+                () -> ReportZipWriter.write(
+                        plan(fixture, false),
+                        fixture.workspace(),
+                        destination,
+                        CancellationSignal.neverCancelled(),
+                        progress -> {
+                            throw new AssertionError("listener failure");
+                        }));
+
+        assertEquals("listener failure", failure.getMessage());
+        assertFalse(Files.exists(destination));
+        try (var children = Files.list(temporaryDirectory)) {
+            assertTrue(children.noneMatch(path -> path.getFileName().toString().endsWith(".part")));
+        }
+    }
+
+    @Test
     void validatorRejectsTraversalBeforePlanMatching() throws Exception {
         Fixture fixture = fixture();
         ReportPackagePlan plan = plan(fixture, false);
@@ -344,6 +375,124 @@ final class ReportPackagePlanFactoryTest {
         ReportZipException sizeFailure = assertThrows(
                 ReportZipException.class, () -> ReportZipValidator.validate(oversized, plan));
         assertEquals(ReportZipCode.VALIDATION_MISMATCH, sizeFailure.code());
+    }
+
+    @Test
+    void localTransportExportsOnlyAuthorizedPlanAndPublishesTerminalProgress() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, true);
+        LocalArchiveDestination destination = new LocalArchiveDestination(
+                temporaryDirectory.resolve("transport-success.bugreport.zip"));
+        LocalExportConsent consent = LocalExportConsent.approve(plan, destination);
+        TransportRunControl control = new TransportRunControl();
+
+        ReportTransportResult result = new LocalZipTransport().execute(
+                new ReportTransportRequest(plan, fixture.workspace(), destination, consent),
+                control);
+
+        assertEquals(ReportTransportResult.Status.SUCCESS, result.status());
+        assertEquals(consent.attemptId(), result.attemptId());
+        assertEquals(LocalZipTransport.ID, result.transportId());
+        assertTrue(result.archive().isPresent());
+        assertEquals(Optional.empty(), result.failureCode());
+        assertTrue(Files.isRegularFile(destination.path()));
+        assertEquals(result.archive().orElseThrow(), ReportZipValidator.validate(destination.path(), plan));
+        TransportProgressSnapshot progress = control.progress();
+        assertEquals(TransportProgressSnapshot.State.COMPLETE, progress.state());
+        assertEquals(plan.entries().size(), progress.completedEntries());
+        assertEquals(plan.totalUncompressedBytes(), progress.processedBytes());
+        assertFalse(new LocalZipTransport().descriptor().networkAccess());
+        assertFalse(new LocalZipTransport().descriptor().authenticationRequired());
+    }
+
+    @Test
+    void mismatchedPlanOrDestinationCannotConsumeConsent() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan approvedPlan = plan(fixture, false);
+        ReportPackagePlan otherPlan = plan(fixture, true);
+        LocalArchiveDestination approvedDestination = new LocalArchiveDestination(
+                temporaryDirectory.resolve("approved.bugreport.zip"));
+        LocalArchiveDestination otherDestination = new LocalArchiveDestination(
+                temporaryDirectory.resolve("other.bugreport.zip"));
+        LocalExportConsent consent =
+                LocalExportConsent.approve(approvedPlan, approvedDestination);
+
+        ReportTransportResult wrongPlan = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        otherPlan, fixture.workspace(), approvedDestination, consent),
+                new TransportRunControl());
+        ReportTransportResult wrongDestination = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        approvedPlan, fixture.workspace(), otherDestination, consent),
+                new TransportRunControl());
+        ReportTransportResult accepted = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        approvedPlan, fixture.workspace(), approvedDestination, consent),
+                new TransportRunControl());
+
+        assertEquals(
+                Optional.of(TransportFailureCode.CONSENT_MISMATCH),
+                wrongPlan.failureCode());
+        assertEquals(
+                Optional.of(TransportFailureCode.CONSENT_MISMATCH),
+                wrongDestination.failureCode());
+        assertFalse(Files.exists(otherDestination.path()));
+        assertEquals(ReportTransportResult.Status.SUCCESS, accepted.status());
+    }
+
+    @Test
+    void retryRequiresFreshConsentAndReusesTheSamePackagePlan() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        LocalArchiveDestination destination = new LocalArchiveDestination(
+                temporaryDirectory.resolve("retry.bugreport.zip"));
+        Files.writeString(destination.path(), "existing", StandardCharsets.UTF_8);
+        LocalExportConsent firstConsent = LocalExportConsent.approve(plan, destination);
+
+        ReportTransportResult first = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        plan, fixture.workspace(), destination, firstConsent),
+                new TransportRunControl());
+        Files.delete(destination.path());
+        ReportTransportResult reused = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        plan, fixture.workspace(), destination, firstConsent),
+                new TransportRunControl());
+        LocalExportConsent retryConsent = LocalExportConsent.approve(plan, destination);
+        ReportTransportResult retry = new LocalZipTransport().execute(
+                new ReportTransportRequest(
+                        plan, fixture.workspace(), destination, retryConsent),
+                new TransportRunControl());
+
+        assertEquals(ReportTransportResult.Status.FAILED, first.status());
+        assertEquals(Optional.of(TransportFailureCode.ZIP_FAILED), first.failureCode());
+        assertEquals(Optional.of(ReportZipCode.OUTPUT_ALREADY_EXISTS), first.zipCode());
+        assertEquals(
+                Optional.of(TransportFailureCode.CONSENT_ALREADY_USED),
+                reused.failureCode());
+        assertEquals(ReportTransportResult.Status.SUCCESS, retry.status());
+        assertEquals(plan.entries().size(), retry.archive().orElseThrow().entryCount());
+    }
+
+    @Test
+    void cancellationIsTypedAndPublishesNoArchive() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        LocalArchiveDestination destination = new LocalArchiveDestination(
+                temporaryDirectory.resolve("cancelled-transport.bugreport.zip"));
+        LocalExportConsent consent = LocalExportConsent.approve(plan, destination);
+        TransportRunControl control = new TransportRunControl();
+        assertTrue(control.requestCancellation());
+
+        ReportTransportResult result = new LocalZipTransport().execute(
+                new ReportTransportRequest(plan, fixture.workspace(), destination, consent),
+                control);
+
+        assertEquals(ReportTransportResult.Status.CANCELLED, result.status());
+        assertEquals(Optional.of(TransportFailureCode.CANCELLED), result.failureCode());
+        assertEquals(TransportProgressSnapshot.State.CANCELLED, control.progress().state());
+        assertFalse(Files.exists(destination.path()));
+        assertFalse(control.requestCancellation());
     }
 
     private static ReportPackagePlan plan(Fixture fixture, boolean markdown) {

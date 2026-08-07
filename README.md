@@ -682,6 +682,30 @@ Validation and export perform blocking filesystem I/O and must run off the UI
 and game threads. A validated local archive still does not grant network
 delivery consent.
 
+### Restricted local transport
+
+`ReportTransport` is an internal first-party separation boundary, not a public
+provider or runtime plugin SPI. Its initial implementation, `LocalZipTransport`,
+has no network or authentication authority and can only export a validated ZIP
+to a user-selected local destination. It receives the already prepared package
+plan and sealed workspace; it never recollects source files or changes reviewed
+package contents.
+
+Every export requires a fresh `LocalExportConsent` issued only after the UI or
+headless caller has displayed the exact package, transport, and destination and
+received explicit user confirmation. Consent is bound to the canonical package
+plan fingerprint, transport ID, and normalized destination, and is consumed by
+one attempt. A failed export may be retried with the same immutable plan, but
+requires new consent; changing the plan or destination also requires new
+consent. Mismatched consent does not authorize or consume an otherwise valid
+attempt.
+
+The transport exposes typed success, cancellation, and failure results plus
+monotonic entry/byte progress. Cancellation and ZIP failures remove partial
+output, existing destinations are never overwritten, and progress bytes mean
+uncompressed bytes processed during the attempt. Transport execution performs
+blocking filesystem I/O and must run off the UI and game threads.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
