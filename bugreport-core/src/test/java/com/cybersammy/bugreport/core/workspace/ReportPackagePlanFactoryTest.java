@@ -15,6 +15,7 @@ import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.FieldId;
 import com.cybersammy.bugreport.api.identifier.GeneratedArtifactId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
@@ -36,8 +37,15 @@ import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanCode;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanException;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
+import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
+import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
+import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
+import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
+import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +57,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -61,7 +71,10 @@ final class ReportPackagePlanFactoryTest {
     private static final CategoryId CATEGORY_ID = CategoryId.of("general");
     private static final String ARTIFACT_NAME = "source-" + "1".repeat(64) + ".data";
     private static final String GENERATED_NAME = "generated-" + "2".repeat(64) + ".json";
-    private static final byte[] ARTIFACT_BYTES = "reviewed log\n".getBytes(StandardCharsets.UTF_8);
+    private static final String RAW_ARTIFACT_TEXT =
+            "Authorization: Bearer secret_token_123456\n";
+    private static final byte[] ARTIFACT_BYTES =
+            "Authorization: <bearer-token>\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] GENERATED_BYTES = "{\"safe\":true}".getBytes(StandardCharsets.UTF_8);
 
     @TempDir Path temporaryDirectory;
@@ -69,12 +82,12 @@ final class ReportPackagePlanFactoryTest {
     @Test
     void createsDeterministicPlanBoundToCurrentReviewedBytes() throws Exception {
         Fixture fixture = fixture();
-        ReportManifest manifest = manifest(checksum(ARTIFACT_BYTES));
+        ReportManifest manifest = manifest(fixture, checksum(ARTIFACT_BYTES));
 
         ReportPackagePlan first = ReportPackagePlanFactory.create(
-                fixture.snapshot(), fixture.workspace(), manifest, true);
+                fixture.prepared(), fixture.workspace(), manifest, true);
         ReportPackagePlan repeated = ReportPackagePlanFactory.create(
-                fixture.snapshot(), fixture.workspace(), manifest, true);
+                fixture.prepared(), fixture.workspace(), manifest, true);
 
         assertEquals(
                 List.of(
@@ -99,6 +112,10 @@ final class ReportPackagePlanFactoryTest {
         assertTrue(markdown.contains("&lt;script&gt;"));
         assertTrue(markdown.contains("\\# heading"));
         assertFalse(markdown.contains("<script>"));
+        assertFalse(Files.readString(
+                        fixture.workspace().directory().resolve(ARTIFACT_NAME),
+                        StandardCharsets.UTF_8)
+                .contains("secret_token_123456"));
 
         byte[] mutableCopy = first.manifestDocument();
         mutableCopy[0] = 0;
@@ -108,12 +125,13 @@ final class ReportPackagePlanFactoryTest {
     @Test
     void rejectsManifestIdentityAndEntryMetadataOutsideReviewedSnapshot() throws Exception {
         Fixture fixture = fixture();
-        ReportManifest wrongEntry = manifest(checksum("different".getBytes(StandardCharsets.UTF_8)));
+        ReportManifest wrongEntry =
+                manifest(fixture, checksum("different".getBytes(StandardCharsets.UTF_8)));
 
         ReportPackagePlanException entryFailure = assertThrows(
                 ReportPackagePlanException.class,
                 () -> ReportPackagePlanFactory.create(
-                        fixture.snapshot(), fixture.workspace(), wrongEntry, false));
+                        fixture.prepared(), fixture.workspace(), wrongEntry, false));
         assertEquals(ReportPackagePlanCode.ENTRY_MISMATCH, entryFailure.code());
         assertEquals(Optional.of(ARTIFACT_NAME), entryFailure.artifactName());
         assertFalse(entryFailure.getMessage().contains(fixture.workspace().directory().toString()));
@@ -121,12 +139,13 @@ final class ReportPackagePlanFactoryTest {
         ReportManifest wrongReport = manifestBuilder(
                         ReportSessionId.parse("22222222-2222-4222-8222-222222222222"))
                 .entries(List.of(
-                        manifestEntry(checksum(ARTIFACT_BYTES)), generatedManifestEntry()))
+                        manifestEntry(fixture, checksum(ARTIFACT_BYTES)),
+                        generatedManifestEntry(fixture)))
                 .build();
         ReportPackagePlanException identityFailure = assertThrows(
                 ReportPackagePlanException.class,
                 () -> ReportPackagePlanFactory.create(
-                        fixture.snapshot(), fixture.workspace(), wrongReport, false));
+                        fixture.prepared(), fixture.workspace(), wrongReport, false));
         assertEquals(ReportPackagePlanCode.SNAPSHOT_MISMATCH, identityFailure.code());
     }
 
@@ -134,7 +153,10 @@ final class ReportPackagePlanFactoryTest {
     void changedWorkspaceCannotProduceAnotherPlan() throws Exception {
         Fixture fixture = fixture();
         ReportPackagePlanFactory.create(
-                fixture.snapshot(), fixture.workspace(), manifest(checksum(ARTIFACT_BYTES)), false);
+                fixture.prepared(),
+                fixture.workspace(),
+                manifest(fixture, checksum(ARTIFACT_BYTES)),
+                false);
         Files.writeString(
                 fixture.workspace().directory().resolve(ARTIFACT_NAME),
                 "changed bytes",
@@ -143,19 +165,39 @@ final class ReportPackagePlanFactoryTest {
         ReviewedWorkspaceSnapshotException failure = assertThrows(
                 ReviewedWorkspaceSnapshotException.class,
                 () -> ReportPackagePlanFactory.create(
-                        fixture.snapshot(),
+                        fixture.prepared(),
                         fixture.workspace(),
-                        manifest(checksum(ARTIFACT_BYTES)),
+                        manifest(fixture, checksum(ARTIFACT_BYTES)),
                         false));
         assertEquals(ReviewedWorkspaceSnapshotCode.ARTIFACT_CHANGED, failure.code());
     }
 
+    @Test
+    void ordinarySnapshotCannotClaimSanitizedWithoutTrustedEvidence() throws Exception {
+        Fixture fixture = fixture();
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                () -> PreparedWorkspaceSnapshotFactory.issue(
+                        fixture.snapshot(),
+                        Map.of(GENERATED_NAME, fixture.generatedSanitization()),
+                        Set.of()));
+
+        assertEquals("Text artifact requires trusted sanitization evidence", failure.getMessage());
+    }
+
     private Fixture fixture() throws Exception {
+        Sanitized source = sanitize(ARTIFACT_NAME, RAW_ARTIFACT_TEXT);
+        Sanitized generated = sanitize(GENERATED_NAME, new String(
+                GENERATED_BYTES, StandardCharsets.UTF_8));
+        assertArrayEquals(ARTIFACT_BYTES, source.output().getBytes(StandardCharsets.UTF_8));
         ReportWorkspace workspace = new FileReportWorkspaceStore(
                         temporaryDirectory.resolve("workspaces").toAbsolutePath())
                 .create(SESSION_ID);
-        writePrivate(workspace, ARTIFACT_NAME, ARTIFACT_BYTES);
-        writePrivate(workspace, GENERATED_NAME, GENERATED_BYTES);
+        writePrivate(
+                workspace, ARTIFACT_NAME, source.output().getBytes(StandardCharsets.UTF_8));
+        writePrivate(
+                workspace, GENERATED_NAME, generated.output().getBytes(StandardCharsets.UTF_8));
         workspace.seal(Duration.ofSeconds(1));
         ReviewedWorkspaceArtifact sourceArtifact = new ReviewedWorkspaceArtifact.Source(
                 new CollectedSourceFile(
@@ -190,12 +232,19 @@ final class ReportPackagePlanFactoryTest {
                 List.of(generatedArtifact, sourceArtifact),
                 ARTIFACT_BYTES.length + GENERATED_BYTES.length,
                 checksum("snapshot".getBytes(StandardCharsets.UTF_8)));
-        return new Fixture(workspace, snapshot);
+        PreparedWorkspaceSnapshot prepared = PreparedWorkspaceSnapshotFactory.issue(
+                snapshot,
+                Map.of(
+                        ARTIFACT_NAME, source.result(),
+                        GENERATED_NAME, generated.result()),
+                Set.of());
+        return new Fixture(workspace, snapshot, prepared, generated.result());
     }
 
-    private static ReportManifest manifest(Sha256Checksum checksum) {
+    private static ReportManifest manifest(Fixture fixture, Sha256Checksum checksum) {
         return manifestBuilder(SESSION_ID)
-                .entries(List.of(manifestEntry(checksum), generatedManifestEntry()))
+                .entries(List.of(
+                        manifestEntry(fixture, checksum), generatedManifestEntry(fixture)))
                 .build();
     }
 
@@ -215,17 +264,21 @@ final class ReportPackagePlanFactoryTest {
                         .build());
     }
 
-    private static ManifestEntry manifestEntry(Sha256Checksum checksum) {
+    private static ManifestEntry manifestEntry(Fixture fixture, Sha256Checksum checksum) {
+        PreparedWorkspaceArtifact prepared = fixture.prepared().artifacts().stream()
+                .filter(artifact -> artifact.artifact().artifactName().equals(ARTIFACT_NAME))
+                .findFirst()
+                .orElseThrow();
         return new ManifestEntry(
                 "content/" + ARTIFACT_NAME,
                 ARTIFACT_BYTES.length,
                 checksum,
                 DiagnosticContentType.TEXT,
                 Optional.of("text/plain"),
-                PrivacyClassification.PERSONAL,
+                prepared.effectivePrivacy(),
                 ReportQualityRole.RECOMMENDED,
                 ManifestCollectionStatus.SOURCE_COLLECTED,
-                ManifestSanitizationStatus.SANITIZED,
+                prepared.sanitizationStatus(),
                 List.of(ManifestEntryProvenance.source(
                         PROVIDER_ID,
                         PROVIDER_VERSION,
@@ -233,29 +286,48 @@ final class ReportPackagePlanFactoryTest {
                         DiagnosticSourceId.of("latest_log"),
                         DiagnosticSourceKind.EXACT_FILE,
                         PrivacyClassification.PERSONAL)),
-                List.of(),
+                prepared.sanitizationFindings(),
                 ExtensionMetadata.empty());
     }
 
-    private static ManifestEntry generatedManifestEntry() {
+    private static ManifestEntry generatedManifestEntry(Fixture fixture) {
+        PreparedWorkspaceArtifact prepared = fixture.prepared().artifacts().stream()
+                .filter(artifact -> artifact.artifact().artifactName().equals(GENERATED_NAME))
+                .findFirst()
+                .orElseThrow();
         return new ManifestEntry(
                 "content/" + GENERATED_NAME,
                 GENERATED_BYTES.length,
                 checksum(GENERATED_BYTES),
                 DiagnosticContentType.JSON,
                 Optional.of("application/json"),
-                PrivacyClassification.LOW,
+                prepared.effectivePrivacy(),
                 ReportQualityRole.OPTIONAL,
                 ManifestCollectionStatus.GENERATOR_COMPLETED,
-                ManifestSanitizationStatus.NOT_REQUIRED,
+                prepared.sanitizationStatus(),
                 List.of(ManifestEntryProvenance.generator(
                         PROVIDER_ID,
                         PROVIDER_VERSION,
                         CATEGORY_ID,
                         DiagnosticGeneratorId.of("runtime"),
                         PrivacyClassification.LOW)),
-                List.of(),
+                prepared.sanitizationFindings(),
                 ExtensionMetadata.empty());
+    }
+
+    private static Sanitized sanitize(String artifactName, String input) {
+        StringWriter output = new StringWriter();
+        SanitizationResult result = ProductSanitization.textPipeline(
+                        SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
+                        "C:\\Users\\Alice",
+                        "Alice",
+                        SanitizationCaseSensitivity.INSENSITIVE)
+                .sanitize(
+                        artifactName,
+                        new StringReader(input),
+                        output,
+                        CancellationSignal.neverCancelled());
+        return new Sanitized(output.toString(), result);
     }
 
     private static SourceProvenance sourceProvenance() {
@@ -292,5 +364,11 @@ final class ReportPackagePlanFactoryTest {
         }
     }
 
-    private record Fixture(ReportWorkspace workspace, ReviewedWorkspaceSnapshot snapshot) {}
+    private record Sanitized(String output, SanitizationResult result) {}
+
+    private record Fixture(
+            ReportWorkspace workspace,
+            ReviewedWorkspaceSnapshot snapshot,
+            PreparedWorkspaceSnapshot prepared,
+            SanitizationResult generatedSanitization) {}
 }

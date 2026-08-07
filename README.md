@@ -630,13 +630,16 @@ reviewed workspace artifacts named by it.
 
 ### Deterministic package plan
 
-`ReportPackagePlanFactory` is the only construction boundary for a package
-plan. It revalidates the sealed workspace, requires the exact report/provider/
-version/category identity, and matches every manifest content entry against
-the reviewed snapshot's artifact name, byte count, SHA-256, content type,
-privacy floor, quality role, collection kind, and full source/generator
-provenance. Missing, extra, stale, or mismatched artifacts fail closed with a
-path-safe typed error.
+`ReportPackagePlanFactory` accepts only a factory-issued
+`PreparedWorkspaceSnapshot`, never an ordinary reviewed snapshot plus a
+caller-selected sanitization enum. The prepared snapshot retains the exact
+final reviewed artifact identity together with trusted sanitization results or
+explicit binary/warning review. Plan creation revalidates the sealed workspace,
+requires the exact report/provider/version/category identity, and matches every
+manifest content entry against byte count, SHA-256, content type, effective
+privacy, quality role, collection kind, sanitization status/findings, and full
+source/generator provenance. Missing evidence, extra, stale, or mismatched
+artifacts fail closed with a path-safe typed error.
 
 The plan fixes archive order as `manifest.json`, optional `report.md`, then
 canonical `content/*` entries. Paths are lowercase, normalized, bounded, and
@@ -648,13 +651,14 @@ form values. Rendering is deterministic, UTF-8, limited to 1 MiB, normalizes
 line endings, and escapes Markdown punctuation and inline HTML. It is a human
 summary, not an authority or a replacement for `manifest.json`.
 
-The package plan binds caller-supplied sanitization/review metadata to the
-exact reviewed bytes, but it does not independently rerun sanitizers or grant
-delivery consent. The future lifecycle coordinator remains responsible for
-constructing the manifest from successful sanitization and explicit review.
-The ZIP writer must revalidate the snapshot immediately before streaming.
-Streaming ZIP creation and independent archive validation are the next M2
-slices.
+The internal prepared-snapshot issuing boundary is intentionally unavailable
+to arbitrary manifest callers. The future workspace sanitization coordinator
+will issue it only while publishing the exact final bytes produced by the
+trusted product pipeline and recording explicit review. Until that coordinator
+exists, production package planning has no bypass path. A plan still does not
+grant delivery consent, and the ZIP writer must revalidate its underlying
+reviewed snapshot immediately before streaming. Streaming ZIP creation and
+independent archive validation are the next M2 slices.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and

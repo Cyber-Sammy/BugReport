@@ -8,6 +8,8 @@ import com.cybersammy.bugreport.core.manifest.ReportManifest;
 import com.cybersammy.bugreport.core.manifest.ReportManifestJsonCodec;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
 import com.cybersammy.bugreport.core.workspace.CollectedGeneratedArtifact;
+import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
+import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
 import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
 import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceSnapshot;
@@ -34,16 +36,18 @@ public final class ReportPackagePlanFactory {
      * {@link ReviewedWorkspaceSnapshotFactory#requireCurrent} again immediately before streaming.
      */
     public static ReportPackagePlan create(
-            ReviewedWorkspaceSnapshot snapshot,
+            PreparedWorkspaceSnapshot preparedSnapshot,
             ReportWorkspace workspace,
             ReportManifest manifest,
             boolean includeMarkdown) {
-        ReviewedWorkspaceSnapshot reviewed = Objects.requireNonNull(snapshot, "snapshot");
+        PreparedWorkspaceSnapshot prepared =
+                Objects.requireNonNull(preparedSnapshot, "preparedSnapshot");
+        ReviewedWorkspaceSnapshot reviewed = prepared.reviewedSnapshot();
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         ReportManifest portable = Objects.requireNonNull(manifest, "manifest");
         ReviewedWorkspaceSnapshotFactory.requireCurrent(reviewed, trustedWorkspace);
         validateIdentity(reviewed, portable);
-        validateEntries(reviewed, portable);
+        validateEntries(prepared, portable);
 
         byte[] manifestBytes = ReportManifestJsonCodec.encode(portable);
         byte[] markdownBytes = includeMarkdown ? ReportMarkdownRenderer.render(portable) : null;
@@ -52,7 +56,8 @@ public final class ReportPackagePlanFactory {
         if (markdownBytes != null) {
             entries.add(inline("report.md", PackagePlanEntryKind.MARKDOWN, markdownBytes));
         }
-        for (ReviewedWorkspaceArtifact artifact : reviewed.artifacts()) {
+        for (PreparedWorkspaceArtifact preparedArtifact : prepared.artifacts()) {
+            ReviewedWorkspaceArtifact artifact = preparedArtifact.artifact();
             entries.add(new PackagePlanEntry(
                     "content/" + artifact.artifactName(),
                     PackagePlanEntryKind.WORKSPACE_ARTIFACT,
@@ -61,7 +66,7 @@ public final class ReportPackagePlanFactory {
                     java.util.Optional.of(artifact.artifactName())));
         }
         return new ReportPackagePlan(
-                reviewed, portable, manifestBytes, markdownBytes, entries);
+                prepared, portable, manifestBytes, markdownBytes, entries);
     }
 
     private static void validateIdentity(
@@ -84,7 +89,7 @@ public final class ReportPackagePlanFactory {
     }
 
     private static void validateEntries(
-            ReviewedWorkspaceSnapshot snapshot, ReportManifest manifest) {
+            PreparedWorkspaceSnapshot snapshot, ReportManifest manifest) {
         Map<String, ManifestEntry> manifestEntries = new TreeMap<>();
         manifest.entries().forEach(entry -> manifestEntries.put(entry.archivePath(), entry));
         if (manifestEntries.size() != snapshot.artifacts().size()) {
@@ -93,9 +98,10 @@ public final class ReportPackagePlanFactory {
                     null,
                     "Manifest and reviewed snapshot entry sets differ");
         }
-        for (ReviewedWorkspaceArtifact artifact : snapshot.artifacts()) {
+        for (PreparedWorkspaceArtifact prepared : snapshot.artifacts()) {
+            ReviewedWorkspaceArtifact artifact = prepared.artifact();
             ManifestEntry entry = manifestEntries.get("content/" + artifact.artifactName());
-            if (entry == null || !matchesArtifact(entry, artifact)) {
+            if (entry == null || !matchesArtifact(entry, prepared)) {
                 throw mismatch(
                         ReportPackagePlanCode.ENTRY_MISMATCH,
                         artifact.artifactName(),
@@ -105,11 +111,14 @@ public final class ReportPackagePlanFactory {
     }
 
     private static boolean matchesArtifact(
-            ManifestEntry entry, ReviewedWorkspaceArtifact artifact) {
+            ManifestEntry entry, PreparedWorkspaceArtifact prepared) {
+        ReviewedWorkspaceArtifact artifact = prepared.artifact();
         if (entry.uncompressedBytes() != artifact.byteCount()
                 || !entry.checksum().equals(artifact.checksum())
                 || entry.contentType() != artifact.contentType()
-                || !entry.effectivePrivacy().isAtLeast(artifact.privacy())
+                || entry.effectivePrivacy() != prepared.effectivePrivacy()
+                || entry.sanitizationStatus() != prepared.sanitizationStatus()
+                || !entry.sanitizationFindings().equals(prepared.sanitizationFindings())
                 || entry.qualityRole() != artifact.qualityRole()) {
             return false;
         }

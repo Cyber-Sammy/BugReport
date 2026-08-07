@@ -1,7 +1,7 @@
 package com.cybersammy.bugreport.core.packaging;
 
 import com.cybersammy.bugreport.core.manifest.ReportManifest;
-import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceSnapshot;
+import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -11,7 +11,7 @@ import java.util.Set;
 
 /** Factory-issued immutable plan for deterministic package creation. */
 public final class ReportPackagePlan {
-    private final ReviewedWorkspaceSnapshot snapshot;
+    private final PreparedWorkspaceSnapshot preparedSnapshot;
     private final ReportManifest manifest;
     private final byte[] manifestDocument;
     private final byte[] markdownDocument;
@@ -19,12 +19,12 @@ public final class ReportPackagePlan {
     private final long totalUncompressedBytes;
 
     ReportPackagePlan(
-            ReviewedWorkspaceSnapshot snapshot,
+            PreparedWorkspaceSnapshot preparedSnapshot,
             ReportManifest manifest,
             byte[] manifestDocument,
             byte[] markdownDocument,
             List<PackagePlanEntry> entries) {
-        this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+        this.preparedSnapshot = Objects.requireNonNull(preparedSnapshot, "preparedSnapshot");
         this.manifest = Objects.requireNonNull(manifest, "manifest");
         this.manifestDocument = Objects.requireNonNull(manifestDocument, "manifestDocument").clone();
         this.markdownDocument = markdownDocument == null ? null : markdownDocument.clone();
@@ -34,8 +34,8 @@ public final class ReportPackagePlan {
                 .reduce(0L, Math::addExact);
     }
 
-    public ReviewedWorkspaceSnapshot snapshot() {
-        return snapshot;
+    public PreparedWorkspaceSnapshot preparedSnapshot() {
+        return preparedSnapshot;
     }
 
     public ReportManifest manifest() {
