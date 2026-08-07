@@ -50,13 +50,14 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
 import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
-import com.cybersammy.bugreport.core.transport.LocalExportConsent;
 import com.cybersammy.bugreport.core.transport.LocalZipTransport;
 import com.cybersammy.bugreport.core.transport.ReportTransportRequest;
 import com.cybersammy.bugreport.core.transport.ReportTransportResult;
 import com.cybersammy.bugreport.core.transport.TransportFailureCode;
 import com.cybersammy.bugreport.core.transport.TransportProgressSnapshot;
 import com.cybersammy.bugreport.core.transport.TransportRunControl;
+import com.cybersammy.bugreport.core.transport.TransportConsent;
+import com.cybersammy.bugreport.core.transport.TransportConsentTestIssuer;
 import java.io.OutputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
@@ -383,7 +384,8 @@ final class ReportPackagePlanFactoryTest {
         ReportPackagePlan plan = plan(fixture, true);
         LocalArchiveDestination destination = new LocalArchiveDestination(
                 temporaryDirectory.resolve("transport-success.bugreport.zip"));
-        LocalExportConsent consent = LocalExportConsent.approve(plan, destination);
+        TransportConsent consent =
+                TransportConsentTestIssuer.issueConfirmedLocalExport(plan, destination);
         TransportRunControl control = new TransportRunControl();
 
         ReportTransportResult result = new LocalZipTransport().execute(
@@ -414,8 +416,8 @@ final class ReportPackagePlanFactoryTest {
                 temporaryDirectory.resolve("approved.bugreport.zip"));
         LocalArchiveDestination otherDestination = new LocalArchiveDestination(
                 temporaryDirectory.resolve("other.bugreport.zip"));
-        LocalExportConsent consent =
-                LocalExportConsent.approve(approvedPlan, approvedDestination);
+        TransportConsent consent = TransportConsentTestIssuer.issueConfirmedLocalExport(
+                approvedPlan, approvedDestination);
 
         ReportTransportResult wrongPlan = new LocalZipTransport().execute(
                 new ReportTransportRequest(
@@ -447,7 +449,8 @@ final class ReportPackagePlanFactoryTest {
         LocalArchiveDestination destination = new LocalArchiveDestination(
                 temporaryDirectory.resolve("retry.bugreport.zip"));
         Files.writeString(destination.path(), "existing", StandardCharsets.UTF_8);
-        LocalExportConsent firstConsent = LocalExportConsent.approve(plan, destination);
+        TransportConsent firstConsent =
+                TransportConsentTestIssuer.issueConfirmedLocalExport(plan, destination);
 
         ReportTransportResult first = new LocalZipTransport().execute(
                 new ReportTransportRequest(
@@ -458,7 +461,8 @@ final class ReportPackagePlanFactoryTest {
                 new ReportTransportRequest(
                         plan, fixture.workspace(), destination, firstConsent),
                 new TransportRunControl());
-        LocalExportConsent retryConsent = LocalExportConsent.approve(plan, destination);
+        TransportConsent retryConsent =
+                TransportConsentTestIssuer.issueConfirmedLocalExport(plan, destination);
         ReportTransportResult retry = new LocalZipTransport().execute(
                 new ReportTransportRequest(
                         plan, fixture.workspace(), destination, retryConsent),
@@ -480,7 +484,8 @@ final class ReportPackagePlanFactoryTest {
         ReportPackagePlan plan = plan(fixture, false);
         LocalArchiveDestination destination = new LocalArchiveDestination(
                 temporaryDirectory.resolve("cancelled-transport.bugreport.zip"));
-        LocalExportConsent consent = LocalExportConsent.approve(plan, destination);
+        TransportConsent consent =
+                TransportConsentTestIssuer.issueConfirmedLocalExport(plan, destination);
         TransportRunControl control = new TransportRunControl();
         assertTrue(control.requestCancellation());
 

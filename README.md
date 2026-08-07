@@ -691,9 +691,11 @@ to a user-selected local destination. It receives the already prepared package
 plan and sealed workspace; it never recollects source files or changes reviewed
 package contents.
 
-Every export requires a fresh `LocalExportConsent` issued only after the UI or
-headless caller has displayed the exact package, transport, and destination and
-received explicit user confirmation. Consent is bound to the canonical package
+Every export requires fresh consent issued through a package-private,
+product-owned boundary only after a trusted UI or headless coordinator has
+displayed the exact package, transport, and destination and received explicit
+user confirmation. Raw consent implementations and minting operations are not
+public APIs. Consent is bound to the canonical package
 plan fingerprint, transport ID, and normalized destination, and is consumed by
 one attempt. A failed export may be retried with the same immutable plan, but
 requires new consent; changing the plan or destination also requires new

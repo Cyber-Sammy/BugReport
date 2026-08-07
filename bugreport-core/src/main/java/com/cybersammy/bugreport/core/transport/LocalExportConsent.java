@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Single-use authority for one exact local ZIP plan and destination. */
-public final class LocalExportConsent implements TransportConsent {
+final class LocalExportConsent implements TransportConsent {
     private final TransportAttemptId attemptId;
     private final TransportId transportId;
     private final PackagePlanFingerprint packageFingerprint;
@@ -24,11 +24,7 @@ public final class LocalExportConsent implements TransportConsent {
         this.destination = Objects.requireNonNull(destination, "destination");
     }
 
-    /**
-     * Issues authority after the caller has shown the exact package, transport, and destination
-     * to the user and received explicit confirmation.
-     */
-    public static LocalExportConsent approve(
+    static LocalExportConsent issueConfirmed(
             ReportPackagePlan plan, LocalArchiveDestination destination) {
         return new LocalExportConsent(LocalZipTransport.ID, plan, destination);
     }
