@@ -656,9 +656,28 @@ to arbitrary manifest callers. The future workspace sanitization coordinator
 will issue it only while publishing the exact final bytes produced by the
 trusted product pipeline and recording explicit review. Until that coordinator
 exists, production package planning has no bypass path. A plan still does not
-grant delivery consent, and the ZIP writer must revalidate its underlying
-reviewed snapshot immediately before streaming. Streaming ZIP creation and
-independent archive validation are the next M2 slices.
+grant delivery consent.
+
+### Streaming ZIP export
+
+`ReportZipWriter` consumes only a `ReportPackagePlan` and an explicitly chosen
+new `*.bugreport.zip` destination. It revalidates the sealed reviewed workspace
+before and after streaming, reads only planned direct-child artifacts, verifies
+their exact size and SHA-256 while copying, and checks cancellation between
+bounded chunks. ZIP entries use fixed metadata and canonical plan order, so
+identical inputs produce byte-identical archives. The writer creates an
+owner-only sibling temporary file, never overwrites an existing destination,
+and publishes only a complete validated archive through an atomic no-replace
+filesystem link. Failure or cancellation removes the temporary output.
+
+`ReportZipValidator` is a separate bounded read pass over the finished archive.
+It rejects invalid ZIP structure, unsafe absolute or traversal names,
+case-insensitive duplicates, reordered/missing/extra entries, expanded-size
+overflow, and any byte-count or checksum mismatch with the trusted plan. Both
+encoded archive bytes and aggregate uncompressed bytes have product ceilings.
+Validation and export perform blocking filesystem I/O and must run off the UI
+and game threads. A validated local archive still does not grant network
+delivery consent.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
