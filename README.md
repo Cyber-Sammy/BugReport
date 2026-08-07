@@ -625,10 +625,40 @@ credentials, and excluded artifacts are not part of the portable model.
 
 Constructing or decoding a structurally valid manifest does not authorize
 packaging. Decoded manifests are untrusted portable data. The package writer
-must accept a current `ReviewedWorkspaceSnapshot`, derive every entry's size,
-checksum, and provenance from that snapshot, and read only those exact reviewed
-workspace artifacts. Streaming ZIP creation and archive validation are the
-next M2 slice.
+must accept a factory-issued `ReportPackagePlan` and read only the exact
+reviewed workspace artifacts named by it.
+
+### Deterministic package plan
+
+`ReportPackagePlanFactory` accepts only a factory-issued
+`PreparedWorkspaceSnapshot`, never an ordinary reviewed snapshot plus a
+caller-selected sanitization enum. The prepared snapshot retains the exact
+final reviewed artifact identity together with trusted sanitization results or
+explicit binary/warning review. Plan creation revalidates the sealed workspace,
+requires the exact report/provider/version/category identity, and matches every
+manifest content entry against byte count, SHA-256, content type, effective
+privacy, quality role, collection kind, sanitization status/findings, and full
+source/generator provenance. Missing evidence, extra, stale, or mismatched
+artifacts fail closed with a path-safe typed error.
+
+The plan fixes archive order as `manifest.json`, optional `report.md`, then
+canonical `content/*` entries. Paths are lowercase, normalized, bounded, and
+case-insensitively unique. Inline documents and workspace artifacts retain
+exact sizes and checksums, and returned byte arrays are defensive copies.
+
+Optional Markdown is generated only from known reviewed manifest metadata and
+form values. Rendering is deterministic, UTF-8, limited to 1 MiB, normalizes
+line endings, and escapes Markdown punctuation and inline HTML. It is a human
+summary, not an authority or a replacement for `manifest.json`.
+
+The internal prepared-snapshot issuing boundary is intentionally unavailable
+to arbitrary manifest callers. The future workspace sanitization coordinator
+will issue it only while publishing the exact final bytes produced by the
+trusted product pipeline and recording explicit review. Until that coordinator
+exists, production package planning has no bypass path. A plan still does not
+grant delivery consent, and the ZIP writer must revalidate its underlying
+reviewed snapshot immediately before streaming. Streaming ZIP creation and
+independent archive validation are the next M2 slices.
 
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
