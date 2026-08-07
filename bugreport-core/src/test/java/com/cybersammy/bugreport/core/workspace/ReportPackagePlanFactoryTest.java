@@ -37,6 +37,11 @@ import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanCode;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanException;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
+import com.cybersammy.bugreport.core.packaging.ReportZipArchive;
+import com.cybersammy.bugreport.core.packaging.ReportZipCode;
+import com.cybersammy.bugreport.core.packaging.ReportZipException;
+import com.cybersammy.bugreport.core.packaging.ReportZipValidator;
+import com.cybersammy.bugreport.core.packaging.ReportZipWriter;
 import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
 import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
 import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
@@ -44,6 +49,7 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
+import java.io.OutputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.nio.ByteBuffer;
@@ -51,6 +57,8 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -60,6 +68,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -186,13 +197,205 @@ final class ReportPackagePlanFactoryTest {
         assertEquals("Text artifact requires trusted sanitization evidence", failure.getMessage());
     }
 
+    @Test
+    void streamsValidByteDeterministicArchivesAndValidatesEveryEntry() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, true);
+        Path firstPath = temporaryDirectory.resolve("first.bugreport.zip");
+        Path secondPath = temporaryDirectory.resolve("second.bugreport.zip");
+
+        ReportZipArchive first = ReportZipWriter.write(plan, fixture.workspace(), firstPath);
+        ReportZipArchive second = ReportZipWriter.write(plan, fixture.workspace(), secondPath);
+
+        assertArrayEquals(Files.readAllBytes(firstPath), Files.readAllBytes(secondPath));
+        assertEquals(first, second);
+        assertEquals(plan.entries().size(), first.entryCount());
+        assertEquals(Files.size(firstPath), first.archiveBytes());
+        assertEquals(first, ReportZipValidator.validate(firstPath, plan));
+        if (Files.getFileStore(firstPath).supportsFileAttributeView(PosixFileAttributeView.class)) {
+            assertEquals(
+                    PosixFilePermissions.fromString("rw-------"),
+                    Files.getPosixFilePermissions(firstPath));
+        }
+        try (ZipFile zip = new ZipFile(firstPath.toFile())) {
+            assertEquals(
+                    plan.entries().stream().map(entry -> entry.archivePath()).toList(),
+                    zip.stream().map(ZipEntry::getName).toList());
+            assertArrayEquals(
+                    ARTIFACT_BYTES,
+                    zip.getInputStream(zip.getEntry("content/" + ARTIFACT_NAME)).readAllBytes());
+        }
+    }
+
+    @Test
+    void neverOverwritesAnExistingDestination() throws Exception {
+        Fixture fixture = fixture();
+        Path destination = temporaryDirectory.resolve("existing.bugreport.zip");
+        byte[] existing = "keep".getBytes(StandardCharsets.UTF_8);
+        Files.write(destination, existing);
+
+        ReportZipException failure = assertThrows(
+                ReportZipException.class,
+                () -> ReportZipWriter.write(
+                        plan(fixture, false), fixture.workspace(), destination));
+
+        assertEquals(ReportZipCode.OUTPUT_ALREADY_EXISTS, failure.code());
+        assertArrayEquals(existing, Files.readAllBytes(destination));
+    }
+
+    @Test
+    void changedWorkspaceAndCancellationPublishNoArchiveOrTemporaryFile() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        Files.writeString(
+                fixture.workspace().directory().resolve(ARTIFACT_NAME),
+                "changed",
+                StandardCharsets.UTF_8);
+        Path changedDestination = temporaryDirectory.resolve("changed.bugreport.zip");
+
+        ReportZipException changed = assertThrows(
+                ReportZipException.class,
+                () -> ReportZipWriter.write(plan, fixture.workspace(), changedDestination));
+
+        assertEquals(ReportZipCode.SNAPSHOT_CHANGED, changed.code());
+        assertFalse(Files.exists(changedDestination));
+
+        Fixture cancelledFixture = fixture();
+        Path cancelledDestination = temporaryDirectory.resolve("cancelled.bugreport.zip");
+        ReportZipException cancelled = assertThrows(
+                ReportZipException.class,
+                () -> ReportZipWriter.write(
+                        plan(cancelledFixture, false),
+                        cancelledFixture.workspace(),
+                        cancelledDestination,
+                        () -> true));
+        assertEquals(ReportZipCode.CANCELLED, cancelled.code());
+        assertFalse(Files.exists(cancelledDestination));
+        try (var children = Files.list(temporaryDirectory)) {
+            assertTrue(children.noneMatch(path -> path.getFileName().toString().endsWith(".part")));
+        }
+    }
+
+    @Test
+    void validatorRejectsTraversalBeforePlanMatching() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        Path archive = temporaryDirectory.resolve("traversal.bugreport.zip");
+        writeArchive(
+                archive,
+                List.of(
+                        new ArchiveValue("../unsafe.json", new byte[] {1}),
+                        new ArchiveValue("content/safe-a", new byte[] {1}),
+                        new ArchiveValue("content/safe-b", new byte[] {1})));
+
+        ReportZipException failure = assertThrows(
+                ReportZipException.class, () -> ReportZipValidator.validate(archive, plan));
+
+        assertEquals(ReportZipCode.UNSAFE_ENTRY, failure.code());
+        assertEquals(Optional.empty(), failure.archiveEntry());
+    }
+
+    @Test
+    void validatorRejectsTraversalInjectedOnlyIntoCentralDirectory() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        Path archive = temporaryDirectory.resolve("central-traversal.bugreport.zip");
+        writeArchive(
+                archive,
+                List.of(
+                        new ArchiveValue("manifest.json", plan.manifestDocument()),
+                        new ArchiveValue("content/" + GENERATED_NAME, GENERATED_BYTES),
+                        new ArchiveValue("content/" + ARTIFACT_NAME, ARTIFACT_BYTES)));
+        replaceFirstCentralName(archive, "../unsafe.txt");
+
+        ReportZipException failure = assertThrows(
+                ReportZipException.class, () -> ReportZipValidator.validate(archive, plan));
+
+        assertEquals(ReportZipCode.UNSAFE_ENTRY, failure.code());
+        assertEquals(Optional.empty(), failure.archiveEntry());
+    }
+
+    @Test
+    void validatorRejectsCaseInsensitiveDuplicatesAndExpandedEntryOverflow() throws Exception {
+        Fixture fixture = fixture();
+        ReportPackagePlan plan = plan(fixture, false);
+        Path duplicate = temporaryDirectory.resolve("duplicate.bugreport.zip");
+        writeArchive(
+                duplicate,
+                List.of(
+                        new ArchiveValue("manifest.json", plan.manifestDocument()),
+                        new ArchiveValue("MANIFEST.JSON", new byte[] {1}),
+                        new ArchiveValue("content/safe", new byte[] {1})));
+
+        ReportZipException duplicateFailure = assertThrows(
+                ReportZipException.class, () -> ReportZipValidator.validate(duplicate, plan));
+        assertEquals(ReportZipCode.DUPLICATE_ENTRY, duplicateFailure.code());
+
+        Path oversized = temporaryDirectory.resolve("oversized.bugreport.zip");
+        byte[] oversizedManifest = java.util.Arrays.copyOf(
+                plan.manifestDocument(), plan.manifestDocument().length + 1);
+        writeArchive(
+                oversized,
+                List.of(
+                        new ArchiveValue("manifest.json", oversizedManifest),
+                        new ArchiveValue("content/" + GENERATED_NAME, GENERATED_BYTES),
+                        new ArchiveValue("content/" + ARTIFACT_NAME, ARTIFACT_BYTES)));
+
+        ReportZipException sizeFailure = assertThrows(
+                ReportZipException.class, () -> ReportZipValidator.validate(oversized, plan));
+        assertEquals(ReportZipCode.VALIDATION_MISMATCH, sizeFailure.code());
+    }
+
+    private static ReportPackagePlan plan(Fixture fixture, boolean markdown) {
+        return ReportPackagePlanFactory.create(
+                fixture.prepared(),
+                fixture.workspace(),
+                manifest(fixture, checksum(ARTIFACT_BYTES)),
+                markdown);
+    }
+
+    private static void writeArchive(Path path, List<ArchiveValue> entries) throws Exception {
+        try (OutputStream output = Files.newOutputStream(path);
+                ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            for (ArchiveValue entry : entries) {
+                ZipEntry zipEntry = new ZipEntry(entry.name());
+                zipEntry.setMethod(ZipEntry.DEFLATED);
+                zipEntry.setTime(0L);
+                zipEntry.setExtra(new byte[0]);
+                zip.putNextEntry(zipEntry);
+                zip.write(entry.contents());
+                zip.closeEntry();
+            }
+        }
+    }
+
+    private static void replaceFirstCentralName(Path path, String replacement) throws Exception {
+        byte[] bytes = Files.readAllBytes(path);
+        byte[] name = replacement.getBytes(StandardCharsets.UTF_8);
+        for (int index = 0; index <= bytes.length - 46; index++) {
+            if (bytes[index] == 0x50
+                    && bytes[index + 1] == 0x4b
+                    && bytes[index + 2] == 0x01
+                    && bytes[index + 3] == 0x02) {
+                int nameLength = Byte.toUnsignedInt(bytes[index + 28])
+                        | Byte.toUnsignedInt(bytes[index + 29]) << 8;
+                assertEquals(nameLength, name.length);
+                System.arraycopy(name, 0, bytes, index + 46, name.length);
+                Files.write(path, bytes);
+                return;
+            }
+        }
+        throw new AssertionError("ZIP central directory was not found");
+    }
+
     private Fixture fixture() throws Exception {
         Sanitized source = sanitize(ARTIFACT_NAME, RAW_ARTIFACT_TEXT);
         Sanitized generated = sanitize(GENERATED_NAME, new String(
                 GENERATED_BYTES, StandardCharsets.UTF_8));
         assertArrayEquals(ARTIFACT_BYTES, source.output().getBytes(StandardCharsets.UTF_8));
+        Path fixtureDirectory = Files.createTempDirectory(temporaryDirectory, "fixture-");
         ReportWorkspace workspace = new FileReportWorkspaceStore(
-                        temporaryDirectory.resolve("workspaces").toAbsolutePath())
+                        fixtureDirectory.resolve("workspaces").toAbsolutePath())
                 .create(SESSION_ID);
         writePrivate(
                 workspace, ARTIFACT_NAME, source.output().getBytes(StandardCharsets.UTF_8));
@@ -365,6 +568,8 @@ final class ReportPackagePlanFactoryTest {
     }
 
     private record Sanitized(String output, SanitizationResult result) {}
+
+    private record ArchiveValue(String name, byte[] contents) {}
 
     private record Fixture(
             ReportWorkspace workspace,
