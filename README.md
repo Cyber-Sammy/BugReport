@@ -9,9 +9,9 @@ discovers their providers deterministically through NeoForge mod metadata.
 
 ## Project status
 
-The M0 architecture and risk-closure milestone and the M1 contracts, registry,
-and build-foundation milestone are complete. M2 headless reporting-engine work
-is in progress.
+The M0 architecture and risk-closure milestone, the M1 contracts, registry,
+and build-foundation milestone, and the M2 secure headless reporting engine are
+complete. M3 client workflow work is next.
 
 Implemented and executable:
 
