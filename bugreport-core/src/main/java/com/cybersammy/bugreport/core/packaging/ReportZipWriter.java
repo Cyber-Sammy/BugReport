@@ -47,7 +47,12 @@ public final class ReportZipWriter {
 
     public static ReportZipArchive write(
             ReportPackagePlan plan, ReportWorkspace workspace, Path destination) {
-        return write(plan, workspace, destination, CancellationSignal.neverCancelled());
+        return write(
+                plan,
+                workspace,
+                destination,
+                CancellationSignal.neverCancelled(),
+                ReportZipProgressListener.noOp());
     }
 
     /**
@@ -62,9 +67,21 @@ public final class ReportZipWriter {
             ReportWorkspace workspace,
             Path destination,
             CancellationSignal cancellation) {
+        return write(
+                plan, workspace, destination, cancellation, ReportZipProgressListener.noOp());
+    }
+
+    public static ReportZipArchive write(
+            ReportPackagePlan plan,
+            ReportWorkspace workspace,
+            Path destination,
+            CancellationSignal cancellation,
+            ReportZipProgressListener progressListener) {
         ReportPackagePlan trustedPlan = Objects.requireNonNull(plan, "plan");
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         CancellationSignal signal = Objects.requireNonNull(cancellation, "cancellation");
+        ReportZipProgressListener progress =
+                Objects.requireNonNull(progressListener, "progressListener");
         ReportZipValidator.validatePlanLimits(trustedPlan);
         Path target = validateDestination(destination);
         Path temporary = null;
@@ -72,7 +89,7 @@ public final class ReportZipWriter {
             requireNotCancelled(signal);
             requireCurrent(trustedPlan, trustedWorkspace);
             temporary = createPrivateTemporary(target.getParent());
-            streamPlan(trustedPlan, trustedWorkspace, temporary, signal);
+            streamPlan(trustedPlan, trustedWorkspace, temporary, signal, progress);
             requireCurrent(trustedPlan, trustedWorkspace);
             requireNotCancelled(signal);
             ReportZipArchive archive = ReportZipValidator.validate(temporary, trustedPlan);
@@ -99,6 +116,26 @@ public final class ReportZipWriter {
                             null,
                             "Report archive could not be safely written",
                             exception));
+        } catch (RuntimeException exception) {
+            throw rollback(
+                    temporary,
+                    failure(
+                            ReportZipCode.WRITE_FAILED,
+                            null,
+                            "Report archive callback failed",
+                            exception));
+        } catch (Error error) {
+            ReportZipException cleanup = rollback(
+                    temporary,
+                    failure(
+                            ReportZipCode.WRITE_FAILED,
+                            null,
+                            "Report archive callback failed",
+                            error));
+            if (cleanup.code() == ReportZipCode.ROLLBACK_FAILED) {
+                error.addSuppressed(cleanup);
+            }
+            throw error;
         }
     }
 
@@ -106,8 +143,11 @@ public final class ReportZipWriter {
             ReportPackagePlan plan,
             ReportWorkspace workspace,
             Path temporary,
-            CancellationSignal cancellation)
+            CancellationSignal cancellation,
+            ReportZipProgressListener progressListener)
             throws IOException {
+        WriteProgress progress = new WriteProgress(plan, progressListener);
+        progress.publish();
         try (FileChannel channel = FileChannel.open(
                         temporary,
                         Set.of(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS));
@@ -123,8 +163,9 @@ public final class ReportZipWriter {
                 zipEntry.setComment(null);
                 zipEntry.setExtra(new byte[0]);
                 zip.putNextEntry(zipEntry);
-                writeContents(plan, workspace, entry, zip, cancellation);
+                writeContents(plan, workspace, entry, zip, cancellation, progress);
                 zip.closeEntry();
+                progress.completeEntry();
             }
             zip.finish();
             zip.flush();
@@ -137,14 +178,20 @@ public final class ReportZipWriter {
             ReportWorkspace workspace,
             PackagePlanEntry entry,
             ZipOutputStream output,
-            CancellationSignal cancellation)
+            CancellationSignal cancellation,
+            WriteProgress progress)
             throws IOException {
         switch (entry.kind()) {
-            case MANIFEST -> writeInline(plan.manifestDocument(), entry, output, cancellation);
+            case MANIFEST -> writeInline(
+                    plan.manifestDocument(), entry, output, cancellation, progress);
             case MARKDOWN -> writeInline(
-                    plan.markdownDocument().orElseThrow(), entry, output, cancellation);
+                    plan.markdownDocument().orElseThrow(),
+                    entry,
+                    output,
+                    cancellation,
+                    progress);
             case WORKSPACE_ARTIFACT -> writeWorkspaceArtifact(
-                    workspace, entry, output, cancellation);
+                    workspace, entry, output, cancellation, progress);
         }
     }
 
@@ -152,7 +199,8 @@ public final class ReportZipWriter {
             byte[] contents,
             PackagePlanEntry entry,
             ZipOutputStream output,
-            CancellationSignal cancellation)
+            CancellationSignal cancellation,
+            WriteProgress progress)
             throws IOException {
         requireNotCancelled(cancellation);
         if (contents.length != entry.uncompressedBytes()
@@ -164,13 +212,15 @@ public final class ReportZipWriter {
                     null);
         }
         output.write(contents);
+        progress.addBytes(contents.length);
     }
 
     private static void writeWorkspaceArtifact(
             ReportWorkspace workspace,
             PackagePlanEntry entry,
             ZipOutputStream output,
-            CancellationSignal cancellation)
+            CancellationSignal cancellation,
+            WriteProgress progress)
             throws IOException {
         String artifactName = entry.workspaceArtifactName().orElseThrow();
         Path path = workspace.directory().resolve(artifactName).normalize();
@@ -203,6 +253,7 @@ public final class ReportZipWriter {
                 digest.update(buffer, 0, read);
                 output.write(buffer, 0, read);
                 bytes += read;
+                progress.addBytes(read);
             }
         }
         Sha256Checksum checksum =
@@ -485,6 +536,36 @@ public final class ReportZipWriter {
             if (length > maximum - written) {
                 throw new IOException("Encoded report archive exceeds the product limit");
             }
+        }
+    }
+
+    private static final class WriteProgress {
+        private final int totalEntries;
+        private final long totalBytes;
+        private final ReportZipProgressListener listener;
+        private int completedEntries;
+        private long processedBytes;
+
+        private WriteProgress(
+                ReportPackagePlan plan, ReportZipProgressListener listener) {
+            totalEntries = plan.entries().size();
+            totalBytes = plan.totalUncompressedBytes();
+            this.listener = listener;
+        }
+
+        private void addBytes(long bytes) {
+            processedBytes = Math.addExact(processedBytes, bytes);
+            publish();
+        }
+
+        private void completeEntry() {
+            completedEntries++;
+            publish();
+        }
+
+        private void publish() {
+            listener.onProgress(new ReportZipProgress(
+                    completedEntries, totalEntries, processedBytes, totalBytes));
         }
     }
 
