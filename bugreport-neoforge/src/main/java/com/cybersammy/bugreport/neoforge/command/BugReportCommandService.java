@@ -3,6 +3,10 @@ package com.cybersammy.bugreport.neoforge.command;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
+import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.validation.ValidationResult;
+import com.cybersammy.bugreport.core.form.FieldValidator;
+import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
@@ -11,6 +15,7 @@ import com.cybersammy.bugreport.core.session.ReportSession;
 import com.cybersammy.bugreport.core.session.ReportSessionFactory;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
+import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -114,6 +119,30 @@ public final class BugReportCommandService {
                 snapshot.state().name()));
     }
 
+    /** Returns the trusted immutable identity and declaration for one selected session form. */
+    public synchronized Optional<FormView> form(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        return snapshot.selectedCategory().map(category -> new FormView(
+                snapshot.id(), snapshot.providerSpecification().id(), category,
+                snapshot.state(), snapshot.revision()));
+    }
+
+    /** Validates one already typed UI submission against the session's trusted selected category. */
+    public synchronized FormResult submitForm(String sessionValue, FormSubmission submission) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return FormResult.missingSession();
+        }
+        CategorySpecification category = session.snapshot().selectedCategory().orElseThrow();
+        ValidationResult validation = FieldValidator.validate(
+                category, Objects.requireNonNull(submission, "submission"));
+        return new FormResult(validation, false);
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
@@ -154,4 +183,36 @@ public final class BugReportCommandService {
             ProviderSupportState supportState) {}
 
     public record CategoryChoice(CategoryId id, LocalizationKey labelKey) {}
+
+    /** Trusted immutable view used by the first-party form adapter. */
+    public record FormView(
+            ReportSessionId sessionId,
+            ProviderId providerId,
+            CategorySpecification category,
+            ReportSessionState state,
+            long revision) {
+        public FormView {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(providerId, "providerId");
+            Objects.requireNonNull(category, "category");
+            Objects.requireNonNull(state, "state");
+            if (revision < 0) {
+                throw new IllegalArgumentException("revision must be non-negative");
+            }
+        }
+    }
+
+    /** Result of pure form validation; validation does not mutate the report session. */
+    public record FormResult(ValidationResult validation, boolean unknownSession) {
+        public FormResult {
+            if (unknownSession == (validation != null)) {
+                throw new IllegalArgumentException(
+                        "Exactly one of validation or unknownSession must be present");
+            }
+        }
+
+        private static FormResult missingSession() {
+            return new FormResult(null, true);
+        }
+    }
 }

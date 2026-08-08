@@ -461,14 +461,17 @@ tasks.register('prepareDiscoveryComparison', Sync) {
     description = 'Prepares the provider discovery comparison runtime.'
     dependsOn rootProject.tasks.named('buildSpikeArtifacts')
 
+    def discoveryArtifacts = [
+            project(':spike-fixtures:provider-a'),
+            project(':spike-fixtures:provider-b'),
+            project(':spike-fixtures:discovery-probe')
+    ]
+    dependsOn discoveryArtifacts.collect { it.tasks.named('jar') }
+
     def gameDirectory = layout.buildDirectory.dir('spike-runtime/discovery-comparison')
     into gameDirectory.map { it.dir('mods') }
     from {
-        [
-                project(':spike-fixtures:provider-a'),
-                project(':spike-fixtures:provider-b'),
-                project(':spike-fixtures:discovery-probe')
-        ].collect {
+        discoveryArtifacts.collect {
             it.tasks.named('jar').get().archiveFile.get().asFile
         }
     }

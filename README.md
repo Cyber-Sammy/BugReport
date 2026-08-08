@@ -11,7 +11,8 @@ discovers their providers deterministically through NeoForge mod metadata.
 
 The M0 architecture and risk-closure milestone, the M1 contracts, registry,
 and build-foundation milestone, and the M2 secure headless reporting engine are
-complete. M3 client workflow work is next.
+complete. M3 client workflow work is in progress, with its command, provider,
+category, and declarative form boundaries available for gameplay testing.
 
 Implemented and executable:
 
@@ -58,6 +59,8 @@ Implemented and executable:
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an isolated NeoForge `client` source set with a physical-client bootstrap and
   an opt-in `verifyClientBoundarySmoke` launch test;
+- first-party `/bugreport` commands, trusted provider/category selection, and a
+  paged form screen covering every declarative field kind with Core validation;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -70,13 +73,14 @@ Implemented and executable:
 
 Not implemented yet:
 
-- player-facing screens and interactive report flows;
+- collection review, progress, and export-confirmation screens;
 - remote report delivery and its transport policy;
 - end-user report submission.
 
 The current build is suitable for testing API packaging, optional installation,
-side safety, provider discovery, and the headless Core report lifecycle in real
-mods. It is not yet a functional player-facing reporting mod.
+side safety, provider discovery, the headless Core report lifecycle, and the
+first player-facing session/form flow in real mods. It does not yet expose the
+collection, review, or export portions of the engine through gameplay UI.
 
 ## Supported platform
 
@@ -139,9 +143,14 @@ The first client command boundary is available after the client has loaded:
 /bugreport discard <report-id>
 ```
 
-`create` starts an in-memory Core session and `open` reports its current state.
-Screens, form editing, persistence, collection review, and export interaction
-remain later M3 work.
+`/bugreport` opens the provider/category selector. `/bugreport create <mod-id>`
+opens the same flow with a trusted provider preselected, while supplying both
+the provider and category creates the session directly. Category selection
+opens a paged form generated from the provider specification. It supports text,
+reproduction steps, booleans, declared selections, arbitrary-precision numbers,
+severity, side context, and read-only information; validation remains in Core.
+Back preserves the current in-memory draft, while Cancel discards the session.
+Persistence, collection review, and export interaction remain later M3 work.
 
 For a local physical-client boundary smoke test, run:
 
