@@ -276,7 +276,8 @@ tasks.register('verifyClientBoundarySmoke') {
     doLast {
         def marker = layout.buildDirectory.file(
                 'spike-runtime/client-boundary-smoke/bugreport-client-smoke.marker').get().asFile
-        if (!marker.isFile() || marker.getText('UTF-8').trim() != 'phase=CLIENT_READY') {
+        if (!marker.isFile() || marker.readLines('UTF-8') != [
+                'phase=CLIENT_READY', 'commands=REGISTERED']) {
             throw new GradleException("Client boundary smoke marker is missing or malformed: ${marker}")
         }
 

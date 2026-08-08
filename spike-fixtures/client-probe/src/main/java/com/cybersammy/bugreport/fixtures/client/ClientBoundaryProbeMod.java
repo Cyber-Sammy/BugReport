@@ -1,6 +1,9 @@
 package com.cybersammy.bugreport.fixtures.client;
 
 import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.neoforge.BugReportMod;
+import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.neoforge.command.BugReportCommandTree;
 import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -36,9 +39,17 @@ public final class ClientBoundaryProbeMod {
     }
 
     private void writeMarkerAndStopClient() {
+        verifyCommandsWriteMarkerAndStop();
+    }
+
+    private void verifyCommandsWriteMarkerAndStop() {
+        if (!BugReportCommandTree.registrationReadyForSmoke(
+                new BugReportCommandService(BugReportMod::providerRegistry))) {
+            throw new IllegalStateException("Bug Report client commands could not be registered");
+        }
         Path marker = FMLPaths.GAMEDIR.get().resolve("bugreport-client-smoke.marker");
         try {
-            Files.writeString(marker, "phase=CLIENT_READY\n", StandardCharsets.UTF_8);
+            Files.writeString(marker, "phase=CLIENT_READY\ncommands=REGISTERED\n", StandardCharsets.UTF_8);
         } catch (IOException exception) {
             throw new IllegalStateException("Could not write the client boundary smoke marker", exception);
         }
@@ -52,4 +63,5 @@ public final class ClientBoundaryProbeMod {
             Minecraft.getInstance().execute(Minecraft.getInstance()::stop);
         });
     }
+
 }
