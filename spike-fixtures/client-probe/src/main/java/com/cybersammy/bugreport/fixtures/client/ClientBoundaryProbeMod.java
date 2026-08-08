@@ -13,6 +13,7 @@ import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.fml.loading.FMLPaths;
+import net.neoforged.neoforge.client.ClientCommandHandler;
 
 /** Test-only mod that proves Bug Report's client bootstrap is available on a physical client. */
 @Mod(value = "bugreport_client_probe", dist = Dist.CLIENT)
@@ -36,9 +37,27 @@ public final class ClientBoundaryProbeMod {
     }
 
     private void writeMarkerAndStopClient() {
+        Thread.ofVirtual().name("bugreport-client-smoke-command-wait").start(() -> {
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            Minecraft.getInstance().execute(this::verifyCommandsWriteMarkerAndStop);
+        });
+    }
+
+    private void verifyCommandsWriteMarkerAndStop() {
+        if (Minecraft.getInstance().player == null
+                || ClientCommandHandler.getDispatcher() == null
+                || ClientCommandHandler.getDispatcher().getRoot().getChild("bugreport") == null
+                || !ClientCommandHandler.runCommand("bugreport list")) {
+            throw new IllegalStateException("Bug Report client commands were not registered or executable");
+        }
         Path marker = FMLPaths.GAMEDIR.get().resolve("bugreport-client-smoke.marker");
         try {
-            Files.writeString(marker, "phase=CLIENT_READY\n", StandardCharsets.UTF_8);
+            Files.writeString(marker, "phase=CLIENT_READY\ncommands=REGISTERED\n", StandardCharsets.UTF_8);
         } catch (IOException exception) {
             throw new IllegalStateException("Could not write the client boundary smoke marker", exception);
         }
@@ -52,4 +71,5 @@ public final class ClientBoundaryProbeMod {
             Minecraft.getInstance().execute(Minecraft.getInstance()::stop);
         });
     }
+
 }

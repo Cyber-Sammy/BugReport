@@ -3,12 +3,14 @@ package com.cybersammy.bugreport.neoforge.command;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
+import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
 import com.cybersammy.bugreport.core.session.CancellationReason;
 import com.cybersammy.bugreport.core.session.ReportSession;
 import com.cybersammy.bugreport.core.session.ReportSessionFactory;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
+import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,18 +49,27 @@ public final class BugReportCommandService {
         } catch (IllegalArgumentException exception) {
             return List.of(new Message("bugreport.command.error.invalid_provider"));
         }
-        if (registry().find(providerId).isEmpty()) {
+        RegisteredProvider provider = registry().find(providerId).orElse(null);
+        if (provider == null) {
             return List.of(new Message("bugreport.command.error.unknown_provider", providerId.toString()));
         }
+        if (provider.support().state() == ProviderSupportState.DISABLED) {
+            return List.of(new Message("bugreport.command.error.provider_unavailable", providerId.toString()));
+        }
 
-        ReportSession session;
+        final CategoryId categoryId;
         try {
-            session = new ReportSessionFactory(registry()).create(ReportSessionId.random(), providerId);
-            if (categoryValue != null) {
-                session.selectCategory(CategoryId.of(categoryValue));
-            }
+            categoryId = categoryValue == null ? null : CategoryId.of(categoryValue);
         } catch (IllegalArgumentException exception) {
             return List.of(new Message("bugreport.command.error.invalid_category"));
+        }
+        ReportSession session = new ReportSessionFactory(registry()).create(ReportSessionId.random(), providerId);
+        if (categoryId != null) {
+            try {
+                session.selectCategory(categoryId);
+            } catch (UnknownReportCategoryException exception) {
+                return List.of(new Message("bugreport.command.error.unknown_category", categoryId.toString()));
+            }
         }
         sessions.put(session.snapshot().id(), session);
         return List.of(new Message(
@@ -82,7 +93,9 @@ public final class BugReportCommandService {
         if (id == null || !sessions.containsKey(id)) {
             return List.of(new Message("bugreport.command.error.unknown_session"));
         }
-        sessions.remove(id).cancel(CancellationReason.USER_REQUESTED);
+        ReportSession session = sessions.get(id);
+        session.cancel(CancellationReason.USER_REQUESTED);
+        sessions.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
