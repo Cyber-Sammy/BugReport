@@ -279,6 +279,26 @@ tasks.register('verifyClientBoundarySmoke') {
         if (!marker.isFile() || marker.getText('UTF-8').trim() != 'phase=CLIENT_READY') {
             throw new GradleException("Client boundary smoke marker is missing or malformed: ${marker}")
         }
+
+        def latestLog = layout.buildDirectory.file(
+                'spike-runtime/client-boundary-smoke/logs/latest.log').get().asFile
+        if (!latestLog.isFile()) {
+            throw new GradleException("Missing client boundary smoke runtime log: ${latestLog}")
+        }
+        def discoveryLine = latestLog.readLines('UTF-8').find {
+            it.contains('Bug Report provider discovery completed:')
+        }
+        if (discoveryLine == null) {
+            throw new GradleException(
+                    "Bug Report did not complete provider discovery in ${latestLog}")
+        }
+        ['providers=[]', 'supportStates=[]',
+         'discoveryDiagnostics=[]', 'registryDiagnostics=[]'].each { expected ->
+            if (!discoveryLine.contains(expected)) {
+                throw new GradleException(
+                        "Unexpected client discovery state in ${latestLog}: ${discoveryLine}")
+            }
+        }
     }
 }
 verifyMarker(
