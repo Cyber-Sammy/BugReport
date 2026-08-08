@@ -155,8 +155,8 @@ severity, side context, and read-only information; validation remains in Core.
 Back preserves the current in-memory draft, while Cancel discards the session.
 After a successful validation, **Plan** revalidates and confirms the typed
 form, then builds a source and size preview in the background. The preview
-allows declared available sources to be included or excluded before any I/O;
-unavailable sources cannot be selected. Accepting the selection binds it to
+allows declared available sources to be included or excluded before collection,
+copying, or generator I/O; unavailable sources cannot be selected. Accepting the selection binds it to
 the exact confirmation revision. Back returns to the form without losing its
 values and revokes the prior confirmation and plan authority. Collection
 execution and export interaction remain later M3 work.
