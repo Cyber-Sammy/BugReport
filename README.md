@@ -708,6 +708,27 @@ output, existing destinations are never overwritten, and progress bytes mean
 uncompressed bytes processed during the attempt. Transport execution performs
 blocking filesystem I/O and must run off the UI and game threads.
 
+### Versioned local configuration
+
+`ReportConfiguration` is the single immutable Core model for user-selected
+limits, privacy posture, workspace location, and completed-report retention.
+The configuration is stored as bounded canonical UTF-8 JSON with schema ID
+`bugreport:configuration` and current schema `1.0`. The codec reads the legacy
+`0.1` fixture through an explicit migration and rejects unknown schema versions,
+duplicate members, malformed encoding, traversal-like workspace paths, and
+values outside non-negotiable product ceilings.
+
+The platform resolves `WorkspaceLocation` only below its own approved data root:
+configuration never grants an arbitrary absolute filesystem path. `CleanupPolicy`
+applies to future completed-report history; it deliberately does not grant
+age-based deletion of abandoned workspaces. `FileReportConfigurationStore`
+uses same-directory atomic replacement and returns typed, path-safe failures for
+invalid files, unsupported atomic moves, and I/O errors.
+
+The model is a configuration foundation. Existing hard product ceilings remain
+authoritative; later lifecycle and history coordinators consume the decoded
+values to apply user-selected limits and retention without broadening authority.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
