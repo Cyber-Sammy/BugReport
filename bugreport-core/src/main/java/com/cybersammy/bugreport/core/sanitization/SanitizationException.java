@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.core.sanitization;
 import com.cybersammy.bugreport.core.error.DomainErrorCode;
 import com.cybersammy.bugreport.core.error.DomainErrorContext;
 import com.cybersammy.bugreport.core.error.DomainFailureException;
+import com.cybersammy.bugreport.core.error.DomainOperation;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -30,7 +31,7 @@ public final class SanitizationException extends DomainFailureException {
             Throwable cause) {
         super(
                 DomainErrorCode.from("sanitization", code),
-                DomainErrorContext.empty(),
+                DomainErrorContext.builder().operation(DomainOperation.SANITIZATION).build(),
                 message,
                 cause);
         this.code = Objects.requireNonNull(code, "code");

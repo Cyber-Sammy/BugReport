@@ -40,5 +40,18 @@ final class DomainErrorModelTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> builder.put(DomainErrorContextKey.ARTIFACT_NAME, "other.txt"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> builder.put(DomainErrorContextKey.OPERATION, "arbitrary.operation"));
+    }
+
+    @Test
+    void operationIsBoundedAndRenderedFirst() {
+        DomainErrorContext context = DomainErrorContext.builder()
+                .put(DomainErrorContextKey.TRANSPORT_ID, "bugreport:local_zip")
+                .operation(DomainOperation.TRANSPORT_EXECUTE)
+                .build();
+
+        assertEquals("operation=transport.execute,transport=bugreport:local_zip", context.logToken());
     }
 }

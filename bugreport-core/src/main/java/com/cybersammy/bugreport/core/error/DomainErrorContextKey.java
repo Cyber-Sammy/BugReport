@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.core.error;
 
 /** Safe identifiers permitted in structured failure logs. */
 public enum DomainErrorContextKey {
+    OPERATION("operation"),
     SESSION_ID("session"),
     PROVIDER_ID("provider"),
     CATEGORY_ID("category"),
@@ -9,6 +10,7 @@ public enum DomainErrorContextKey {
     GENERATOR_ID("generator"),
     TRANSPORT_ID("transport"),
     LOGICAL_ROOT("root"),
+    ZIP_CODE("zipCode"),
     ARTIFACT_NAME("artifact");
 
     private final String logName;

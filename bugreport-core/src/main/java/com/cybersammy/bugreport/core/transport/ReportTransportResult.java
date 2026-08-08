@@ -1,6 +1,7 @@
 package com.cybersammy.bugreport.core.transport;
 
 import com.cybersammy.bugreport.api.identifier.TransportId;
+import com.cybersammy.bugreport.core.error.DomainError;
 import com.cybersammy.bugreport.core.packaging.ReportZipArchive;
 import com.cybersammy.bugreport.core.packaging.ReportZipCode;
 import java.util.Objects;
@@ -20,6 +21,7 @@ public final class ReportTransportResult {
     private final ReportZipArchive archive;
     private final TransportFailureCode failureCode;
     private final ReportZipCode zipCode;
+    private final DomainError error;
 
     private ReportTransportResult(
             TransportAttemptId attemptId,
@@ -27,15 +29,18 @@ public final class ReportTransportResult {
             Status status,
             ReportZipArchive archive,
             TransportFailureCode failureCode,
-            ReportZipCode zipCode) {
+            ReportZipCode zipCode,
+            DomainError error) {
         this.attemptId = Objects.requireNonNull(attemptId, "attemptId");
         this.transportId = Objects.requireNonNull(transportId, "transportId");
         this.status = Objects.requireNonNull(status, "status");
         this.archive = archive;
         this.failureCode = failureCode;
         this.zipCode = zipCode;
+        this.error = error;
         if ((status == Status.SUCCESS) != (archive != null)
                 || (status == Status.SUCCESS) != (failureCode == null)
+                || (status == Status.SUCCESS) != (error == null)
                 || (zipCode != null && failureCode != TransportFailureCode.ZIP_FAILED)) {
             throw new IllegalArgumentException("Transport result fields are inconsistent");
         }
@@ -44,7 +49,7 @@ public final class ReportTransportResult {
     static ReportTransportResult success(
             TransportAttemptId attemptId, TransportId transportId, ReportZipArchive archive) {
         return new ReportTransportResult(
-                attemptId, transportId, Status.SUCCESS, archive, null, null);
+                attemptId, transportId, Status.SUCCESS, archive, null, null, null);
     }
 
     static ReportTransportResult failure(
@@ -52,9 +57,10 @@ public final class ReportTransportResult {
             TransportId transportId,
             Status status,
             TransportFailureCode failureCode,
-            ReportZipCode zipCode) {
+            ReportZipCode zipCode,
+            DomainError error) {
         return new ReportTransportResult(
-                attemptId, transportId, status, null, failureCode, zipCode);
+                attemptId, transportId, status, null, failureCode, zipCode, error);
     }
 
     public TransportAttemptId attemptId() {
@@ -79,5 +85,10 @@ public final class ReportTransportResult {
 
     public Optional<ReportZipCode> zipCode() {
         return Optional.ofNullable(zipCode);
+    }
+
+    /** Returns the safe structured error for a non-successful result. */
+    public Optional<DomainError> error() {
+        return Optional.ofNullable(error);
     }
 }

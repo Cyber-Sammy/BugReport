@@ -18,8 +18,9 @@ final class SourceCopyExceptionTest {
                 "Source is unsafe");
 
         assertEquals("source_copy.source_unsafe", exception.errorCode().value());
+        assertEquals("Bug Report operation failed", exception.error().safeMessage());
         assertEquals(
-                "session=00000000-0000-4000-8000-000000000101,root=GAME_LOGS",
+                "operation=collection.copy,session=00000000-0000-4000-8000-000000000101,root=GAME_LOGS",
                 exception.errorContext().logToken());
     }
 }

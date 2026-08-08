@@ -62,11 +62,25 @@ public final class DomainErrorContext implements Serializable {
         public Builder put(DomainErrorContextKey key, String value) {
             key = Objects.requireNonNull(key, "key");
             value = Objects.requireNonNull(value, "value");
+            if (key == DomainErrorContextKey.OPERATION) {
+                throw new IllegalArgumentException("Use operation() for a bounded Core operation");
+            }
             if (!VALUE.matcher(value).matches()) {
                 throw new IllegalArgumentException("Domain error context value is not log-safe");
             }
             if (values.putIfAbsent(key, value) != null) {
                 throw new IllegalArgumentException("Domain error context key is already present: " + key);
+            }
+            return this;
+        }
+
+        /** Adds a bounded Core operation without accepting caller-defined text. */
+        public Builder operation(DomainOperation operation) {
+            if (values.putIfAbsent(
+                            DomainErrorContextKey.OPERATION,
+                            Objects.requireNonNull(operation, "operation").token())
+                    != null) {
+                throw new IllegalArgumentException("Domain error context key is already present: OPERATION");
             }
             return this;
         }

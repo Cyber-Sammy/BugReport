@@ -6,6 +6,7 @@ import com.cybersammy.bugreport.core.error.DomainErrorCode;
 import com.cybersammy.bugreport.core.error.DomainErrorContext;
 import com.cybersammy.bugreport.core.error.DomainErrorContextKey;
 import com.cybersammy.bugreport.core.error.DomainFailureException;
+import com.cybersammy.bugreport.core.error.DomainOperation;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import java.util.Objects;
 
@@ -70,6 +71,7 @@ public final class SourceCopyException extends DomainFailureException {
 
     private static DomainErrorContext context(ReportSessionId sessionId, LogicalRoot root) {
         return DomainErrorContext.builder()
+                .operation(DomainOperation.COLLECTION_COPY)
                 .put(DomainErrorContextKey.SESSION_ID, sessionId.toString())
                 .put(DomainErrorContextKey.LOGICAL_ROOT, root.name())
                 .build();

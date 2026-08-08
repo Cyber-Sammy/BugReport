@@ -19,6 +19,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class ReportHistoryStoreTest {
+    @Test
+    void historyPersistenceFailuresHaveTypedSaveContext() {
+        HistoryStoreException exception = new HistoryStoreException(
+                HistoryStoreCode.ATOMIC_MOVE_UNSUPPORTED,
+                com.cybersammy.bugreport.core.error.DomainOperation.HISTORY_SAVE,
+                "History storage does not support atomic replacement");
+
+        assertEquals("history.atomic_move_unsupported", exception.errorCode().value());
+        assertEquals("operation=history.save", exception.errorContext().logToken());
+    }
+
     @TempDir Path temporaryDirectory;
 
     @Test

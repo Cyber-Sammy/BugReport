@@ -6,30 +6,30 @@ import java.util.Objects;
 public abstract class DomainFailureException extends RuntimeException implements DomainFailure {
     private static final long serialVersionUID = 1L;
 
-    private final DomainErrorCode errorCode;
-    private final DomainErrorContext errorContext;
+    private final DomainError error;
 
     protected DomainFailureException(
             DomainErrorCode errorCode, DomainErrorContext errorContext, String message) {
-        super(message);
-        this.errorCode = Objects.requireNonNull(errorCode, "errorCode");
-        this.errorContext = Objects.requireNonNull(errorContext, "errorContext");
+        this(DomainError.fromCode(errorCode, errorContext), message);
     }
 
     protected DomainFailureException(
             DomainErrorCode errorCode, DomainErrorContext errorContext, String message, Throwable cause) {
+        this(DomainError.fromCode(errorCode, errorContext), message, cause);
+    }
+
+    protected DomainFailureException(DomainError error, String message) {
+        super(message);
+        this.error = Objects.requireNonNull(error, "error");
+    }
+
+    protected DomainFailureException(DomainError error, String message, Throwable cause) {
         super(message, cause);
-        this.errorCode = Objects.requireNonNull(errorCode, "errorCode");
-        this.errorContext = Objects.requireNonNull(errorContext, "errorContext");
+        this.error = Objects.requireNonNull(error, "error");
     }
 
     @Override
-    public final DomainErrorCode errorCode() {
-        return errorCode;
-    }
-
-    @Override
-    public final DomainErrorContext errorContext() {
-        return errorContext;
+    public final DomainError error() {
+        return error;
     }
 }
