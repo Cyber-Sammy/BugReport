@@ -49,6 +49,9 @@ Implemented and executable:
   ceilings, atomic publication, and SHA-256 computed in the same pass;
 - deterministic category file collection with polling progress, cooperative
   cancellation, isolated typed per-file outcomes, and a 128 MiB run ceiling;
+- an executable headless lifecycle harness covering registry-backed session
+  selection, collection, sanitization, review, package planning, explicit local
+  export consent, deterministic ZIP output, and terminal completion;
 - stable typed Core failure codes with allow-listed structured logging context;
   logs never use exception messages, paths, content, secrets, or stack traces
   as structured fields;
@@ -65,14 +68,13 @@ Implemented and executable:
 
 Not implemented yet:
 
-- execution of diagnostic collection callbacks;
-- interactive report forms, collection orchestration, review, sanitization,
-  export, or submission;
-- player commands and UI.
+- player-facing commands, screens, and interactive report flows;
+- remote report delivery and its transport policy;
+- end-user report submission.
 
 The current build is suitable for testing API packaging, optional installation,
-side safety, and provider discovery in real mods. It is not yet a functional
-player-facing reporting mod.
+side safety, provider discovery, and the headless Core report lifecycle in real
+mods. It is not yet a functional player-facing reporting mod.
 
 ## Supported platform
 
@@ -550,12 +552,13 @@ fails the artifact closed with `STAGE_FAILED`; its safe stage ID and line are
 carried by the exception, while the original exception message is discarded.
 No ordinary `SanitizationResult` can represent an incompletely checked output.
 
-The pipeline reads from and writes to caller-owned streams. Orchestration must
-read only the exact artifacts in a current `ReviewedWorkspaceSnapshot`, write
-to a separate private temporary artifact, and atomically publish it only after
-successful sanitization. On stage failure, cancellation, I/O failure, or a
-product ceiling, the caller must discard partial output. The workspace
-publication coordinator remains a subsequent M2 slice.
+The pipeline reads from and writes to caller-owned streams.
+`WorkspaceSanitizationCoordinator` is the trusted Core boundary that reads an
+exact reviewed text artifact, writes through a private temporary workspace
+file, atomically publishes accepted output, recalculates its SHA-256 checksum,
+and revalidates workspace ownership. It fails closed on sanitizer errors and
+never treats binary artifacts as text. The resulting `SanitizationResult` and
+new artifact evidence are then issued into a prepared snapshot.
 
 `HomeDirectoryMaskingStage` and `UsernameMaskingStage` provide the first
 product identity rules. Core never reads `user.home`, `user.name`, environment
@@ -655,10 +658,12 @@ line endings, and escapes Markdown punctuation and inline HTML. It is a human
 summary, not an authority or a replacement for `manifest.json`.
 
 The internal prepared-snapshot issuing boundary is intentionally unavailable
-to arbitrary manifest callers. The future workspace sanitization coordinator
-will issue it only while publishing the exact final bytes produced by the
-trusted product pipeline and recording explicit review. Until that coordinator
-exists, production package planning has no bypass path. A plan still does not
+to arbitrary manifest callers. `WorkspaceSanitizationCoordinator` creates
+internal evidence containing the exact final artifact checksum,
+size, and sanitizer result. `WorkspacePreparationCoordinator` issues authority
+only when that evidence matches the reviewed artifact exactly and any warnings
+or binary artifacts have explicit review evidence. Production package planning
+therefore has no bypass path. A plan still does not
 grant delivery consent.
 
 ### Streaming ZIP export
