@@ -81,7 +81,8 @@ def consumerProjects = [
         project(':spike-fixtures:provider-b'),
         project(':spike-fixtures:provider-incompatible'),
         project(':spike-fixtures:discovery-probe'),
-        project(':spike-fixtures:runtime-probe')
+        project(':spike-fixtures:runtime-probe'),
+        project(':spike-fixtures:client-probe')
 ]
 
 tasks.register('publishSpikeApis') {
@@ -109,6 +110,7 @@ tasks.register('buildSpikeArtifacts', GradleBuild) {
 }
 
 def runtimeProbe = project(':spike-fixtures:runtime-probe')
+def clientProbe = project(':spike-fixtures:client-probe')
 def scenarios = [
         providerOnly : [
                 directory: 'provider-only',
@@ -154,6 +156,13 @@ def scenarios = [
                         project(':spike-fixtures:provider-incompatible'),
                         runtimeProbe
                 ]
+        ],
+        clientBoundarySmoke: [
+                directory: 'client-boundary-smoke',
+                artifacts: [
+                        project(':bugreport-neoforge'),
+                        clientProbe
+                ]
         ]
 ]
 
@@ -163,6 +172,7 @@ scenarios.each { scenarioName, scenario ->
         group = 'verification'
         description = "Prepares the ${scenarioName} production-like NeoForge runtime."
         dependsOn rootProject.tasks.named('buildSpikeArtifacts')
+        dependsOn scenario.artifacts.collect { it.tasks.named('jar') }
 
         def gameDirectory =
                 layout.buildDirectory.dir("spike-runtime/${scenario.directory}")
@@ -258,6 +268,39 @@ verifyMarker(
         ['bugreport_example'],
         currentApiVersion,
         ['bugreport_example:1.0.0'])
+
+tasks.register('verifyClientBoundarySmoke') {
+    group = 'verification'
+    description = 'Launches a physical NeoForge client to verify the isolated Bug Report client bootstrap.'
+    dependsOn ':spike-runtime:runClientBoundarySmoke'
+    doLast {
+        def marker = layout.buildDirectory.file(
+                'spike-runtime/client-boundary-smoke/bugreport-client-smoke.marker').get().asFile
+        if (!marker.isFile() || marker.getText('UTF-8').trim() != 'phase=CLIENT_READY') {
+            throw new GradleException("Client boundary smoke marker is missing or malformed: ${marker}")
+        }
+
+        def latestLog = layout.buildDirectory.file(
+                'spike-runtime/client-boundary-smoke/logs/latest.log').get().asFile
+        if (!latestLog.isFile()) {
+            throw new GradleException("Missing client boundary smoke runtime log: ${latestLog}")
+        }
+        def discoveryLine = latestLog.readLines('UTF-8').find {
+            it.contains('Bug Report provider discovery completed:')
+        }
+        if (discoveryLine == null) {
+            throw new GradleException(
+                    "Bug Report did not complete provider discovery in ${latestLog}")
+        }
+        ['providers=[]', 'supportStates=[]',
+         'discoveryDiagnostics=[]', 'registryDiagnostics=[]'].each { expected ->
+            if (!discoveryLine.contains(expected)) {
+                throw new GradleException(
+                        "Unexpected client discovery state in ${latestLog}: ${discoveryLine}")
+            }
+        }
+    }
+}
 verifyMarker(
         'verifyExampleCompatible',
         'example-compatible',
@@ -692,6 +735,43 @@ tasks.register('verifyCommonSideBoundaries') {
     }
 }
 
+tasks.register('verifyClientSourceSetIsolation') {
+    group = 'verification'
+    description = 'Verifies that NeoForge common code cannot compile against the physical-client source set.'
+
+    def neoForgeProject = project(':bugreport-neoforge')
+    dependsOn ':bugreport-neoforge:classes', ':bugreport-neoforge:clientClasses'
+
+    doLast {
+        def commonOutput = neoForgeProject.sourceSets.main.output.classesDirs.files
+        def clientOutput = neoForgeProject.sourceSets.client.output.classesDirs.files
+        def commonClasspath = neoForgeProject.sourceSets.main.compileClasspath.files
+        def clientClasspath = neoForgeProject.sourceSets.client.compileClasspath.files
+        def violations = []
+
+        if (!commonClasspath.intersect(clientOutput).isEmpty()) {
+            violations.add('bugreport-neoforge main compile classpath contains client output')
+        }
+        if (!clientClasspath.containsAll(commonOutput)) {
+            violations.add('bugreport-neoforge client compile classpath does not contain common output')
+        }
+        if (!fileTree('bugreport-neoforge/src/main/java') {
+            include '**/client/**/*.java'
+        }.isEmpty()) {
+            violations.add('bugreport-neoforge client code remains under src/main/java')
+        }
+        if (fileTree('bugreport-neoforge/src/client/java') {
+            include '**/*.java'
+        }.isEmpty()) {
+            violations.add('bugreport-neoforge client source set is empty')
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException('Client source-set isolation violations:\n'
+                    + violations.join('\n'))
+        }
+    }
+}
+
 tasks.register('verifyProductionDependencyGraph') {
     group = 'verification'
     description = 'Verifies the permitted production project dependency graph.'
@@ -923,6 +1003,10 @@ tasks.register('verifyProductionArchives') {
             leakedTestkitClasses.each {
                 violations.add(":bugreport-neoforge:jar contains Testkit class ${it}")
             }
+            if (runtimeArchive.getEntry(
+                    'com/cybersammy/bugreport/neoforge/client/BugReportClientMod.class') == null) {
+                violations.add(':bugreport-neoforge:jar is missing the client source-set bootstrap')
+            }
         } finally {
             coreArchive.close()
             runtimeArchive.close()
@@ -940,6 +1024,7 @@ tasks.register('verifyProductionArchives') {
 tasks.named('check') {
     dependsOn tasks.named('verifyApiPackagingSpike'),
             tasks.named('verifyCommonSideBoundaries'),
+            tasks.named('verifyClientSourceSetIsolation'),
             tasks.named('verifyProductionDependencyGraph'),
             tasks.named('verifyDependencyLocks'),
             tasks.named('verifySourceHygiene'),

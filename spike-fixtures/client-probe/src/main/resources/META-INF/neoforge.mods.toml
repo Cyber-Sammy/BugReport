@@ -1,0 +1,23 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="Apache-2.0"
+
+[[mods]]
+modId="bugreport_client_probe"
+version="${version}"
+displayName="Bug Report Client Boundary Probe"
+description='''Test-only physical-client probe for the Bug Report client source set.'''
+
+[[dependencies.bugreport_client_probe]]
+modId="bugreport"
+type="required"
+versionRange="[0.0.1-spike,)"
+ordering="AFTER"
+side="CLIENT"
+
+[[dependencies.bugreport_client_probe]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.227,)"
+ordering="NONE"
+side="CLIENT"

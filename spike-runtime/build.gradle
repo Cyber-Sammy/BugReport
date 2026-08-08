@@ -65,6 +65,12 @@ neoForge {
                     'spike-runtime/discovery-comparison').get().asFile
             programArgument '--nogui'
         }
+
+        clientBoundarySmoke {
+            client()
+            gameDirectory = rootProject.layout.buildDirectory.dir(
+                    'spike-runtime/client-boundary-smoke').get().asFile
+        }
     }
 }
 
@@ -98,4 +104,8 @@ tasks.named('runIncompatible') {
 
 tasks.named('runDiscoveryComparison') {
     dependsOn rootProject.tasks.named('prepareDiscoveryComparison')
+}
+
+tasks.named('runClientBoundarySmoke') {
+    dependsOn rootProject.tasks.named('prepareClientBoundarySmoke')
 }

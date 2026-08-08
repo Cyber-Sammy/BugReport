@@ -9,11 +9,24 @@ base {
     archivesName = 'bugreport-neoforge'
 }
 
+sourceSets {
+    client {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations.named('clientImplementation') {
+    extendsFrom configurations.implementation
+}
+
 neoForge {
     version = providers.gradleProperty('neo_version').get()
+    addModdingDependenciesTo sourceSets.client
     mods {
         bugreport {
             sourceSet sourceSets.main
+            sourceSet sourceSets.client
         }
     }
 }
@@ -49,6 +62,7 @@ def coreProject = project(':bugreport-core')
 tasks.named('jar', Jar) {
     dependsOn coreProject.tasks.named('classes')
     from(coreProject.sourceSets.main.output)
+    from(sourceSets.client.output)
 
     manifest {
         attributes 'Automatic-Module-Name': 'com.cybersammy.bugreport.neoforge'
