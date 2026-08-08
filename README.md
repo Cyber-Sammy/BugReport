@@ -70,7 +70,7 @@ Implemented and executable:
 
 Not implemented yet:
 
-- player-facing commands, screens, and interactive report flows;
+- player-facing screens and interactive report flows;
 - remote report delivery and its transport policy;
 - end-user report submission.
 
@@ -129,8 +129,19 @@ bugreport-neoforge/build/libs/bugreport-neoforge-0.0.1-spike.jar
 ```
 
 Copy it into the `mods` directory of a Minecraft 1.21.1 NeoForge instance.
-There is no player-facing command or screen yet; successful provider discovery
-is currently observable in `logs/latest.log`.
+The first client command boundary is available after the client has loaded:
+
+```text
+/bugreport
+/bugreport list
+/bugreport create <mod-id> [category-id]
+/bugreport open <report-id>
+/bugreport discard <report-id>
+```
+
+`create` starts an in-memory Core session and `open` reports its current state.
+Screens, form editing, persistence, collection review, and export interaction
+remain later M3 work.
 
 For a local physical-client boundary smoke test, run:
 
