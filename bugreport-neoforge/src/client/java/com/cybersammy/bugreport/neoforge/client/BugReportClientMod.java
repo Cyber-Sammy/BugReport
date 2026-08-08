@@ -33,6 +33,7 @@ public final class BugReportClientMod {
     }
 
     private void onRegisterClientCommands(RegisterClientCommandsEvent event) {
-        BugReportCommandTree.register(event.getDispatcher(), commands);
+        BugReportCommandTree.register(event.getDispatcher(), commands,
+                () -> Minecraft.getInstance().setScreen(new ProviderCategoryScreen(commands)));
     }
 }

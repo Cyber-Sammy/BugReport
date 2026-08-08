@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.neoforge.command;
 
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
+import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
@@ -40,6 +41,23 @@ public final class BugReportCommandService {
                         "bugreport.command.list.provider",
                         provider.id().toString(), provider.support().state().name()))
                 .toList();
+    }
+
+    /** Returns immutable provider data suitable for a first-party client selector. */
+    public List<ProviderChoice> providerChoices() {
+        return registry().providers().stream()
+                .map(provider -> new ProviderChoice(provider.id(), provider.specification().labelKey(),
+                        provider.support().state()))
+                .toList();
+    }
+
+    /** Returns categories declared by the requested registered provider. */
+    public List<CategoryChoice> categoryChoices(ProviderId providerId) {
+        return registry().find(Objects.requireNonNull(providerId, "providerId"))
+                .map(provider -> provider.specification().categories().values().stream()
+                        .map(category -> new CategoryChoice(category.id(), category.labelKey()))
+                        .toList())
+                .orElse(List.of());
     }
 
     public synchronized List<Message> create(String providerValue, String categoryValue) {
@@ -123,4 +141,9 @@ public final class BugReportCommandService {
             arguments = arguments == null ? new Object[0] : arguments.clone();
         }
     }
+
+    public record ProviderChoice(ProviderId id, LocalizationKey labelKey,
+            ProviderSupportState supportState) {}
+
+    public record CategoryChoice(CategoryId id, LocalizationKey labelKey) {}
 }

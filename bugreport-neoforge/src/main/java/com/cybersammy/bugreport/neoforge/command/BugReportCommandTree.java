@@ -6,13 +6,18 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 
-/** Builds the platform-neutral Brigadier tree used by the physical-client adapter. */
+/** Builds the client-independent Minecraft command tree used by the NeoForge client adapter. */
 public final class BugReportCommandTree {
     private BugReportCommandTree() {}
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands) {
-        dispatcher.register(commandRoot(commands));
+        register(dispatcher, commands, () -> {});
+    }
+
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
+            BugReportCommandService commands, Runnable openSelector) {
+        dispatcher.register(commandRoot(commands, openSelector));
     }
 
     public static boolean registrationReadyForSmoke(BugReportCommandService commands) {
@@ -26,9 +31,12 @@ public final class BugReportCommandTree {
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> commandRoot(
-            BugReportCommandService commands) {
+            BugReportCommandService commands, Runnable openSelector) {
         LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("bugreport")
-                .executes(context -> respond(context.getSource(), commands.help()));
+                .executes(context -> {
+                    openSelector.run();
+                    return 1;
+                });
         root.then(Commands.literal("list")
                 .executes(context -> respond(context.getSource(), commands.listProviders())));
         root.then(Commands.literal("create").then(Commands.argument("mod-id", StringArgumentType.word())

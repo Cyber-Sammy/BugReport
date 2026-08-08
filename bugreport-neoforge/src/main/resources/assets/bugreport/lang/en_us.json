@@ -1,4 +1,7 @@
 {
+  "bugreport.screen.select_provider.title": "Select a mod to report",
+  "bugreport.screen.select_provider.empty": "No compatible Bug Report providers are available.",
+  "bugreport.screen.select_category.title": "Select a report category for %s",
   "bugreport.command.help": "Bug Report: /bugreport list, /bugreport create <mod-id> [category-id], /bugreport open <report-id>, /bugreport discard <report-id>",
   "bugreport.command.list.empty": "No compatible Bug Report providers are available.",
   "bugreport.command.list.provider": "%s: %s",
