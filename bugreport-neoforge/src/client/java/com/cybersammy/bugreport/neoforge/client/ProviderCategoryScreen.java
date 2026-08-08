@@ -13,10 +13,17 @@ final class ProviderCategoryScreen extends Screen {
     private final BugReportCommandService commands;
     private BugReportCommandService.ProviderChoice selectedProvider;
     private Component status;
+    private boolean sessionCreated;
 
     ProviderCategoryScreen(BugReportCommandService commands) {
         super(Component.translatable("bugreport.screen.select_provider.title"));
         this.commands = commands;
+    }
+
+    ProviderCategoryScreen(BugReportCommandService commands,
+            BugReportCommandService.ProviderChoice selectedProvider) {
+        this(commands);
+        this.selectedProvider = selectedProvider;
     }
 
     @Override
@@ -40,9 +47,11 @@ final class ProviderCategoryScreen extends Screen {
         } else {
             for (BugReportCommandService.CategoryChoice category :
                     commands.categoryChoices(selectedProvider.id())) {
-                addRenderableWidget(Button.builder(Component.translatable(category.labelKey().value()),
+                Button button = Button.builder(Component.translatable(category.labelKey().value()),
                         ignored -> create(selectedProvider, category))
-                        .bounds(left, top, 240, 20).build());
+                        .bounds(left, top, 240, 20).build();
+                button.active = !sessionCreated;
+                addRenderableWidget(button);
                 top += 24;
             }
             addRenderableWidget(Button.builder(Component.translatable("gui.back"), ignored -> {
@@ -66,6 +75,10 @@ final class ProviderCategoryScreen extends Screen {
         BugReportCommandService.Message message = commands.create(
                 provider.id().toString(), category.id().toString()).getFirst();
         status = Component.translatable(message.translationKey(), message.arguments());
+        if ("bugreport.command.create.success".equals(message.translationKey())) {
+            sessionCreated = true;
+            rebuildWidgets();
+        }
     }
 
     @Override

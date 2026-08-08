@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
@@ -49,6 +50,13 @@ public final class BugReportCommandService {
                 .map(provider -> new ProviderChoice(provider.id(), provider.specification().labelKey(),
                         provider.support().state()))
                 .toList();
+    }
+
+    /** Finds one registered provider choice from the current trusted registry. */
+    public Optional<ProviderChoice> providerChoice(ProviderId providerId) {
+        return registry().find(Objects.requireNonNull(providerId, "providerId"))
+                .map(provider -> new ProviderChoice(provider.id(), provider.specification().labelKey(),
+                        provider.support().state()));
     }
 
     /** Returns categories declared by the requested registered provider. */

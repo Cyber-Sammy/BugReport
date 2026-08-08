@@ -4,6 +4,7 @@ import com.cybersammy.bugreport.neoforge.BugReportMod;
 import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandTree;
+import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import java.util.Objects;
 import java.util.concurrent.RejectedExecutionException;
 import net.minecraft.client.Minecraft;
@@ -34,6 +35,22 @@ public final class BugReportClientMod {
 
     private void onRegisterClientCommands(RegisterClientCommandsEvent event) {
         BugReportCommandTree.register(event.getDispatcher(), commands,
-                () -> Minecraft.getInstance().setScreen(new ProviderCategoryScreen(commands)));
+                new BugReportCommandTree.ProviderSelector() {
+                    @Override public void open() {
+                        Minecraft.getInstance().setScreen(new ProviderCategoryScreen(commands));
+                    }
+
+                    @Override public BugReportCommandTree.SelectionResult open(
+                            com.cybersammy.bugreport.api.identifier.ProviderId providerId) {
+                        return commands.providerChoice(providerId).map(provider -> {
+                            if (provider.supportState() == ProviderSupportState.DISABLED) {
+                                return BugReportCommandTree.SelectionResult.UNAVAILABLE;
+                            }
+                            Minecraft.getInstance().setScreen(
+                                    new ProviderCategoryScreen(commands, provider));
+                            return BugReportCommandTree.SelectionResult.OPENED;
+                        }).orElse(BugReportCommandTree.SelectionResult.UNKNOWN);
+                    }
+                });
     }
 }
