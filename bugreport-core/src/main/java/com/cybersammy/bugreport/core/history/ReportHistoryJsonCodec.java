@@ -89,14 +89,16 @@ public final class ReportHistoryJsonCodec {
     private static EntriesResult readEntries(JsonReader reader) throws IOException {
         token(reader,JsonToken.BEGIN_ARRAY,"History entries must be an array"); reader.beginArray(); List<ReportHistoryEntry> entries=new ArrayList<>();
         int skipped=0;
-        while(reader.hasNext()) { if(entries.size()+skipped==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); try { entries.add(readEntry(reader)); } catch (HistoryFormatException exception) { skipped++; drainEntry(reader); } }
+        while(reader.hasNext()) { if(entries.size()+skipped==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); RawEntry raw; try { raw=readRawEntry(reader); } catch (HistoryFormatException exception) { skipped++; drainEntry(reader); continue; } try { entries.add(buildEntry(raw)); } catch (HistoryFormatException exception) { skipped++; } }
         reader.endArray(); return new EntriesResult(List.copyOf(entries),skipped);
     }
-    private static ReportHistoryEntry readEntry(JsonReader reader) throws IOException {
+    private static RawEntry readRawEntry(JsonReader reader) throws IOException {
         object(reader,"History entry"); RawEntry raw=new RawEntry(); Set<String> names=new HashSet<>();
         while(reader.hasNext()) { String name=reader.nextName(); unique(names,name,"history entry"); switch(name) {
             case "sessionId" -> raw.sessionId=string(reader,name); case "providerId" -> raw.providerId=string(reader,name); case "providerVersion" -> raw.providerVersion=string(reader,name); case "categoryId" -> raw.categoryId=string(reader,name); case "status", "outcome" -> raw.status=string(reader,name); case "revision" -> raw.revision=nonnegativeLong(reader,name); case "updatedAt" -> raw.updatedAt=string(reader,name); case "archive" -> raw.archive=readArchive(reader); default -> rejectUnknown(reader,name); } }
-        reader.endObject();
+        reader.endObject(); return raw;
+    }
+    private static ReportHistoryEntry buildEntry(RawEntry raw) {
         try { return new ReportHistoryEntry(ReportSessionId.parse(require(raw.sessionId,"sessionId")), ProviderId.parse(require(raw.providerId,"providerId")), ProviderVersion.parse(require(raw.providerVersion,"providerVersion")), Optional.ofNullable(raw.categoryId).map(CategoryId::of), ReportHistoryStatus.valueOf(require(raw.status,"status")), require(raw.revision,"revision"), Instant.parse(require(raw.updatedAt,"updatedAt")), Optional.ofNullable(raw.archive)); }
         catch(IllegalArgumentException|NullPointerException exception){ throw new HistoryFormatException("History entry values violate the schema",exception); }
     }
