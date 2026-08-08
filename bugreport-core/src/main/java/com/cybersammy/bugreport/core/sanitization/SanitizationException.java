@@ -1,11 +1,14 @@
 package com.cybersammy.bugreport.core.sanitization;
 
+import com.cybersammy.bugreport.core.error.DomainErrorCode;
+import com.cybersammy.bugreport.core.error.DomainErrorContext;
+import com.cybersammy.bugreport.core.error.DomainFailureException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 
 /** Typed path-free failure requiring the caller to discard partial output. */
-public final class SanitizationException extends RuntimeException {
+public final class SanitizationException extends DomainFailureException {
     private static final long serialVersionUID = 1L;
 
     private final SanitizationCode code;
@@ -25,7 +28,11 @@ public final class SanitizationException extends RuntimeException {
             long line,
             String message,
             Throwable cause) {
-        super(message, cause);
+        super(
+                DomainErrorCode.from("sanitization", code),
+                DomainErrorContext.empty(),
+                message,
+                cause);
         this.code = Objects.requireNonNull(code, "code");
         this.artifactName = Objects.requireNonNull(artifactName, "artifactName");
         this.stageId = stageId == null ? null : stageId.value();
