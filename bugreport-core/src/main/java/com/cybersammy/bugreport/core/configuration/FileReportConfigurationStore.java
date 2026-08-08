@@ -13,21 +13,34 @@ import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Atomic bounded storage for one platform-selected Bug Report configuration file. */
+/** Atomic bounded storage below one pre-existing platform-trusted configuration directory. */
 public final class FileReportConfigurationStore {
+    /** Fixed filename below the trusted directory; callers cannot supply a relative path. */
+    public static final String CONFIGURATION_FILENAME = "bugreport.json";
+
+    private final Path trustedDirectory;
     private final Path configurationFile;
 
-    /** Binds storage to one absolute JSON file without touching it. */
-    public FileReportConfigurationStore(Path configurationFile) {
-        Path supplied = Objects.requireNonNull(configurationFile, "configurationFile");
-        if (!supplied.isAbsolute() || supplied.getFileName() == null) {
-            throw new IllegalArgumentException("Configuration file must be an absolute file path");
+    /**
+     * Binds storage to a pre-existing platform-owned directory after checking its complete path
+     * chain for filesystem redirection. The store never creates parent directories.
+     */
+    public FileReportConfigurationStore(Path trustedDirectory) {
+        Path supplied = Objects.requireNonNull(trustedDirectory, "trustedDirectory");
+        if (!supplied.isAbsolute()) {
+            throw new IllegalArgumentException("Configuration directory must be absolute");
         }
-        this.configurationFile = supplied.normalize();
+        this.trustedDirectory = supplied.normalize();
+        requireTrustedDirectoryAtConstruction(this.trustedDirectory);
+        configurationFile = this.trustedDirectory.resolve(CONFIGURATION_FILENAME).normalize();
+        if (!this.trustedDirectory.equals(configurationFile.getParent())) {
+            throw new IllegalArgumentException("Configuration filename escaped its trusted directory");
+        }
     }
 
     /** Loads the current configuration when present; a missing file is not an error. */
     public synchronized Optional<DecodedReportConfiguration> load() {
+        requireTrustedDirectory();
         if (!Files.exists(configurationFile, LinkOption.NOFOLLOW_LINKS)) {
             return Optional.empty();
         }
@@ -51,14 +64,13 @@ public final class FileReportConfigurationStore {
     public synchronized void save(ReportConfiguration configuration) {
         byte[] encoded = ReportConfigurationJsonCodec.encode(
                 Objects.requireNonNull(configuration, "configuration"));
-        Path parent = configurationFile.getParent();
+        requireTrustedDirectory();
         try {
-            Files.createDirectories(parent);
-            requireSafeParent(parent);
             if (Files.exists(configurationFile, LinkOption.NOFOLLOW_LINKS)) {
                 requireSafeFile();
             }
-            Path temporary = Files.createTempFile(parent, ".bugreport-config-", ".tmp");
+            Path temporary = Files.createTempFile(
+                    trustedDirectory, ".bugreport-config-", ".tmp");
             try {
                 writeAndForce(temporary, encoded);
                 Files.move(
@@ -107,12 +119,53 @@ public final class FileReportConfigurationStore {
         }
     }
 
-    private static void requireSafeParent(Path parent) {
-        if (Files.isSymbolicLink(parent)
-                || !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
+    private void requireTrustedDirectory() {
+        try {
+            requireTrustedDirectory(trustedDirectory);
+        } catch (IOException exception) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.PATH_INVALID,
-                    "Configuration parent must be a real directory");
+                    "Configuration directory is no longer a trusted real directory",
+                    exception);
+        }
+    }
+
+    private static void requireTrustedDirectoryAtConstruction(Path directory) {
+        try {
+            requireTrustedDirectory(directory);
+        } catch (IOException | ConfigurationStoreException exception) {
+            throw new IllegalArgumentException(
+                    "Configuration directory must be a pre-existing trusted real directory",
+                    exception);
+        }
+    }
+
+    private static void requireTrustedDirectory(Path directory) throws IOException {
+        if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new ConfigurationStoreException(
+                    ConfigurationStoreCode.PATH_INVALID,
+                    "Configuration directory must be a real directory");
+        }
+        Path current = directory.getRoot();
+        if (current == null) {
+            throw new ConfigurationStoreException(
+                    ConfigurationStoreCode.PATH_INVALID,
+                    "Configuration directory must be absolute");
+        }
+        for (Path segment : directory) {
+            current = current.resolve(segment);
+            if (Files.isSymbolicLink(current)) {
+                throw new ConfigurationStoreException(
+                        ConfigurationStoreCode.PATH_INVALID,
+                        "Configuration directory must not traverse symbolic links");
+            }
+        }
+        Path noFollow = directory.toRealPath(LinkOption.NOFOLLOW_LINKS);
+        Path follow = directory.toRealPath();
+        if (!noFollow.equals(follow)) {
+            throw new ConfigurationStoreException(
+                    ConfigurationStoreCode.PATH_INVALID,
+                    "Configuration directory must not traverse filesystem redirection");
         }
     }
 

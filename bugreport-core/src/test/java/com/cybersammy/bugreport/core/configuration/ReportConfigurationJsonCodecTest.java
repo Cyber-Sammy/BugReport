@@ -12,7 +12,9 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationProfile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
 
 final class ReportConfigurationJsonCodecTest {
@@ -80,9 +82,33 @@ final class ReportConfigurationJsonCodecTest {
     }
 
     @Test
+    void acceptsBoundedUnknownMembersButRejectsUnsupportedSchema() {
+        String currentWithUnknown = """
+                {"schemaId":"bugreport:configuration","schemaVersion":"1.0",
+                "sizeLimits":{"maximumMatchedFiles":1,"maximumBytesPerFile":1024,"maximumReportBytes":1024},
+                "privacyProfile":"STANDARD","workspaceDirectory":"bugreport/workspaces",
+                "cleanup":{"retentionDays":30,"maximumRetainedReports":10},"future":{"value":true}}
+                """;
+        String futureSchema = currentWithUnknown.replace("\"1.0\"", "\"1.1\"");
+
+        assertEquals(
+                SanitizationProfile.STANDARD,
+                ReportConfigurationJsonCodec.decode(
+                        currentWithUnknown.getBytes(StandardCharsets.UTF_8))
+                        .configuration()
+                        .privacyProfile());
+        assertThrows(
+                ConfigurationFormatException.class,
+                () -> ReportConfigurationJsonCodec.decode(
+                        futureSchema.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
     void atomicallyPersistsCanonicalConfigurationAndReportsMalformedFiles() throws Exception {
-        Path path = temporaryDirectory.resolve("config").resolve("bugreport.json");
-        FileReportConfigurationStore store = new FileReportConfigurationStore(path);
+        Path directory = temporaryDirectory.resolve("config");
+        Files.createDirectory(directory);
+        Path path = directory.resolve(FileReportConfigurationStore.CONFIGURATION_FILENAME);
+        FileReportConfigurationStore store = new FileReportConfigurationStore(directory);
 
         assertTrue(store.load().isEmpty());
         store.save(configuration());
@@ -96,6 +122,79 @@ final class ReportConfigurationJsonCodecTest {
         ConfigurationStoreException failure = assertThrows(
                 ConfigurationStoreException.class, store::load);
         assertEquals(ConfigurationStoreCode.FORMAT_INVALID, failure.code());
+    }
+
+    @Test
+    void rejectsRedirectedDirectoriesAndUnsafeConfigurationFiles() throws Exception {
+        Path target = temporaryDirectory.resolve("target");
+        Path link = temporaryDirectory.resolve("link");
+        Files.createDirectory(target);
+        Path nested = target.resolve("nested");
+        Files.createDirectory(nested);
+        assumeSymbolicLink(link, target);
+
+        assertThrows(IllegalArgumentException.class, () -> new FileReportConfigurationStore(link));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new FileReportConfigurationStore(link.resolve("nested")));
+
+        Path safeDirectory = temporaryDirectory.resolve("safe");
+        Files.createDirectory(safeDirectory);
+        Path outside = temporaryDirectory.resolve("outside.json");
+        Files.writeString(outside, "{}", StandardCharsets.UTF_8);
+        Path configuration = safeDirectory.resolve(FileReportConfigurationStore.CONFIGURATION_FILENAME);
+        Files.createSymbolicLink(configuration, outside);
+
+        ConfigurationStoreException failure = assertThrows(
+                ConfigurationStoreException.class,
+                () -> new FileReportConfigurationStore(safeDirectory).load());
+        assertEquals(ConfigurationStoreCode.UNSAFE_FILE, failure.code());
+    }
+
+    @Test
+    void rejectsOversizedConfigurationWithoutReadingItsDeclaredLength() throws Exception {
+        Path directory = temporaryDirectory.resolve("config");
+        Files.createDirectory(directory);
+        Path configuration = directory.resolve(FileReportConfigurationStore.CONFIGURATION_FILENAME);
+        try (var channel = Files.newByteChannel(
+                configuration,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            channel.position(ReportConfigurationJsonCodec.MAX_ENCODED_BYTES);
+            channel.write(java.nio.ByteBuffer.wrap(new byte[] {0, 0}));
+        }
+
+        ConfigurationStoreException failure = assertThrows(
+                ConfigurationStoreException.class,
+                () -> new FileReportConfigurationStore(directory).load());
+
+        assertEquals(ConfigurationStoreCode.FORMAT_INVALID, failure.code());
+    }
+
+    @Test
+    void acceptsExactProductLimitAndCleanupBoundaries() {
+        ReportSizeLimits defaults = ReportSizeLimits.productDefaults();
+
+        assertEquals(
+                defaults,
+                new ReportSizeLimits(
+                        defaults.maximumMatchedFiles(),
+                        defaults.maximumBytesPerFile(),
+                        defaults.maximumReportBytes()));
+        CleanupPolicy minimum = new CleanupPolicy(
+                CleanupPolicy.MIN_RETENTION_DAYS, CleanupPolicy.MIN_RETAINED_REPORTS);
+        CleanupPolicy maximum = new CleanupPolicy(
+                CleanupPolicy.MAX_RETENTION_DAYS, CleanupPolicy.MAX_RETAINED_REPORTS);
+        assertEquals(CleanupPolicy.MIN_RETENTION_DAYS, minimum.retentionDays());
+        assertEquals(CleanupPolicy.MAX_RETAINED_REPORTS, maximum.maximumRetainedReports());
+    }
+
+    private static void assumeSymbolicLink(Path link, Path target) throws Exception {
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (UnsupportedOperationException | java.nio.file.FileSystemException exception) {
+            Assumptions.abort("Symbolic links are unavailable in this test environment");
+        }
     }
 
     private static ReportConfiguration configuration() {

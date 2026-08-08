@@ -722,8 +722,11 @@ The platform resolves `WorkspaceLocation` only below its own approved data root:
 configuration never grants an arbitrary absolute filesystem path. `CleanupPolicy`
 applies to future completed-report history; it deliberately does not grant
 age-based deletion of abandoned workspaces. `FileReportConfigurationStore`
-uses same-directory atomic replacement and returns typed, path-safe failures for
-invalid files, unsupported atomic moves, and I/O errors.
+accepts only a pre-existing platform-trusted directory, uses its fixed
+`bugreport.json` filename, revalidates every path segment against symlink or
+filesystem redirection before each operation, and uses same-directory atomic
+replacement. It returns typed, path-safe failures for invalid files,
+unsupported atomic moves, and I/O errors.
 
 The model is a configuration foundation. Existing hard product ceilings remain
 authoritative; later lifecycle and history coordinators consume the decoded
