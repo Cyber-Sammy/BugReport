@@ -45,6 +45,8 @@ public record ReportHistoryIndex(List<ReportHistoryEntry> entries) {
                 if (value.revision() <= current.revision()) {
                     throw new IllegalArgumentException("History entry revision must advance");
                 }
+                requireStableIdentity(current, value);
+                requireValidTransition(current.status(), value.status());
                 next.set(index, value);
                 return new ReportHistoryIndex(next);
             }
@@ -54,5 +56,27 @@ public record ReportHistoryIndex(List<ReportHistoryEntry> entries) {
         }
         next.add(value);
         return new ReportHistoryIndex(next);
+    }
+
+    private static void requireStableIdentity(
+            ReportHistoryEntry current, ReportHistoryEntry incoming) {
+        if (!current.providerId().equals(incoming.providerId())
+                || !current.providerVersion().equals(incoming.providerVersion())
+                || (current.categoryId().isPresent()
+                        && !current.categoryId().equals(incoming.categoryId()))) {
+            throw new IllegalArgumentException("History entry identity cannot change");
+        }
+    }
+
+    private static void requireValidTransition(
+            ReportHistoryStatus current, ReportHistoryStatus incoming) {
+        if (current != ReportHistoryStatus.DRAFT) {
+            throw new IllegalStateException("Terminal history entry cannot transition");
+        }
+        if (incoming != ReportHistoryStatus.DRAFT
+                && incoming != ReportHistoryStatus.COMPLETED
+                && incoming != ReportHistoryStatus.FAILED) {
+            throw new IllegalArgumentException("History transition is invalid");
+        }
     }
 }

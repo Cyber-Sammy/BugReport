@@ -30,7 +30,7 @@ public final class FileReportHistoryStore {
         requireDirectory(directory);
         if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) return new HistoryIndexLoad(ReportHistoryIndex.empty(), false);
         if (Files.isSymbolicLink(file) || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) return new HistoryIndexLoad(ReportHistoryIndex.empty(), true);
-        try { return new HistoryIndexLoad(ReportHistoryJsonCodec.decode(readBounded()), false); }
+        try { DecodedHistoryIndex decoded=ReportHistoryJsonCodec.decodeRecovering(readBounded()); return new HistoryIndexLoad(decoded.index(), decoded.skippedEntries()>0); }
         catch (IOException | IllegalArgumentException exception) { return new HistoryIndexLoad(ReportHistoryIndex.empty(), true); }
     }
 

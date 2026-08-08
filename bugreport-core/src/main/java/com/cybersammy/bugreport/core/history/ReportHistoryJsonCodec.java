@@ -50,6 +50,11 @@ public final class ReportHistoryJsonCodec {
     }
 
     public static ReportHistoryIndex decode(byte[] encoded) {
+        return decodeRecovering(encoded).index();
+    }
+
+    /** Decodes a valid index while isolating semantically invalid individual entries. */
+    public static DecodedHistoryIndex decodeRecovering(byte[] encoded) {
         if (encoded == null || encoded.length > MAX_ENCODED_BYTES) throw new HistoryFormatException("History index exceeds encoded bound");
         RawIndex raw = new RawIndex();
         try (JsonReader reader = new JsonReader(new InputStreamReader(new ByteArrayInputStream(encoded),
@@ -64,7 +69,7 @@ public final class ReportHistoryJsonCodec {
         catch (IllegalArgumentException exception) { throw new HistoryFormatException("History schema version is invalid", exception); }
         if (!CURRENT_SCHEMA_VERSION.equals(version) && !LEGACY_SCHEMA_VERSION.equals(version)) throw new HistoryFormatException("Unsupported history schema version: " + version);
         if (raw.entries == null) throw new HistoryFormatException("History index is missing entries");
-        return new ReportHistoryIndex(raw.entries);
+        return new DecodedHistoryIndex(new ReportHistoryIndex(raw.entries), raw.skippedEntries);
     }
 
     private static void writeEntry(JsonWriter writer, ReportHistoryEntry e) throws IOException {
@@ -78,13 +83,14 @@ public final class ReportHistoryJsonCodec {
     private static void readRoot(JsonReader reader, RawIndex raw) throws IOException {
         object(reader, "History root"); Set<String> names = new HashSet<>();
         while (reader.hasNext()) { String name = reader.nextName(); unique(names,name,"history root"); switch(name) {
-            case "schemaId" -> raw.schemaId = string(reader,name); case "schemaVersion" -> raw.schemaVersion = string(reader,name); case "entries" -> raw.entries = readEntries(reader); default -> rejectUnknown(reader,name); } }
+                case "schemaId" -> raw.schemaId = string(reader,name); case "schemaVersion" -> raw.schemaVersion = string(reader,name); case "entries" -> { EntriesResult result = readEntries(reader); raw.entries = result.entries(); raw.skippedEntries = result.skippedEntries(); } default -> rejectUnknown(reader,name); } }
         reader.endObject();
     }
-    private static List<ReportHistoryEntry> readEntries(JsonReader reader) throws IOException {
+    private static EntriesResult readEntries(JsonReader reader) throws IOException {
         token(reader,JsonToken.BEGIN_ARRAY,"History entries must be an array"); reader.beginArray(); List<ReportHistoryEntry> entries=new ArrayList<>();
-        while(reader.hasNext()) { if(entries.size()==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); entries.add(readEntry(reader)); }
-        reader.endArray(); return List.copyOf(entries);
+        int skipped=0;
+        while(reader.hasNext()) { if(entries.size()+skipped==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); try { entries.add(readEntry(reader)); } catch (HistoryFormatException exception) { skipped++; drainEntry(reader); } }
+        reader.endArray(); return new EntriesResult(List.copyOf(entries),skipped);
     }
     private static ReportHistoryEntry readEntry(JsonReader reader) throws IOException {
         object(reader,"History entry"); RawEntry raw=new RawEntry(); Set<String> names=new HashSet<>();
@@ -108,7 +114,9 @@ public final class ReportHistoryJsonCodec {
     private static String number(JsonReader r,String n)throws IOException{token(r,JsonToken.NUMBER,"History member "+n+" must be an integer");return r.nextString();}
     private static void unique(Set<String>s,String n,String o){if(!s.add(n))throw new HistoryFormatException("Duplicate member "+n+" in "+o);}
     private static void rejectUnknown(JsonReader r,String n)throws IOException{r.skipValue();}
+    private static void drainEntry(JsonReader reader) throws IOException { if (reader.peek()!=JsonToken.NAME && reader.peek()!=JsonToken.END_OBJECT) reader.skipValue(); while(reader.peek()==JsonToken.NAME){reader.nextName();reader.skipValue();} if(reader.peek()==JsonToken.END_OBJECT)reader.endObject(); }
     private static <T>T require(T v,String n){if(v==null)throw new HistoryFormatException("History is missing required member: "+n);return v;}
-    private static final class RawIndex{String schemaId;String schemaVersion;List<ReportHistoryEntry> entries;}
+    private record EntriesResult(List<ReportHistoryEntry> entries, int skippedEntries) {}
+    private static final class RawIndex{String schemaId;String schemaVersion;List<ReportHistoryEntry> entries;int skippedEntries;}
     private static final class RawEntry{String sessionId;String providerId;String providerVersion;String categoryId;String status;Long revision;String updatedAt;ReportArchiveSummary archive;}
 }
