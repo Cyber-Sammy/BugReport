@@ -1,5 +1,6 @@
 package com.cybersammy.bugreport.core.configuration;
 
+import com.cybersammy.bugreport.core.error.DomainOperation;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -40,21 +41,23 @@ public final class FileReportConfigurationStore {
 
     /** Loads the current configuration when present; a missing file is not an error. */
     public synchronized Optional<DecodedReportConfiguration> load() {
-        requireTrustedDirectory();
+        requireTrustedDirectory(DomainOperation.CONFIGURATION_LOAD);
         if (!Files.exists(configurationFile, LinkOption.NOFOLLOW_LINKS)) {
             return Optional.empty();
         }
-        requireSafeFile();
+        requireSafeFile(DomainOperation.CONFIGURATION_LOAD);
         try {
             return Optional.of(ReportConfigurationJsonCodec.decode(readBounded()));
         } catch (ConfigurationFormatException exception) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.FORMAT_INVALID,
+                    DomainOperation.CONFIGURATION_LOAD,
                     "Persisted Bug Report configuration is invalid",
                     exception);
         } catch (IOException exception) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.IO_FAILURE,
+                    DomainOperation.CONFIGURATION_LOAD,
                     "Could not read persisted Bug Report configuration",
                     exception);
         }
@@ -64,10 +67,10 @@ public final class FileReportConfigurationStore {
     public synchronized void save(ReportConfiguration configuration) {
         byte[] encoded = ReportConfigurationJsonCodec.encode(
                 Objects.requireNonNull(configuration, "configuration"));
-        requireTrustedDirectory();
+        requireTrustedDirectory(DomainOperation.CONFIGURATION_SAVE);
         try {
             if (Files.exists(configurationFile, LinkOption.NOFOLLOW_LINKS)) {
-                requireSafeFile();
+                requireSafeFile(DomainOperation.CONFIGURATION_SAVE);
             }
             Path temporary = Files.createTempFile(
                     trustedDirectory, ".bugreport-config-", ".tmp");
@@ -81,6 +84,7 @@ public final class FileReportConfigurationStore {
             } catch (AtomicMoveNotSupportedException exception) {
                 throw new ConfigurationStoreException(
                         ConfigurationStoreCode.ATOMIC_MOVE_UNSUPPORTED,
+                        DomainOperation.CONFIGURATION_SAVE,
                         "Configuration storage does not support atomic replacement",
                         exception);
             } finally {
@@ -91,6 +95,7 @@ public final class FileReportConfigurationStore {
         } catch (IOException exception) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.IO_FAILURE,
+                    DomainOperation.CONFIGURATION_SAVE,
                     "Could not persist Bug Report configuration",
                     exception);
         }
@@ -110,21 +115,23 @@ public final class FileReportConfigurationStore {
         }
     }
 
-    private void requireSafeFile() {
+    private void requireSafeFile(DomainOperation operation) {
         if (Files.isSymbolicLink(configurationFile)
                 || !Files.isRegularFile(configurationFile, LinkOption.NOFOLLOW_LINKS)) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.UNSAFE_FILE,
+                    operation,
                     "Configuration path is not a regular file");
         }
     }
 
-    private void requireTrustedDirectory() {
+    private void requireTrustedDirectory(DomainOperation operation) {
         try {
-            requireTrustedDirectory(trustedDirectory);
+            requireTrustedDirectory(trustedDirectory, operation);
         } catch (IOException exception) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.PATH_INVALID,
+                    operation,
                     "Configuration directory is no longer a trusted real directory",
                     exception);
         }
@@ -132,7 +139,7 @@ public final class FileReportConfigurationStore {
 
     private static void requireTrustedDirectoryAtConstruction(Path directory) {
         try {
-            requireTrustedDirectory(directory);
+            requireTrustedDirectory(directory, DomainOperation.CONFIGURATION_LOAD);
         } catch (IOException | ConfigurationStoreException exception) {
             throw new IllegalArgumentException(
                     "Configuration directory must be a pre-existing trusted real directory",
@@ -140,16 +147,18 @@ public final class FileReportConfigurationStore {
         }
     }
 
-    private static void requireTrustedDirectory(Path directory) throws IOException {
+    private static void requireTrustedDirectory(Path directory, DomainOperation operation) throws IOException {
         if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.PATH_INVALID,
+                    operation,
                     "Configuration directory must be a real directory");
         }
         Path current = directory.getRoot();
         if (current == null) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.PATH_INVALID,
+                    operation,
                     "Configuration directory must be absolute");
         }
         for (Path segment : directory) {
@@ -157,6 +166,7 @@ public final class FileReportConfigurationStore {
             if (Files.isSymbolicLink(current)) {
                 throw new ConfigurationStoreException(
                         ConfigurationStoreCode.PATH_INVALID,
+                        operation,
                         "Configuration directory must not traverse symbolic links");
             }
         }
@@ -165,6 +175,7 @@ public final class FileReportConfigurationStore {
         if (!noFollow.equals(follow)) {
             throw new ConfigurationStoreException(
                     ConfigurationStoreCode.PATH_INVALID,
+                    operation,
                     "Configuration directory must not traverse filesystem redirection");
         }
     }

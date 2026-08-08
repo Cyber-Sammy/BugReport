@@ -49,6 +49,9 @@ Implemented and executable:
   ceilings, atomic publication, and SHA-256 computed in the same pass;
 - deterministic category file collection with polling progress, cooperative
   cancellation, isolated typed per-file outcomes, and a 128 MiB run ceiling;
+- stable typed Core failure codes with allow-listed structured logging context;
+  logs never use exception messages, paths, content, secrets, or stack traces
+  as structured fields;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
