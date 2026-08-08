@@ -13,7 +13,7 @@ final class ProviderCategoryScreen extends Screen {
     private final BugReportCommandService commands;
     private BugReportCommandService.ProviderChoice selectedProvider;
     private Component status;
-    private boolean sessionCreated;
+    private CategoryFormScreen activeForm;
 
     ProviderCategoryScreen(BugReportCommandService commands) {
         super(Component.translatable("bugreport.screen.select_provider.title"));
@@ -50,17 +50,25 @@ final class ProviderCategoryScreen extends Screen {
                 Button button = Button.builder(Component.translatable(category.labelKey().value()),
                         ignored -> create(selectedProvider, category))
                         .bounds(left, top, 240, 20).build();
-                button.active = !sessionCreated;
+                button.active = activeForm == null;
                 addRenderableWidget(button);
                 top += 24;
             }
-            addRenderableWidget(Button.builder(Component.translatable("gui.back"), ignored -> {
+            if (activeForm != null) {
+                addRenderableWidget(Button.builder(
+                        Component.translatable("bugreport.screen.form.resume"),
+                        ignored -> minecraft.setScreen(activeForm))
+                        .bounds(left, top + 4, 240, 20).build());
+            }
+            Button back = Button.builder(Component.translatable("gui.back"), ignored -> {
                 selectedProvider = null;
                 status = null;
                 rebuildWidgets();
-            }).bounds(left, height - 32, 116, 20).build());
+            }).bounds(left, height - 32, 116, 20).build();
+            back.active = activeForm == null;
+            addRenderableWidget(back);
         }
-        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
                 .bounds(left + 124, height - 32, 116, 20).build());
     }
 
@@ -76,9 +84,18 @@ final class ProviderCategoryScreen extends Screen {
                 provider.id().toString(), category.id().toString()).getFirst();
         status = Component.translatable(message.translationKey(), message.arguments());
         if ("bugreport.command.create.success".equals(message.translationKey())) {
-            sessionCreated = true;
-            rebuildWidgets();
+            activeForm = new CategoryFormScreen(
+                    commands, (String) message.arguments()[0], this);
+            minecraft.setScreen(activeForm);
         }
+    }
+
+    private void cancel() {
+        if (activeForm != null) {
+            activeForm.discardSession();
+            activeForm = null;
+        }
+        onClose();
     }
 
     @Override
