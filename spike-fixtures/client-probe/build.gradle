@@ -1,0 +1,38 @@
+plugins {
+    id 'net.neoforged.moddev'
+}
+
+group = 'com.cybersammy.bugreport.fixtures'
+version = '0.0.1-spike'
+
+base {
+    archivesName = 'bugreport-client-probe'
+}
+
+neoForge {
+    version = providers.gradleProperty('neo_version').get()
+    mods {
+        bugreport_client_probe {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+dependencies {
+    compileOnly project(':bugreport-api')
+    compileOnly project(':bugreport-neoforge')
+    compileOnly project(':bugreport-core')
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand version: project.version
+    }
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes 'Automatic-Module-Name': 'com.cybersammy.bugreport.fixture.client'
+    }
+}

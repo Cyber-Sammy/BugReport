@@ -56,6 +56,8 @@ Implemented and executable:
   logs never use exception messages, paths, content, secrets, or stack traces
   as structured fields;
 - dedicated-server runtime coverage and an enforced common-side source boundary;
+- an isolated NeoForge `client` source set with a physical-client bootstrap and
+  an opt-in `verifyClientBoundarySmoke` launch test;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -83,9 +85,11 @@ mods. It is not yet a functional player-facing reporting mod.
 - NeoForge 21.1.227 or a compatible version accepted by the mod metadata
 
 Bug Report is client-first, not entirely client-only. The API, provider class,
-constructor, bootstrap, and discovery snapshot are common-side code. The future
-reporting UI, player commands, and local-file collection are physical-client
-features.
+constructor, common bootstrap, and discovery snapshot are common-side code.
+The NeoForge physical-client bootstrap is compiled from an isolated `client`
+source set, which depends on common code while common code cannot compile
+against it. Reporting UI, player commands, and local-file collection remain
+physical-client features.
 
 ## Repository modules
 
@@ -127,6 +131,17 @@ bugreport-neoforge/build/libs/bugreport-neoforge-0.0.1-spike.jar
 Copy it into the `mods` directory of a Minecraft 1.21.1 NeoForge instance.
 There is no player-facing command or screen yet; successful provider discovery
 is currently observable in `logs/latest.log`.
+
+For a local physical-client boundary smoke test, run:
+
+```powershell
+.\gradlew.bat verifyClientBoundarySmoke
+```
+
+It launches an isolated development client with a test-only probe, verifies that
+the Bug Report client bootstrap accepts a render-thread dispatch, writes a
+marker, and exits automatically. It is intentionally opt-in rather than part
+of CI `check`, because it needs a usable graphical client environment.
 
 ## Integrating Bug Report API into another mod
 
