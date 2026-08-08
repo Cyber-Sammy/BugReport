@@ -68,7 +68,7 @@ final class ProviderCategoryScreen extends Screen {
             back.active = activeForm == null;
             addRenderableWidget(back);
         }
-        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
                 .bounds(left + 124, height - 32, 116, 20).build());
     }
 
@@ -88,6 +88,14 @@ final class ProviderCategoryScreen extends Screen {
                     commands, (String) message.arguments()[0], this);
             minecraft.setScreen(activeForm);
         }
+    }
+
+    private void cancel() {
+        if (activeForm != null) {
+            activeForm.discardSession();
+            activeForm = null;
+        }
+        onClose();
     }
 
     @Override

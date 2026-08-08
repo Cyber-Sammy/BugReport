@@ -388,8 +388,12 @@ final class CategoryFormScreen extends Screen {
         return index + 1 == values.length ? null : values[index + 1];
     }
 
-    private void cancelSession() {
+    void discardSession() {
         commands.discard(sessionId);
+    }
+
+    private void cancelSession() {
+        discardSession();
         minecraft.setScreen(null);
     }
 

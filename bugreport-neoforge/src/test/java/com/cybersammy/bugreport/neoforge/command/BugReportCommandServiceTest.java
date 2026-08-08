@@ -80,6 +80,20 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
+    void discardRemovesAnActiveFormSessionFromTheCommandService() {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        assertTrue(service.form(sessionId).isPresent());
+
+        assertEquals("bugreport.command.discard.success",
+                service.discard(sessionId).getFirst().translationKey());
+        assertEquals("bugreport.command.error.unknown_session",
+                service.open(sessionId).getFirst().translationKey());
+        assertTrue(service.form(sessionId).isEmpty());
+    }
+
+    @Test
     void categoryErrorsKeepMalformedAndUndeclaredInputsDistinct() {
         BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
         assertEquals("bugreport.command.error.invalid_category",
