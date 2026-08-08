@@ -151,9 +151,11 @@ For a local physical-client boundary smoke test, run:
 
 It launches an isolated development client with a test-only probe, verifies that
 common provider discovery completes with an empty registry, verifies that the
-Bug Report client bootstrap accepts a render-thread dispatch, writes a marker,
-and exits automatically. It is intentionally opt-in rather than part of CI
-`check`, because it needs a usable graphical client environment.
+Bug Report client bootstrap accepts a render-thread dispatch and builds the
+production Brigadier command tree, writes a marker, and exits automatically.
+It does not require a player connection or manual world entry. It is
+intentionally opt-in rather than part of CI `check`, because it needs a usable
+graphical client environment.
 
 ## Integrating Bug Report API into another mod
 
