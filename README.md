@@ -732,6 +732,20 @@ The model is a configuration foundation. Existing hard product ceilings remain
 authoritative; later lifecycle and history coordinators consume the decoded
 values to apply user-selected limits and retention without broadening authority.
 
+### Minimal report history
+
+`ReportHistoryIndex` retains only the metadata required to recover a draft and
+show a completed or failed report: session/provider/category identity, revision,
+timestamp, high-level status, and (only for completed reports) a path-free ZIP
+summary. It never stores form values, local archive paths, source paths,
+sanitization findings, exception messages, or secrets.
+
+`FileReportHistoryStore` uses a platform-trusted directory and fixed
+`history.json` filename. It writes atomically and treats malformed, oversized,
+or unsafe persisted bytes as a recoverable empty index without deleting the
+original file. A future UI/history service can present that recovery condition
+and decide whether to replace the corrupted index after explicit user action.
+
 `StandardFields` provides immutable, localized declarations for summary,
 description, reproduction steps, expected and actual behavior, severity, and
 side/context. A provider may reuse any subset and combine it with its own
