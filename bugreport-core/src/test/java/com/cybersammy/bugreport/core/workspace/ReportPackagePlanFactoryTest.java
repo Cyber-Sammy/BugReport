@@ -74,7 +74,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.zip.ZipEntry;
@@ -193,17 +192,19 @@ final class ReportPackagePlanFactoryTest {
     }
 
     @Test
-    void ordinarySnapshotCannotClaimSanitizedWithoutTrustedEvidence() throws Exception {
+    void ordinarySnapshotCannotClaimSanitizedWithoutCoordinatorEvidence() throws Exception {
         Fixture fixture = fixture();
 
         IllegalArgumentException failure = assertThrows(
                 IllegalArgumentException.class,
-                () -> PreparedWorkspaceSnapshotFactory.issue(
+                () -> WorkspacePreparationCoordinator.prepare(
                         fixture.snapshot(),
-                        Map.of(GENERATED_NAME, fixture.generatedSanitization()),
+                        List.of(),
                         Set.of()));
 
-        assertEquals("Text artifact requires trusted sanitization evidence", failure.getMessage());
+        assertEquals(
+                "Text artifact requires matching coordinator sanitization evidence",
+                failure.getMessage());
     }
 
     @Test
@@ -589,12 +590,19 @@ final class ReportPackagePlanFactoryTest {
                 List.of(generatedArtifact, sourceArtifact),
                 ARTIFACT_BYTES.length + GENERATED_BYTES.length,
                 checksum("snapshot".getBytes(StandardCharsets.UTF_8)));
-        PreparedWorkspaceSnapshot prepared = PreparedWorkspaceSnapshotFactory.issue(
+        PreparedWorkspaceSnapshot prepared = new PreparedWorkspaceSnapshot(
                 snapshot,
-                Map.of(
-                        ARTIFACT_NAME, source.result(),
-                        GENERATED_NAME, generated.result()),
-                Set.of());
+                List.of(
+                        new PreparedWorkspaceArtifact(
+                                generatedArtifact,
+                                generatedArtifact.privacy(),
+                                ManifestSanitizationStatus.SANITIZED,
+                                generated.result().findings()),
+                        new PreparedWorkspaceArtifact(
+                                sourceArtifact,
+                                sourceArtifact.privacy(),
+                                ManifestSanitizationStatus.SANITIZED,
+                                source.result().findings())));
         return new Fixture(workspace, snapshot, prepared, generated.result());
     }
 
