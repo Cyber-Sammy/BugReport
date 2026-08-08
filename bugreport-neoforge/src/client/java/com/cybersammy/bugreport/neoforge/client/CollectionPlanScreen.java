@@ -6,13 +6,16 @@ import com.cybersammy.bugreport.core.source.BuiltInSourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.FileSourcePlan;
+import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.SourceSelectionPlan;
 import com.cybersammy.bugreport.core.source.UnavailableSourcePlan;
 import com.cybersammy.bugreport.core.source.UserSelectionSourcePlan;
 import com.cybersammy.bugreport.neoforge.BugReportMod;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -27,7 +30,10 @@ final class CollectionPlanScreen extends Screen {
     private volatile boolean visible;
     private boolean planningStarted;
     private CategorySourcePlan plan;
+    private Set<com.cybersammy.bugreport.api.identifier.DiagnosticSourceId> includedSourceIds = Set.of();
     private boolean planning = true;
+    private boolean selectionAccepted;
+    private int sourcePage;
     private Component status = Component.translatable("bugreport.screen.plan.planning");
 
     CollectionPlanScreen(
@@ -43,14 +49,28 @@ final class CollectionPlanScreen extends Screen {
     @Override
     protected void init() {
         visible = true;
-        addRenderableWidget(Button.builder(Component.translatable("gui.back"), ignored -> returnToForm())
-                .bounds(width / 2 - 120, height - 32, 116, 20).build());
-        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
-                .bounds(width / 2 + 4, height - 32, 116, 20).build());
+        rebuildPlanWidgets();
         if (!planningStarted) {
             planningStarted = true;
             startPlanning(Minecraft.getInstance().gameDirectory.toPath());
         }
+    }
+
+    private void rebuildPlanWidgets() {
+        clearWidgets();
+        addRenderableWidget(Button.builder(Component.translatable("gui.back"), ignored -> returnToForm())
+                .bounds(width / 2 - 120, height - 32, 116, 20).build());
+        addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
+                .bounds(width / 2 + 4, height - 32, 116, 20).build());
+        if (plan == null) {
+            return;
+        }
+        addSourceControls();
+        Button accept = Button.builder(Component.translatable("bugreport.screen.plan.accept"),
+                        ignored -> acceptSelection())
+                .bounds(width / 2 - 58, height - 56, 116, 20).build();
+        accept.active = !selectionAccepted;
+        addRenderableWidget(accept);
     }
 
     private void startPlanning(Path gameDirectory) {
@@ -60,9 +80,7 @@ final class CollectionPlanScreen extends Screen {
                         BugReportMod.providerRegistry(),
                         ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
                         SupportedSide.PHYSICAL_CLIENT).plan(request.providerId(), request.categoryId());
-                boolean accepted = commands.acceptCollectionPlan(
-                        request.sessionId().toString(), planned);
-                Minecraft.getInstance().execute(() -> presentPlan(planned, accepted));
+                Minecraft.getInstance().execute(() -> presentPlan(planned));
             } catch (RuntimeException exception) {
                 commands.returnToForm(request.sessionId().toString());
                 Minecraft.getInstance().execute(this::presentPlanningFailure);
@@ -70,18 +88,15 @@ final class CollectionPlanScreen extends Screen {
         });
     }
 
-    private void presentPlan(CategorySourcePlan planned, boolean accepted) {
+    private void presentPlan(CategorySourcePlan planned) {
         if (!visible) {
             return;
         }
-        if (!accepted) {
-            planning = false;
-            status = Component.translatable("bugreport.screen.plan.failed");
-            return;
-        }
         plan = planned;
+        includedSourceIds = new LinkedHashSet<>(ReviewedCollectionPlan.defaults(planned).includedSourceIds());
         planning = false;
         status = Component.translatable("bugreport.screen.plan.ready", planned.files().size(), knownBytes(planned));
+        rebuildPlanWidgets();
     }
 
     private void presentPlanningFailure() {
@@ -90,6 +105,70 @@ final class CollectionPlanScreen extends Screen {
         }
         planning = false;
         status = Component.translatable("bugreport.screen.plan.failed");
+    }
+
+    private void addSourceControls() {
+        List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
+        int pageSize = 5;
+        int pageCount = Math.max(1, (sources.size() + pageSize - 1) / pageSize);
+        sourcePage = Math.min(sourcePage, pageCount - 1);
+        int first = sourcePage * pageSize;
+        int last = Math.min(first + pageSize, sources.size());
+        for (int index = first; index < last; index++) {
+            com.cybersammy.bugreport.core.source.CoordinatedSourcePlan source = sources.get(index);
+            var sourceId = source.provenance().sourceId();
+            boolean selectable = !(source.selection() instanceof UnavailableSourcePlan);
+            boolean included = includedSourceIds.contains(sourceId);
+            Button toggle = Button.builder(
+                            Component.translatable(
+                                    included
+                                            ? "bugreport.screen.plan.exclude"
+                                            : "bugreport.screen.plan.include",
+                                    Component.translatable(source.selection().source().labelKey().value())),
+                            ignored -> toggleSource(sourceId))
+                    .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20).build();
+            toggle.active = selectable && !selectionAccepted;
+            addRenderableWidget(toggle);
+        }
+        if (pageCount > 1) {
+            Button previous = Button.builder(Component.translatable("bugreport.screen.form.previous"),
+                            ignored -> changePage(-1))
+                    .bounds(width / 2 - 120, height - 82, 56, 20).build();
+            previous.active = sourcePage > 0;
+            addRenderableWidget(previous);
+            Button next = Button.builder(Component.translatable("bugreport.screen.form.next"),
+                            ignored -> changePage(1))
+                    .bounds(width / 2 + 64, height - 82, 56, 20).build();
+            next.active = sourcePage + 1 < pageCount;
+            addRenderableWidget(next);
+        }
+    }
+
+    private void toggleSource(com.cybersammy.bugreport.api.identifier.DiagnosticSourceId sourceId) {
+        LinkedHashSet<com.cybersammy.bugreport.api.identifier.DiagnosticSourceId> updated =
+                new LinkedHashSet<>(includedSourceIds);
+        if (!updated.add(sourceId)) {
+            updated.remove(sourceId);
+        }
+        includedSourceIds = updated;
+        rebuildPlanWidgets();
+    }
+
+    private void changePage(int delta) {
+        sourcePage += delta;
+        rebuildPlanWidgets();
+    }
+
+    private void acceptSelection() {
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(plan, includedSourceIds);
+        if (!commands.acceptCollectionPlan(request, reviewed)) {
+            status = Component.translatable("bugreport.screen.plan.failed");
+            return;
+        }
+        selectionAccepted = true;
+        status = Component.translatable(
+                "bugreport.screen.plan.accepted", reviewed.includedSources().size());
+        rebuildPlanWidgets();
     }
 
     private void returnToForm() {
@@ -123,9 +202,11 @@ final class CollectionPlanScreen extends Screen {
 
     private void renderPlan(GuiGraphics graphics) {
         List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
-        int y = 66;
-        int shown = Math.min(sources.size(), 7);
-        for (int index = 0; index < shown; index++) {
+        int y = 84;
+        int pageSize = 5;
+        int first = sourcePage * pageSize;
+        int last = Math.min(first + pageSize, sources.size());
+        for (int index = first; index < last; index++) {
             SourceSelectionPlan selection = sources.get(index).selection();
             Component row = Component.translatable(
                     "bugreport.screen.plan.source",
@@ -134,17 +215,12 @@ final class CollectionPlanScreen extends Screen {
                     selection.estimate().selectedFileCount(),
                     selection.estimate().knownBytes());
             graphics.drawString(font, row, width / 2 - 140, y, 0xE0E0E0);
-            y += 14;
-        }
-        if (sources.size() > shown) {
-            graphics.drawString(font,
-                    Component.translatable("bugreport.screen.plan.more_sources", sources.size() - shown),
-                    width / 2 - 140, y, 0xA0A0A0);
+            y += 32;
         }
         if (!plan.conflicts().isEmpty()) {
             graphics.drawString(font,
                     Component.translatable("bugreport.screen.plan.conflicts", plan.conflicts().size()),
-                    width / 2 - 140, y + 18, 0xFF6060);
+                    width / 2 - 140, y + 8, 0xFF6060);
         }
     }
 

@@ -18,6 +18,7 @@ import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,7 +31,7 @@ public final class BugReportCommandService {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
-    private final Map<ReportSessionId, CategorySourcePlan> collectionPlans = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
@@ -170,33 +171,45 @@ public final class BugReportCommandService {
         }
 
         session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
-        confirmedForms.put(snapshot.id(), submission);
+        ReportSessionSnapshot planned = session.snapshot();
+        confirmedForms.put(planned.id(), submission);
         return FormConfirmationResult.accepted(new CollectionPlanRequest(
-                snapshot.id(),
-                snapshot.providerSpecification().id(),
-                snapshot.providerSpecification().version(),
+                planned.id(),
+                planned.revision(),
+                planned.providerSpecification().id(),
+                planned.providerSpecification().version(),
                 category.id()));
     }
 
-    /** Accepts one trusted source plan whose identities match the already confirmed form. */
-    public synchronized boolean acceptCollectionPlan(String sessionValue, CategorySourcePlan plan) {
-        ReportSession session = session(sessionValue);
-        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+    /** Accepts a user-reviewed source selection bound to one exact form-confirmation revision. */
+    public synchronized boolean acceptCollectionPlan(
+            CollectionPlanRequest request, ReviewedCollectionPlan reviewedPlan) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
             return false;
         }
         ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
+                || snapshot.revision() != request.collectionPlanRevision()) {
+            return false;
+        }
         CategorySpecification category = snapshot.selectedCategory().orElseThrow();
-        CategorySourcePlan trustedPlan = Objects.requireNonNull(plan, "plan");
-        if (!snapshot.providerSpecification().id().equals(trustedPlan.providerId())
+        CategorySourcePlan trustedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan").plan();
+        if (!snapshot.id().equals(request.sessionId())
+                || !snapshot.providerSpecification().id().equals(request.providerId())
+                || !snapshot.providerSpecification().version().equals(request.providerVersion())
+                || !category.id().equals(request.categoryId())
+                || !snapshot.providerSpecification().id().equals(trustedPlan.providerId())
                 || !snapshot.providerSpecification().version().equals(trustedPlan.providerVersion())
                 || !category.id().equals(trustedPlan.categoryId())) {
             return false;
         }
-        collectionPlans.put(snapshot.id(), trustedPlan);
+        collectionPlans.put(snapshot.id(), reviewedPlan);
         return true;
     }
 
-    /** Returns to form editing while preserving the last accepted immutable form values. */
+    /** Returns to form editing and revokes every authority issued for the previous confirmation. */
     public synchronized boolean returnToForm(String sessionValue) {
         ReportSession session = session(sessionValue);
         if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
@@ -204,18 +217,19 @@ public final class BugReportCommandService {
         }
         session.transitionTo(ReportSessionState.FORM_IN_PROGRESS);
         collectionPlans.remove(session.snapshot().id());
+        confirmedForms.remove(session.snapshot().id());
         return true;
     }
 
-    /** Returns the exact validated submission accepted for a collection-planned session. */
+    /** Returns the exact validated submission accepted for the current collection-plan generation. */
     public synchronized Optional<FormSubmission> confirmedForm(String sessionValue) {
         ReportSession session = session(sessionValue);
         return session == null ? Optional.empty()
                 : Optional.ofNullable(confirmedForms.get(session.snapshot().id()));
     }
 
-    /** Returns the exact trusted source plan accepted for the current collection-planned session. */
-    public synchronized Optional<CategorySourcePlan> collectionPlan(String sessionValue) {
+    /** Returns the exact user-reviewed source selection accepted for the current plan generation. */
+    public synchronized Optional<ReviewedCollectionPlan> collectionPlan(String sessionValue) {
         ReportSession session = session(sessionValue);
         return session == null ? Optional.empty()
                 : Optional.ofNullable(collectionPlans.get(session.snapshot().id()));
@@ -362,11 +376,15 @@ public final class BugReportCommandService {
     /** Identity-only request for client-side source planning. */
     public record CollectionPlanRequest(
             ReportSessionId sessionId,
+            long collectionPlanRevision,
             ProviderId providerId,
             com.cybersammy.bugreport.api.version.ProviderVersion providerVersion,
             CategoryId categoryId) {
         public CollectionPlanRequest {
             Objects.requireNonNull(sessionId, "sessionId");
+            if (collectionPlanRevision < 0) {
+                throw new IllegalArgumentException("collectionPlanRevision must be non-negative");
+            }
             Objects.requireNonNull(providerId, "providerId");
             Objects.requireNonNull(providerVersion, "providerVersion");
             Objects.requireNonNull(categoryId, "categoryId");

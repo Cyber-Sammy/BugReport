@@ -60,9 +60,10 @@ Implemented and executable:
 - dedicated-server runtime coverage and an enforced common-side source boundary;
 - an isolated NeoForge `client` source set with a physical-client bootstrap and
   an opt-in `verifyClientBoundarySmoke` launch test;
-- first-party `/bugreport` commands, trusted provider/category selection, and a
-  paged form screen covering every declarative field kind with Core validation
-  and a background collection-plan preview over approved local roots;
+- first-party `/bugreport` commands, trusted provider/category selection, a
+  paged form screen covering every declarative field kind with Core validation,
+  and a revision-bound background collection-plan review over approved local
+  roots with explicit source inclusion choices;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -152,10 +153,13 @@ opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
 Back preserves the current in-memory draft, while Cancel discards the session.
-After a successful validation, **Plan** revalidates and locks the typed form,
-then builds a source and size preview in the background. Back returns to the
-form without losing its values. Collection review, collection execution, and
-export interaction remain later M3 work.
+After a successful validation, **Plan** revalidates and confirms the typed
+form, then builds a source and size preview in the background. The preview
+allows declared available sources to be included or excluded before any I/O;
+unavailable sources cannot be selected. Accepting the selection binds it to
+the exact confirmation revision. Back returns to the form without losing its
+values and revokes the prior confirmation and plan authority. Collection
+execution and export interaction remain later M3 work.
 
 For a local physical-client boundary smoke test, run:
 

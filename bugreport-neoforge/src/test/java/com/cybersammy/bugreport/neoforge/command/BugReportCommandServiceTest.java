@@ -27,6 +27,7 @@ import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
+import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
@@ -144,7 +145,7 @@ final class BugReportCommandServiceTest {
         assertTrue(service.returnToForm(sessionId));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.FORM_IN_PROGRESS,
                 service.form(sessionId).orElseThrow().state());
-        assertEquals(submission, service.confirmedForm(sessionId).orElseThrow());
+        assertTrue(service.confirmedForm(sessionId).isEmpty());
     }
 
     @Test
@@ -153,15 +154,41 @@ final class BugReportCommandServiceTest {
         BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
         String sessionId = (String) service.create("example_mod", "general")
                 .getFirst().arguments()[0];
-        assertFalse(service.acceptCollectionPlan(sessionId, emptyCategoryPlan(gameDirectory)));
-
-        service.confirmForm(sessionId, validSubmission());
         CategorySourcePlan plan = emptyCategoryPlan(gameDirectory);
-        assertTrue(service.acceptCollectionPlan(sessionId, plan));
-        assertSame(plan, service.collectionPlan(sessionId).orElseThrow());
+        assertFalse(service.acceptCollectionPlan(
+                new BugReportCommandService.CollectionPlanRequest(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.parse(sessionId),
+                        0,
+                        ProviderId.parse("example_mod"),
+                        ProviderVersion.parse("1.0.0"),
+                        CategoryId.of("general")),
+                ReviewedCollectionPlan.defaults(plan)));
+
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(plan);
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        assertSame(reviewed, service.collectionPlan(sessionId).orElseThrow());
 
         assertTrue(service.returnToForm(sessionId));
         assertTrue(service.collectionPlan(sessionId).isEmpty());
+    }
+
+    @Test
+    void rejectsAStalePlanFromAnEarlierFormConfirmation(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        CategorySourcePlan plan = emptyCategoryPlan(gameDirectory);
+
+        BugReportCommandService.CollectionPlanRequest first = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        assertTrue(service.returnToForm(sessionId));
+        BugReportCommandService.CollectionPlanRequest second = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+
+        assertFalse(service.acceptCollectionPlan(first, ReviewedCollectionPlan.defaults(plan)));
+        assertTrue(service.acceptCollectionPlan(second, ReviewedCollectionPlan.defaults(plan)));
     }
 
     @Test

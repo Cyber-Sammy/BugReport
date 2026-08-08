@@ -38,6 +38,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -98,6 +99,32 @@ final class CategorySourcePlannerTest {
         assertEquals(ReportQualityRole.REQUIRED, plan.sources().get(2).provenance().qualityRole());
         assertEquals(1, plan.files().size());
         assertEquals("present", plan.files().getFirst().provenances().getFirst().sourceId().value());
+    }
+
+    @Test
+    void reviewedPlanAllowsOnlyDeclaredAvailableSources() throws IOException {
+        ApprovedSourceRoots roots = createRoots();
+        Files.writeString(temporaryDirectory.resolve("logs/included.log"), "included");
+        DiagnosticSourceSpecification included = exact(
+                "included", "included.log", DiagnosticContentType.TEXT,
+                PrivacyClassification.PERSONAL, ReportQualityRole.OPTIONAL,
+                InclusionDefault.EXCLUDED);
+        DiagnosticSourceSpecification unavailable = exact(
+                "unavailable", "missing.log", DiagnosticContentType.TEXT,
+                PrivacyClassification.PERSONAL, ReportQualityRole.OPTIONAL,
+                InclusionDefault.EXCLUDED);
+        CategorySourcePlan plan = planner(specification(included, unavailable), roots)
+                .plan(PROVIDER_ID, CATEGORY_ID);
+
+        ReviewedCollectionPlan defaults = ReviewedCollectionPlan.defaults(plan);
+
+        assertEquals(Set.of(), defaults.includedSourceIds());
+        assertEquals(Set.of(DiagnosticSourceId.of("included")), ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("included"))).includedSourceIds());
+        assertThrows(IllegalArgumentException.class, () -> ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("unavailable"))));
+        assertThrows(IllegalArgumentException.class, () -> ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("unknown"))));
     }
 
     @Test
