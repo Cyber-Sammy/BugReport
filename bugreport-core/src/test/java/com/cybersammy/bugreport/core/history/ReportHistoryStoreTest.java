@@ -95,6 +95,18 @@ final class ReportHistoryStoreTest {
     }
 
     @Test
+    void malformedArchiveChecksumDoesNotConsumeItsValidFollower() {
+        String json = """
+                {"schemaId":"bugreport:history_index","schemaVersion":"1.0","entries":[
+                {"sessionId":"00000000-0000-4000-8000-000000000141","providerId":"example_mod","providerVersion":"1.0.0","status":"COMPLETED","revision":1,"updatedAt":"2026-01-01T00:00:00Z","archive":{"bytes":1,"checksum":"not-a-sha256","entryCount":1}},
+                {"sessionId":"00000000-0000-4000-8000-000000000142","providerId":"example_mod","providerVersion":"1.0.0","status":"DRAFT","revision":1,"updatedAt":"2026-01-02T00:00:00Z"}]}
+                """;
+        DecodedHistoryIndex decoded = ReportHistoryJsonCodec.decodeRecovering(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals(1, decoded.skippedEntries());
+        assertEquals("00000000-0000-4000-8000-000000000142", decoded.index().entries().getFirst().sessionId().toString());
+    }
+
+    @Test
     void enforcesMonotonicTerminalLifecycleAndIdentity() {
         ReportHistoryEntry draft = entry("00000000-0000-4000-8000-000000000121", 1, Instant.parse("2026-01-01T00:00:00Z"));
         ReportHistoryIndex index = ReportHistoryIndex.empty().upsert(draft);

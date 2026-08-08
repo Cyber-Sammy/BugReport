@@ -99,14 +99,15 @@ public final class ReportHistoryJsonCodec {
         reader.endObject(); return raw;
     }
     private static ReportHistoryEntry buildEntry(RawEntry raw) {
-        try { return new ReportHistoryEntry(ReportSessionId.parse(require(raw.sessionId,"sessionId")), ProviderId.parse(require(raw.providerId,"providerId")), ProviderVersion.parse(require(raw.providerVersion,"providerVersion")), Optional.ofNullable(raw.categoryId).map(CategoryId::of), ReportHistoryStatus.valueOf(require(raw.status,"status")), require(raw.revision,"revision"), Instant.parse(require(raw.updatedAt,"updatedAt")), Optional.ofNullable(raw.archive)); }
+        try { return new ReportHistoryEntry(ReportSessionId.parse(require(raw.sessionId,"sessionId")), ProviderId.parse(require(raw.providerId,"providerId")), ProviderVersion.parse(require(raw.providerVersion,"providerVersion")), Optional.ofNullable(raw.categoryId).map(CategoryId::of), ReportHistoryStatus.valueOf(require(raw.status,"status")), require(raw.revision,"revision"), Instant.parse(require(raw.updatedAt,"updatedAt")), Optional.ofNullable(raw.archive).map(ReportHistoryJsonCodec::buildArchive)); }
         catch(IllegalArgumentException|NullPointerException exception){ throw new HistoryFormatException("History entry values violate the schema",exception); }
     }
-    private static ReportArchiveSummary readArchive(JsonReader reader) throws IOException {
+    private static RawArchive readArchive(JsonReader reader) throws IOException {
         object(reader,"History archive"); String checksum=null; Long bytes=null; Integer count=null; Set<String> names=new HashSet<>();
         while(reader.hasNext()) { String name=reader.nextName(); unique(names,name,"history archive"); switch(name) { case "bytes" -> bytes=positiveLong(reader,name); case "checksum" -> checksum=string(reader,name); case "entryCount" -> count=positiveInt(reader,name); default -> rejectUnknown(reader,name); } } reader.endObject();
-        return new ReportArchiveSummary(require(bytes,"archive bytes"),new Sha256Checksum(require(checksum,"archive checksum")),require(count,"archive entry count"));
+        return new RawArchive(bytes, checksum, count);
     }
+    private static ReportArchiveSummary buildArchive(RawArchive archive) { return new ReportArchiveSummary(require(archive.bytes(),"archive bytes"),new Sha256Checksum(require(archive.checksum(),"archive checksum")),require(archive.entryCount(),"archive entry count")); }
     private static void object(JsonReader r,String m)throws IOException{token(r,JsonToken.BEGIN_OBJECT,m+" must be an object");r.beginObject();}
     private static void token(JsonReader r,JsonToken t,String m)throws IOException{if(r.peek()!=t)throw new HistoryFormatException(m);}
     private static String string(JsonReader r,String n)throws IOException{token(r,JsonToken.STRING,"History member "+n+" must be a string");return r.nextString();}
@@ -120,5 +121,6 @@ public final class ReportHistoryJsonCodec {
     private static <T>T require(T v,String n){if(v==null)throw new HistoryFormatException("History is missing required member: "+n);return v;}
     private record EntriesResult(List<ReportHistoryEntry> entries, int skippedEntries) {}
     private static final class RawIndex{String schemaId;String schemaVersion;List<ReportHistoryEntry> entries;int skippedEntries;}
-    private static final class RawEntry{String sessionId;String providerId;String providerVersion;String categoryId;String status;Long revision;String updatedAt;ReportArchiveSummary archive;}
+    private record RawArchive(Long bytes, String checksum, Integer entryCount) {}
+    private static final class RawEntry{String sessionId;String providerId;String providerVersion;String categoryId;String status;Long revision;String updatedAt;RawArchive archive;}
 }
