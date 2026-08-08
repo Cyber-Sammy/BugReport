@@ -69,19 +69,25 @@ final class CategoryFormScreen extends Screen {
 
         Button previous = Button.builder(Component.translatable("bugreport.screen.form.previous"),
                         ignored -> changePage(-1))
-                .bounds(left, height - 56, 88, 20).build();
+                .bounds(left, height - 56, 64, 20).build();
         previous.active = page > 0;
         addRenderableWidget(previous);
 
         Button next = Button.builder(Component.translatable("bugreport.screen.form.next"),
                         ignored -> changePage(1))
-                .bounds(left + 96, height - 56, 88, 20).build();
+                .bounds(left + 72, height - 56, 64, 20).build();
         next.active = page + 1 < fields.size();
         addRenderableWidget(next);
 
         addRenderableWidget(Button.builder(Component.translatable("bugreport.screen.form.validate"),
                         ignored -> validateForm())
-                .bounds(left + 192, height - 56, 88, 20).build());
+                .bounds(left + 144, height - 56, 64, 20).build());
+        Button continueButton = Button.builder(
+                        Component.translatable("bugreport.screen.form.continue"),
+                        ignored -> continueToPlan())
+                .bounds(left + 216, height - 56, 64, 20).build();
+        continueButton.active = validationSuccessful;
+        addRenderableWidget(continueButton);
         addRenderableWidget(Button.builder(Component.translatable("gui.back"),
                         ignored -> minecraft.setScreen(parent))
                 .bounds(left, height - 30, 136, 20).build());
@@ -261,18 +267,54 @@ final class CategoryFormScreen extends Screen {
             status = Component.translatable("bugreport.command.error.unknown_session");
             return;
         }
-        for (ValidationIssue issue : result.validation().issues()) {
+        applyValidation(result.validation());
+        rebuildWidgets();
+    }
+
+    private void continueToPlan() {
+        fieldErrors.clear();
+        validationSuccessful = false;
+        SubmissionAttempt attempt = buildSubmission();
+        if (attempt.errorField() != null) {
+            fieldErrors.put(attempt.errorField(), attempt.errorMessage());
+            status = Component.translatable("bugreport.screen.form.invalid");
+            showFirstError();
+            rebuildWidgets();
+            return;
+        }
+        BugReportCommandService.FormConfirmationResult result = commands.confirmForm(
+                sessionId, attempt.submission());
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.INVALID) {
+            applyValidation(result.validation().orElseThrow());
+            rebuildWidgets();
+            return;
+        }
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.UNKNOWN_SESSION) {
+            status = Component.translatable("bugreport.command.error.unknown_session");
+            rebuildWidgets();
+            return;
+        }
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.INVALID_STATE) {
+            status = Component.translatable("bugreport.screen.form.error.invalid_state");
+            rebuildWidgets();
+            return;
+        }
+        minecraft.setScreen(new CollectionPlanScreen(
+                commands, result.planRequest().orElseThrow(), this));
+    }
+
+    private void applyValidation(com.cybersammy.bugreport.api.validation.ValidationResult validation) {
+        for (ValidationIssue issue : validation.issues()) {
             fieldFor(issue).ifPresent(field -> fieldErrors.putIfAbsent(
                     field.id(), validationMessage(issue)));
         }
-        status = Component.translatable(result.validation().isValid()
+        status = Component.translatable(validation.isValid()
                 ? "bugreport.screen.form.valid"
                 : "bugreport.screen.form.invalid");
-        validationSuccessful = result.validation().isValid();
-        if (!result.validation().isValid()) {
+        validationSuccessful = validation.isValid();
+        if (!validation.isValid()) {
             showFirstError();
         }
-        rebuildWidgets();
     }
 
     @SuppressWarnings("unchecked")

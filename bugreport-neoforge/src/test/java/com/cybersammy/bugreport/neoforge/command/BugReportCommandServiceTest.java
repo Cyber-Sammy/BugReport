@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.neoforge.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
@@ -23,16 +24,22 @@ import com.cybersammy.bugreport.api.version.ProviderVersion;
 import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
 import com.cybersammy.bugreport.core.registry.ProviderRegistry;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
+import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
+import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
+import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
 import com.cybersammy.bugreport.core.form.ReportSideContext;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 final class BugReportCommandServiceTest {
     private final BugReportCommandService commands =
@@ -110,23 +117,7 @@ final class BugReportCommandServiceTest {
                 .getFirst().arguments()[0];
         BugReportCommandService.FormView before = service.form(sessionId).orElseThrow();
 
-        FormSubmission submission = FormSubmission.builder()
-                .put(FieldId.of("single"), new FieldValue.Text("summary"))
-                .put(FieldId.of("multi_line"), new FieldValue.Text("line one\nline two"))
-                .put(FieldId.of("steps"), new FieldValue.TextList(List.of("first", "second")))
-                .put(FieldId.of("checkbox"), new FieldValue.Checkbox(false))
-                .put(FieldId.of("single_select"),
-                        new FieldValue.Selection(FieldOptionId.of("one")))
-                .put(FieldId.of("multi_select"),
-                        new FieldValue.MultiSelection(Set.of(FieldOptionId.of("two"))))
-                .put(FieldId.of("integer"), new FieldValue.IntegerNumber(BigInteger.TEN))
-                .put(FieldId.of("decimal"), new FieldValue.DecimalNumber(new BigDecimal("10.5")))
-                .put(FieldId.of("expected"), new FieldValue.Text("expected"))
-                .put(FieldId.of("actual"), new FieldValue.Text("actual"))
-                .put(FieldId.of("severity"), new FieldValue.Severity(ReportSeverity.HIGH))
-                .put(FieldId.of("side"),
-                        new FieldValue.SideContext(ReportSideContext.SINGLEPLAYER))
-                .build();
+        FormSubmission submission = validSubmission();
 
         BugReportCommandService.FormResult first = service.submitForm(sessionId, submission);
         BugReportCommandService.FormResult second = service.submitForm(sessionId, submission);
@@ -137,6 +128,67 @@ final class BugReportCommandServiceTest {
         assertEquals(before.state(), after.state());
         assertEquals(before.revision(), after.revision());
         assertEquals(CategoryId.of("general"), after.category().id());
+
+        BugReportCommandService.FormConfirmationResult confirmation =
+                service.confirmForm(sessionId, submission);
+        BugReportCommandService.FormView planned = service.form(sessionId).orElseThrow();
+        assertEquals(BugReportCommandService.FormConfirmationStatus.ACCEPTED,
+                confirmation.status());
+        assertEquals("example_mod", confirmation.planRequest().orElseThrow().providerId().toString());
+        assertEquals(CategoryId.of("general"),
+                confirmation.planRequest().orElseThrow().categoryId());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTION_PLANNED,
+                planned.state());
+        assertEquals(after.revision() + 1, planned.revision());
+        assertEquals(submission, service.confirmedForm(sessionId).orElseThrow());
+
+        assertTrue(service.returnToForm(sessionId));
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.FORM_IN_PROGRESS,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.confirmedForm(sessionId).isEmpty());
+    }
+
+    @Test
+    void collectionPlanIsAcceptedOnlyForTheConfirmedCollectionPlannedSession(
+            @TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        CategorySourcePlan plan = emptyCategoryPlan(gameDirectory);
+        assertFalse(service.acceptCollectionPlan(
+                new BugReportCommandService.CollectionPlanRequest(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.parse(sessionId),
+                        0,
+                        ProviderId.parse("example_mod"),
+                        ProviderVersion.parse("1.0.0"),
+                        CategoryId.of("general")),
+                ReviewedCollectionPlan.defaults(plan)));
+
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(plan);
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        assertSame(reviewed, service.collectionPlan(sessionId).orElseThrow());
+
+        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.collectionPlan(sessionId).isEmpty());
+    }
+
+    @Test
+    void rejectsAStalePlanFromAnEarlierFormConfirmation(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        CategorySourcePlan plan = emptyCategoryPlan(gameDirectory);
+
+        BugReportCommandService.CollectionPlanRequest first = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        assertTrue(service.returnToForm(sessionId));
+        BugReportCommandService.CollectionPlanRequest second = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+
+        assertFalse(service.acceptCollectionPlan(first, ReviewedCollectionPlan.defaults(plan)));
+        assertTrue(service.acceptCollectionPlan(second, ReviewedCollectionPlan.defaults(plan)));
     }
 
     @Test
@@ -166,11 +218,45 @@ final class BugReportCommandServiceTest {
                 result.validation().issues().getFirst().path());
         assertEquals(before.state(), after.state());
         assertEquals(before.revision(), after.revision());
+
+        BugReportCommandService.FormConfirmationResult confirmation =
+                service.confirmForm(sessionId, FormSubmission.empty());
+        assertEquals(BugReportCommandService.FormConfirmationStatus.INVALID,
+                confirmation.status());
+        assertEquals(before.state(), service.form(sessionId).orElseThrow().state());
+        assertTrue(service.confirmedForm(sessionId).isEmpty());
     }
 
     private static ProviderRegistrySnapshot registry() {
         return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
                 NamespaceId.of("example_mod"), TestProvider.class.getName(), new TestProvider())));
+    }
+
+    private static CategorySourcePlan emptyCategoryPlan(Path gameDirectory) {
+        return new CategorySourcePlanner(
+                registry(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                SupportedSide.PHYSICAL_CLIENT).plan(ProviderId.parse("example_mod"), CategoryId.of("general"));
+    }
+
+    private static FormSubmission validSubmission() {
+        return FormSubmission.builder()
+                .put(FieldId.of("single"), new FieldValue.Text("summary"))
+                .put(FieldId.of("multi_line"), new FieldValue.Text("line one\nline two"))
+                .put(FieldId.of("steps"), new FieldValue.TextList(List.of("first", "second")))
+                .put(FieldId.of("checkbox"), new FieldValue.Checkbox(false))
+                .put(FieldId.of("single_select"),
+                        new FieldValue.Selection(FieldOptionId.of("one")))
+                .put(FieldId.of("multi_select"),
+                        new FieldValue.MultiSelection(Set.of(FieldOptionId.of("two"))))
+                .put(FieldId.of("integer"), new FieldValue.IntegerNumber(BigInteger.TEN))
+                .put(FieldId.of("decimal"), new FieldValue.DecimalNumber(new BigDecimal("10.5")))
+                .put(FieldId.of("expected"), new FieldValue.Text("expected"))
+                .put(FieldId.of("actual"), new FieldValue.Text("actual"))
+                .put(FieldId.of("severity"), new FieldValue.Severity(ReportSeverity.HIGH))
+                .put(FieldId.of("side"),
+                        new FieldValue.SideContext(ReportSideContext.SINGLEPLAYER))
+                .build();
     }
 
     private static final class TestProvider implements BugReportProvider {

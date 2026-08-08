@@ -17,6 +17,8 @@ import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
+import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +30,8 @@ import java.util.function.Supplier;
 public final class BugReportCommandService {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
+    private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
@@ -143,6 +147,94 @@ public final class BugReportCommandService {
         return new FormResult(validation, false);
     }
 
+    /**
+     * Revalidates and accepts form values before atomically advancing to collection planning.
+     *
+     * <p>Only this method creates the application-owned association between a session and a
+     * complete form submission. A client-side "valid" indicator is never authority to advance.
+     */
+    public synchronized FormConfirmationResult confirmForm(
+            String sessionValue, FormSubmission submission) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return FormConfirmationResult.unknownSession();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.FORM_IN_PROGRESS) {
+            return FormConfirmationResult.invalidState();
+        }
+        CategorySpecification category = snapshot.selectedCategory().orElseThrow();
+        ValidationResult validation = FieldValidator.validate(
+                category, Objects.requireNonNull(submission, "submission"));
+        if (!validation.isValid()) {
+            return FormConfirmationResult.invalid(validation);
+        }
+
+        session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
+        ReportSessionSnapshot planned = session.snapshot();
+        confirmedForms.put(planned.id(), submission);
+        return FormConfirmationResult.accepted(new CollectionPlanRequest(
+                planned.id(),
+                planned.revision(),
+                planned.providerSpecification().id(),
+                planned.providerSpecification().version(),
+                category.id()));
+    }
+
+    /** Accepts a user-reviewed source selection bound to one exact form-confirmation revision. */
+    public synchronized boolean acceptCollectionPlan(
+            CollectionPlanRequest request, ReviewedCollectionPlan reviewedPlan) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return false;
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
+                || snapshot.revision() != request.collectionPlanRevision()) {
+            return false;
+        }
+        CategorySpecification category = snapshot.selectedCategory().orElseThrow();
+        CategorySourcePlan trustedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan").plan();
+        if (!snapshot.id().equals(request.sessionId())
+                || !snapshot.providerSpecification().id().equals(request.providerId())
+                || !snapshot.providerSpecification().version().equals(request.providerVersion())
+                || !category.id().equals(request.categoryId())
+                || !snapshot.providerSpecification().id().equals(trustedPlan.providerId())
+                || !snapshot.providerSpecification().version().equals(trustedPlan.providerVersion())
+                || !category.id().equals(trustedPlan.categoryId())) {
+            return false;
+        }
+        collectionPlans.put(snapshot.id(), reviewedPlan);
+        return true;
+    }
+
+    /** Returns to form editing and revokes every authority issued for the previous confirmation. */
+    public synchronized boolean returnToForm(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+            return false;
+        }
+        session.transitionTo(ReportSessionState.FORM_IN_PROGRESS);
+        collectionPlans.remove(session.snapshot().id());
+        confirmedForms.remove(session.snapshot().id());
+        return true;
+    }
+
+    /** Returns the exact validated submission accepted for the current collection-plan generation. */
+    public synchronized Optional<FormSubmission> confirmedForm(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
+                : Optional.ofNullable(confirmedForms.get(session.snapshot().id()));
+    }
+
+    /** Returns the exact user-reviewed source selection accepted for the current plan generation. */
+    public synchronized Optional<ReviewedCollectionPlan> collectionPlan(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
+                : Optional.ofNullable(collectionPlans.get(session.snapshot().id()));
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
@@ -151,6 +243,8 @@ public final class BugReportCommandService {
         ReportSession session = sessions.get(id);
         session.cancel(CancellationReason.USER_REQUESTED);
         sessions.remove(id);
+        confirmedForms.remove(id);
+        collectionPlans.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -213,6 +307,87 @@ public final class BugReportCommandService {
 
         private static FormResult missingSession() {
             return new FormResult(null, true);
+        }
+    }
+
+    /** Result of confirming a form for collection planning. */
+    public record FormConfirmationResult(
+            FormConfirmationStatus status,
+            Optional<ValidationResult> validation,
+            Optional<CollectionPlanRequest> planRequest) {
+        public FormConfirmationResult {
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(validation, "validation");
+            Objects.requireNonNull(planRequest, "planRequest");
+            if (status == FormConfirmationStatus.ACCEPTED
+                    != (validation.isPresent() && planRequest.isPresent())) {
+                throw new IllegalArgumentException(
+                        "Accepted form confirmation requires validation and plan request");
+            }
+            if (status == FormConfirmationStatus.INVALID && validation.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Invalid form confirmation requires validation details");
+            }
+            if (status != FormConfirmationStatus.INVALID
+                    && status != FormConfirmationStatus.ACCEPTED
+                    && validation.isPresent()) {
+                throw new IllegalArgumentException(
+                        "Only accepted or invalid form confirmation carries validation details");
+            }
+            if (status != FormConfirmationStatus.ACCEPTED && planRequest.isPresent()) {
+                throw new IllegalArgumentException(
+                        "Only accepted form confirmation carries a plan request");
+            }
+        }
+
+        private static FormConfirmationResult accepted(CollectionPlanRequest request) {
+            return new FormConfirmationResult(
+                    FormConfirmationStatus.ACCEPTED,
+                    Optional.of(ValidationResult.valid()),
+                    Optional.of(request));
+        }
+
+        private static FormConfirmationResult invalid(ValidationResult validation) {
+            return new FormConfirmationResult(
+                    FormConfirmationStatus.INVALID,
+                    Optional.of(Objects.requireNonNull(validation, "validation")),
+                    Optional.empty());
+        }
+
+        private static FormConfirmationResult unknownSession() {
+            return new FormConfirmationResult(
+                    FormConfirmationStatus.UNKNOWN_SESSION, Optional.empty(), Optional.empty());
+        }
+
+        private static FormConfirmationResult invalidState() {
+            return new FormConfirmationResult(
+                    FormConfirmationStatus.INVALID_STATE, Optional.empty(), Optional.empty());
+        }
+    }
+
+    /** Stable non-sensitive outcome for the form-to-plan lifecycle boundary. */
+    public enum FormConfirmationStatus {
+        ACCEPTED,
+        INVALID,
+        UNKNOWN_SESSION,
+        INVALID_STATE
+    }
+
+    /** Identity-only request for client-side source planning. */
+    public record CollectionPlanRequest(
+            ReportSessionId sessionId,
+            long collectionPlanRevision,
+            ProviderId providerId,
+            com.cybersammy.bugreport.api.version.ProviderVersion providerVersion,
+            CategoryId categoryId) {
+        public CollectionPlanRequest {
+            Objects.requireNonNull(sessionId, "sessionId");
+            if (collectionPlanRevision < 0) {
+                throw new IllegalArgumentException("collectionPlanRevision must be non-negative");
+            }
+            Objects.requireNonNull(providerId, "providerId");
+            Objects.requireNonNull(providerVersion, "providerVersion");
+            Objects.requireNonNull(categoryId, "categoryId");
         }
     }
 }
