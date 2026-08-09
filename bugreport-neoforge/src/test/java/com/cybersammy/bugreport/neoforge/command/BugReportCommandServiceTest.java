@@ -28,6 +28,10 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
+import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
+import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
+import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
@@ -189,6 +193,52 @@ final class BugReportCommandServiceTest {
 
         assertFalse(service.acceptCollectionPlan(first, ReviewedCollectionPlan.defaults(plan)));
         assertTrue(service.acceptCollectionPlan(second, ReviewedCollectionPlan.defaults(plan)));
+    }
+
+    @Test
+    void collectionBeginsOnlyOnceFromTheAcceptedReviewedPlan(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        assertTrue(service.beginCollection(sessionId).isEmpty());
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(emptyCategoryPlan(gameDirectory));
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+
+        BugReportCommandService.CollectionExecutionRequest execution =
+                service.beginCollection(sessionId).orElseThrow();
+        assertSame(reviewed, execution.reviewedPlan());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.beginCollection(sessionId).isEmpty());
+        assertFalse(service.returnToForm(sessionId));
+    }
+
+    @Test
+    void acceptsOnlyTheCurrentCollectionExecutionResult(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(emptyCategoryPlan(gameDirectory));
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        BugReportCommandService.CollectionExecutionRequest execution =
+                service.beginCollection(sessionId).orElseThrow();
+        FileCollectionResult result = FileCollectionCoordinator.collect(
+                reviewed.selectedFilePlan(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
+                        .create(execution.sessionId()),
+                new CollectionRunControl());
+
+        assertTrue(service.acceptCollectionResult(execution, result));
+        assertFalse(service.acceptCollectionResult(execution, result));
+        assertSame(result, service.collectionResult(sessionId).orElseThrow());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.SANITIZING,
+                service.form(sessionId).orElseThrow().state());
     }
 
     @Test

@@ -119,8 +119,11 @@ final class CategorySourcePlannerTest {
         ReviewedCollectionPlan defaults = ReviewedCollectionPlan.defaults(plan);
 
         assertEquals(Set.of(), defaults.includedSourceIds());
-        assertEquals(Set.of(DiagnosticSourceId.of("included")), ReviewedCollectionPlan.of(
-                plan, Set.of(DiagnosticSourceId.of("included"))).includedSourceIds());
+        assertEquals(0, defaults.selectedFilePlan().files().size());
+        ReviewedCollectionPlan selected = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("included")));
+        assertEquals(Set.of(DiagnosticSourceId.of("included")), selected.includedSourceIds());
+        assertEquals(1, selected.selectedFilePlan().files().size());
         assertThrows(IllegalArgumentException.class, () -> ReviewedCollectionPlan.of(
                 plan, Set.of(DiagnosticSourceId.of("unavailable"))));
         assertThrows(IllegalArgumentException.class, () -> ReviewedCollectionPlan.of(

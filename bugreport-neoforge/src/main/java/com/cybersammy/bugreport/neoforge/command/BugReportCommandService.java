@@ -19,6 +19,7 @@ import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
+    private final Map<ReportSessionId, FileCollectionResult> collectionResults = new LinkedHashMap<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
@@ -235,6 +237,71 @@ public final class BugReportCommandService {
                 : Optional.ofNullable(collectionPlans.get(session.snapshot().id()));
     }
 
+    /** Begins collection only from a currently accepted user-reviewed source selection. */
+    public synchronized Optional<CollectionExecutionRequest> beginCollection(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot planned = session.snapshot();
+        ReviewedCollectionPlan reviewedPlan = collectionPlans.get(planned.id());
+        if (reviewedPlan == null) {
+            return Optional.empty();
+        }
+        session.transitionTo(ReportSessionState.COLLECTING);
+        ReportSessionSnapshot collecting = session.snapshot();
+        return Optional.of(new CollectionExecutionRequest(
+                collecting.id(), collecting.revision(), reviewedPlan));
+    }
+
+    /** Records a terminal collection result only for the exact active collection generation. */
+    public synchronized boolean acceptCollectionResult(
+            CollectionExecutionRequest request, FileCollectionResult result) {
+        Objects.requireNonNull(request, "request");
+        FileCollectionResult terminal = Objects.requireNonNull(result, "result");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return false;
+        }
+        ReportSessionSnapshot collecting = session.snapshot();
+        if (collecting.state() != ReportSessionState.COLLECTING
+                || collecting.revision() != request.collectionRevision()
+                || !matchesPlan(request.reviewedPlan(), terminal)) {
+            return false;
+        }
+        switch (terminal.status()) {
+            case COMPLETE -> session.transitionTo(ReportSessionState.SANITIZING);
+            case PARTIAL -> session.transitionTo(ReportSessionState.PARTIALLY_COLLECTED);
+            case FAILED -> session.transitionTo(ReportSessionState.FAILED_COLLECTION);
+            case CANCELLED -> session.cancel(CancellationReason.USER_REQUESTED);
+        }
+        collectionResults.put(collecting.id(), terminal);
+        return true;
+    }
+
+    /** Marks an active collection generation failed when product-owned setup cannot start it. */
+    public synchronized boolean failCollectionSetup(CollectionExecutionRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return false;
+        }
+        ReportSessionSnapshot collecting = session.snapshot();
+        if (collecting.state() != ReportSessionState.COLLECTING
+                || collecting.revision() != request.collectionRevision()) {
+            return false;
+        }
+        session.transitionTo(ReportSessionState.FAILED_COLLECTION);
+        return true;
+    }
+
+    /** Returns the terminal result accepted for this report session, if any. */
+    public synchronized Optional<FileCollectionResult> collectionResult(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
+                : Optional.ofNullable(collectionResults.get(session.snapshot().id()));
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
@@ -245,6 +312,7 @@ public final class BugReportCommandService {
         sessions.remove(id);
         confirmedForms.remove(id);
         collectionPlans.remove(id);
+        collectionResults.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -263,6 +331,13 @@ public final class BugReportCommandService {
         } catch (IllegalArgumentException exception) {
             return null;
         }
+    }
+
+    private static boolean matchesPlan(ReviewedCollectionPlan reviewedPlan, FileCollectionResult result) {
+        CategorySourcePlan plan = reviewedPlan.plan();
+        return plan.providerId().equals(result.providerId())
+                && plan.providerVersion().equals(result.providerVersion())
+                && plan.categoryId().equals(result.categoryId());
     }
 
     /** Safe, localized command response without exception text or filesystem data. */
@@ -388,6 +463,18 @@ public final class BugReportCommandService {
             Objects.requireNonNull(providerId, "providerId");
             Objects.requireNonNull(providerVersion, "providerVersion");
             Objects.requireNonNull(categoryId, "categoryId");
+        }
+    }
+
+    /** Exact immutable authority for one asynchronous collection execution. */
+    public record CollectionExecutionRequest(
+            ReportSessionId sessionId, long collectionRevision, ReviewedCollectionPlan reviewedPlan) {
+        public CollectionExecutionRequest {
+            Objects.requireNonNull(sessionId, "sessionId");
+            if (collectionRevision < 0) {
+                throw new IllegalArgumentException("collectionRevision must be non-negative");
+            }
+            Objects.requireNonNull(reviewedPlan, "reviewedPlan");
         }
     }
 }

@@ -86,4 +86,39 @@ public final class ReviewedCollectionPlan {
     public List<CoordinatedSourcePlan> includedSources() {
         return includedSources;
     }
+
+    /**
+     * Returns the exact conflict-free file plan authorized by this selection.
+     *
+     * <p>When several declarations selected one file, only provenance for included sources is
+     * retained. An excluded source therefore cannot be collected through a duplicate declaration.
+     */
+    public CategorySourcePlan selectedFilePlan() {
+        List<PlannedSourceFile> files = plan.files().stream()
+                .map(this::selectedFile)
+                .filter(Objects::nonNull)
+                .toList();
+        List<SourcePlanConflict> conflicts = plan.conflicts().stream()
+                .map(this::selectedConflict)
+                .filter(Objects::nonNull)
+                .toList();
+        return new CategorySourcePlan(
+                plan.providerId(), plan.providerVersion(), plan.categoryId(), includedSources, files, conflicts);
+    }
+
+    private PlannedSourceFile selectedFile(PlannedSourceFile file) {
+        List<SourceProvenance> provenances = file.provenances().stream()
+                .filter(provenance -> includedSourceIds.contains(provenance.sourceId()))
+                .toList();
+        return provenances.isEmpty() ? null : new PlannedSourceFile(
+                file.file(), provenances, file.maximumBytes());
+    }
+
+    private SourcePlanConflict selectedConflict(SourcePlanConflict conflict) {
+        List<SourceProvenance> provenances = conflict.provenances().stream()
+                .filter(provenance -> includedSourceIds.contains(provenance.sourceId()))
+                .toList();
+        return provenances.size() < 2 ? null : new SourcePlanConflict(
+                conflict.code(), conflict.root(), conflict.relativePath(), provenances);
+    }
 }
