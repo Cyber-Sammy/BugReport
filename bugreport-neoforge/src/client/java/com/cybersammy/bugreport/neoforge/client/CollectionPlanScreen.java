@@ -166,9 +166,12 @@ final class CollectionPlanScreen extends Screen {
             return;
         }
         selectionAccepted = true;
-        status = Component.translatable(
-                "bugreport.screen.plan.accepted", reviewed.includedSources().size());
-        rebuildPlanWidgets();
+        commands.beginCollection(request.sessionId().toString()).ifPresentOrElse(
+                execution -> minecraft.setScreen(new CollectionProgressScreen(commands, execution)),
+                () -> {
+                    status = Component.translatable("bugreport.screen.plan.failed");
+                    rebuildPlanWidgets();
+                });
     }
 
     private void returnToForm() {

@@ -4,6 +4,7 @@ import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
+import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -111,6 +112,7 @@ public final class FileCollectionResult {
     private final ProviderId providerId;
     private final ProviderVersion providerVersion;
     private final CategoryId categoryId;
+    private final CollectionPlanFingerprint planFingerprint;
     private final Status status;
     private final List<SourceOutcome> outcomes;
     private final CollectionProgressSnapshot progress;
@@ -122,9 +124,21 @@ public final class FileCollectionResult {
             Status status,
             List<SourceOutcome> outcomes,
             CollectionProgressSnapshot progress) {
+        this(providerId, providerVersion, categoryId, null, status, outcomes, progress);
+    }
+
+    FileCollectionResult(
+            ProviderId providerId,
+            ProviderVersion providerVersion,
+            CategoryId categoryId,
+            CollectionPlanFingerprint planFingerprint,
+            Status status,
+            List<SourceOutcome> outcomes,
+            CollectionProgressSnapshot progress) {
         this.providerId = Objects.requireNonNull(providerId, "providerId");
         this.providerVersion = Objects.requireNonNull(providerVersion, "providerVersion");
         this.categoryId = Objects.requireNonNull(categoryId, "categoryId");
+        this.planFingerprint = planFingerprint;
         this.status = Objects.requireNonNull(status, "status");
         this.outcomes = List.copyOf(Objects.requireNonNull(outcomes, "outcomes"));
         this.progress = Objects.requireNonNull(progress, "progress");
@@ -141,6 +155,11 @@ public final class FileCollectionResult {
 
     public CategoryId categoryId() {
         return categoryId;
+    }
+
+    /** Returns the exact plan identity when the result was produced by the coordinator. */
+    public Optional<CollectionPlanFingerprint> planFingerprint() {
+        return Optional.ofNullable(planFingerprint);
     }
 
     public Status status() {

@@ -9,17 +9,24 @@ import com.cybersammy.bugreport.api.BugReportProvider;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
+import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.FieldId;
 import com.cybersammy.bugreport.api.identifier.FieldOptionId;
 import com.cybersammy.bugreport.api.identifier.NamespaceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
 import com.cybersammy.bugreport.api.specification.FieldKind;
 import com.cybersammy.bugreport.api.specification.FieldOption;
 import com.cybersammy.bugreport.api.specification.FieldSpecification;
 import com.cybersammy.bugreport.api.validation.ValidationPath;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.specification.InclusionDefault;
+import com.cybersammy.bugreport.api.specification.LogicalRoot;
+import com.cybersammy.bugreport.api.specification.RelativePath;
+import com.cybersammy.bugreport.api.specification.ReportQualityRole;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
 import com.cybersammy.bugreport.core.registry.ProviderRegistry;
@@ -28,6 +35,10 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
+import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
+import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
+import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
@@ -35,6 +46,7 @@ import com.cybersammy.bugreport.core.form.ReportSideContext;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -192,6 +204,81 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
+    void collectionBeginsOnlyOnceFromTheAcceptedReviewedPlan(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        assertTrue(service.beginCollection(sessionId).isEmpty());
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(emptyCategoryPlan(gameDirectory));
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+
+        BugReportCommandService.CollectionExecutionRequest execution =
+                service.beginCollection(sessionId).orElseThrow();
+        assertSame(reviewed, execution.reviewedPlan());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.beginCollection(sessionId).isEmpty());
+        assertFalse(service.returnToForm(sessionId));
+    }
+
+    @Test
+    void acceptsOnlyTheCurrentCollectionExecutionResult(@TempDir Path gameDirectory) {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.defaults(emptyCategoryPlan(gameDirectory));
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        BugReportCommandService.CollectionExecutionRequest execution =
+                service.beginCollection(sessionId).orElseThrow();
+        FileCollectionResult result = FileCollectionCoordinator.collect(
+                reviewed.selectedFilePlan(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
+                        .create(execution.sessionId()),
+                new CollectionRunControl());
+
+        assertTrue(service.acceptCollectionResult(execution, result));
+        assertFalse(service.acceptCollectionResult(execution, result));
+        assertSame(result, service.collectionResult(sessionId).orElseThrow());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.SANITIZING,
+                service.form(sessionId).orElseThrow().state());
+    }
+
+    @Test
+    void rejectsAResultProducedFromDifferentSelectedFiles(@TempDir Path gameDirectory)
+            throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.writeString(gameDirectory.resolve("logs/client.log"), "diagnostic data");
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        BugReportCommandService.CollectionPlanRequest request = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        CategorySourcePlan plan = emptyCategoryPlan(gameDirectory);
+        ReviewedCollectionPlan withoutLog = ReviewedCollectionPlan.defaults(plan);
+        assertTrue(service.acceptCollectionPlan(request, withoutLog));
+        BugReportCommandService.CollectionExecutionRequest execution =
+                service.beginCollection(sessionId).orElseThrow();
+        ReviewedCollectionPlan withLog = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("client_log")));
+        FileCollectionResult mismatched = FileCollectionCoordinator.collect(
+                withLog.selectedFilePlan(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
+                        .create(execution.sessionId()),
+                new CollectionRunControl());
+
+        assertFalse(service.acceptCollectionResult(execution, mismatched));
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
+                service.form(sessionId).orElseThrow().state());
+    }
+
+    @Test
     void formLookupAndSubmissionFailClosedForUnknownSession() {
         assertTrue(commands.form("not-a-session").isEmpty());
         BugReportCommandService.FormResult result = commands.submitForm(
@@ -260,10 +347,23 @@ final class BugReportCommandServiceTest {
     }
 
     private static final class TestProvider implements BugReportProvider {
+        private static final DiagnosticSourceSpecification CLIENT_LOG =
+                DiagnosticSourceSpecification.exactFile(
+                                DiagnosticSourceId.of("client_log"),
+                                LogicalRoot.GAME_LOGS,
+                                RelativePath.of("client.log"))
+                        .labelKey(LocalizationKey.of("example_mod.source.client_log"))
+                        .privacy(PrivacyClassification.PERSONAL)
+                        .contentType(DiagnosticContentType.TEXT)
+                        .qualityRole(ReportQualityRole.OPTIONAL)
+                        .inclusionDefault(InclusionDefault.EXCLUDED)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .build();
         private static final ProviderSpecification SPECIFICATION = ProviderSpecification.builder(
                         ProviderId.parse("example_mod"), ProviderVersion.parse("1.0.0"),
                         LocalizationKey.of("example_mod.provider"))
                 .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addSource(CLIENT_LOG)
                 .addCategory(category())
                 .build();
 
@@ -294,6 +394,7 @@ final class BugReportCommandServiceTest {
         category.addField(field("side", FieldKind.SIDE_CONTEXT, PrivacyClassification.LOW));
         category.addField(field("information", FieldKind.READ_ONLY_INFORMATION,
                 PrivacyClassification.LOW));
+        category.useSource(TestProvider.CLIENT_LOG.id());
         return category.build();
     }
 

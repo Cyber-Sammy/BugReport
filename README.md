@@ -62,8 +62,9 @@ Implemented and executable:
   an opt-in `verifyClientBoundarySmoke` launch test;
 - first-party `/bugreport` commands, trusted provider/category selection, a
   paged form screen covering every declarative field kind with Core validation,
-  and a revision-bound background collection-plan review over approved local
-  roots with explicit source inclusion choices;
+  a revision-bound background collection-plan review over approved local roots
+  with explicit source inclusion choices, and cancellable background file
+  collection into a private product-owned workspace;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -157,9 +158,11 @@ After a successful validation, **Plan** revalidates and confirms the typed
 form, then builds a source and size preview in the background. The preview
 allows declared available sources to be included or excluded before collection,
 copying, or generator I/O; unavailable sources cannot be selected. Accepting the selection binds it to
-the exact confirmation revision. Back returns to the form without losing its
-values and revokes the prior confirmation and plan authority. Collection
-execution and export interaction remain later M3 work.
+the exact confirmation revision. Accepting a plan starts bounded file collection
+in the background, displays polling progress, and allows cooperative cancellation.
+Back returns to the form without losing its values and revokes the prior
+confirmation and plan authority. Sanitization, review, and export interaction
+remain later M3 work.
 
 For a local physical-client boundary smoke test, run:
 

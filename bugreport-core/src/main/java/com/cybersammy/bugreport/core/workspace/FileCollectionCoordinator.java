@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.core.workspace;
 
 import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.PlannedSourceFile;
 import java.util.ArrayList;
 import java.util.List;
@@ -194,6 +195,7 @@ public final class FileCollectionCoordinator {
                 plan.providerId(),
                 plan.providerVersion(),
                 plan.categoryId(),
+                CollectionPlanFingerprint.from(plan),
                 status,
                 outcomes,
                 terminal);
