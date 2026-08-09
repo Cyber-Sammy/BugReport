@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
+import com.cybersammy.bugreport.core.transport.NeoForgeLocalExportTransportAdapter;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
@@ -335,6 +336,24 @@ final class BugReportCommandServiceTest {
         assertTrue(service.confirmReview(
                 review,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
+
+        var exportPreparation = service.beginLocalExport(sessionId).orElseThrow();
+        assertTrue(service.beginLocalExport(sessionId).isEmpty());
+        var export = service.prepareLocalExport(exportPreparation).orElseThrow();
+        assertEquals(3, export.summary().entryCount());
+        assertFalse(service.executeLocalExport(
+                export, gameDirectory, "../unsafe.bugreport.zip",
+                new com.cybersammy.bugreport.core.transport.TransportRunControl()).isPresent());
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.READY,
+                service.form(sessionId).orElseThrow().state());
+        assertEquals(com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.SUCCESS,
+                service.executeLocalExport(
+                                export, gameDirectory, "report.bugreport.zip",
+                                new com.cybersammy.bugreport.core.transport.TransportRunControl())
+                        .orElseThrow().status());
+        assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COMPLETED,
+                service.form(sessionId).orElseThrow().state());
     }
 
     @Test
@@ -344,6 +363,23 @@ final class BugReportCommandServiceTest {
                                 .getDeclaredConstructors())
                 .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
                         constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.LocalExportPreparationRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(BugReportCommandService.LocalExportRequest.class
+                        .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(BugReportCommandService.ConfirmedLocalExport.class
+                        .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertEquals(1, NeoForgeLocalExportTransportAdapter.class.getDeclaredMethods().length);
+        assertEquals(BugReportCommandService.ConfirmedLocalExport.class,
+                NeoForgeLocalExportTransportAdapter.class.getDeclaredMethods()[0]
+                        .getParameterTypes()[0]);
         assertTrue(java.util.Arrays.stream(
                         BugReportCommandService.WorkspaceReviewRequest.class
                                 .getDeclaredConstructors())

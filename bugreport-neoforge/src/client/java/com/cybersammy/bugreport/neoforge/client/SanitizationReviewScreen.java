@@ -98,6 +98,11 @@ final class SanitizationReviewScreen extends Screen {
                 .bounds(width / 2 - 58, height - 32, 116, 20).build();
         cancel.active = !completed;
         addRenderableWidget(cancel);
+        if (completed) {
+            addRenderableWidget(Button.builder(Component.translatable("bugreport.screen.review.export"),
+                            ignored -> openExport())
+                    .bounds(width / 2 - 110, height - 56, 220, 20).build());
+        }
     }
 
     private void addArtifactControls(List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
@@ -212,6 +217,11 @@ final class SanitizationReviewScreen extends Screen {
     private void changePage(int delta) {
         page += delta;
         rebuildReviewWidgets();
+    }
+
+    private void openExport() {
+        commands.beginLocalExport(execution.sessionId().toString()).ifPresent(request ->
+                minecraft.setScreen(new LocalExportScreen(commands, request, minecraft.gameDirectory.toPath())));
     }
 
     private void cancel() {

@@ -26,7 +26,33 @@ import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
+import com.cybersammy.bugreport.core.manifest.ManifestCollectionStatus;
+import com.cybersammy.bugreport.core.manifest.ManifestEntry;
+import com.cybersammy.bugreport.core.manifest.ManifestEntryProvenance;
+import com.cybersammy.bugreport.core.manifest.ManifestEnvironment;
+import com.cybersammy.bugreport.core.manifest.ManifestProducer;
+import com.cybersammy.bugreport.core.manifest.ManifestTarget;
+import com.cybersammy.bugreport.core.manifest.ReportManifest;
+import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
+import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
+import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
+import com.cybersammy.bugreport.core.transport.NeoForgeLocalExportTransportAdapter;
+import com.cybersammy.bugreport.core.transport.ReportTransportResult;
+import com.cybersammy.bugreport.core.transport.TransportRunControl;
+import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
+import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceArtifact;
+import com.cybersammy.bugreport.core.workspace.CollectedGeneratedArtifact;
+import com.cybersammy.bugreport.core.workspace.CollectedSourceFile;
+import com.cybersammy.bugreport.core.source.SourceProvenance;
+import com.cybersammy.bugreport.api.classification.SupportedSide;
+import com.cybersammy.bugreport.api.extension.ExtensionMetadata;
+import com.cybersammy.bugreport.api.version.ApiVersion;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +76,9 @@ public final class BugReportCommandService {
             new LinkedHashMap<>();
     private final Map<ReportSessionId, WorkspaceReviewRequest> activeReviews =
             new LinkedHashMap<>();
+    private final Map<ReportSessionId, LocalExportPreparationRequest> activeExportPreparations =
+            new LinkedHashMap<>();
+    private final Map<ReportSessionId, LocalExportRequest> activeExports = new LinkedHashMap<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
@@ -471,6 +500,105 @@ public final class BugReportCommandService {
                 : Optional.ofNullable(preparedSnapshots.get(session.snapshot().id()));
     }
 
+    /** Issues exact authority to build a package summary for a READY session. */
+    public synchronized Optional<LocalExportPreparationRequest> beginLocalExport(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null || session.snapshot().state() != ReportSessionState.READY) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        PreparedWorkspaceSnapshot prepared = preparedSnapshots.get(snapshot.id());
+        ReportWorkspace workspace = collectionWorkspaces.get(snapshot.id());
+        FormSubmission fields = confirmedForms.get(snapshot.id());
+        if (prepared == null || workspace == null || fields == null
+                || activeExportPreparations.containsKey(snapshot.id())
+                || activeExports.containsKey(snapshot.id())) {
+            return Optional.empty();
+        }
+        LocalExportPreparationRequest request = new LocalExportPreparationRequest(
+                snapshot.id(), snapshot.revision(), snapshot, prepared, workspace, fields);
+        activeExportPreparations.put(snapshot.id(), request);
+        return Optional.of(request);
+    }
+
+    /** Builds the exact package plan off-thread for one service-issued export preparation token. */
+    public Optional<LocalExportRequest> prepareLocalExport(LocalExportPreparationRequest request) {
+        Objects.requireNonNull(request, "request");
+        synchronized (this) {
+            if (!isActiveExportPreparation(request)) {
+                return Optional.empty();
+            }
+        }
+        ReportPackagePlan plan = ReportPackagePlanFactory.create(
+                request.prepared(), request.workspace(), manifest(request), true);
+        synchronized (this) {
+            if (!isActiveExportPreparation(request)) {
+                return Optional.empty();
+            }
+            LocalExportRequest export = new LocalExportRequest(
+                    request.sessionId(), request.readyRevision(), request.session(), request.workspace(), plan);
+            activeExportPreparations.remove(request.sessionId());
+            activeExports.put(request.sessionId(), export);
+            return Optional.of(export);
+        }
+    }
+
+    /** Performs a user-confirmed local export only for the exact prepared package token. */
+    public Optional<ReportTransportResult> executeLocalExport(
+            LocalExportRequest request,
+            Path exportDirectory,
+            String archiveFileName,
+            TransportRunControl control) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(exportDirectory, "exportDirectory");
+        Objects.requireNonNull(control, "control");
+        Path destination;
+        try {
+            destination = safeArchiveDestination(exportDirectory, archiveFileName);
+        } catch (IOException | IllegalArgumentException failure) {
+            return Optional.empty();
+        }
+        synchronized (this) {
+            if (!isActiveExport(request)) {
+                return Optional.empty();
+            }
+            sessions.get(request.sessionId()).transitionTo(ReportSessionState.DELIVERING);
+        }
+        ReportTransportResult result;
+        try {
+            result = NeoForgeLocalExportTransportAdapter.executeConfirmed(
+                    new ConfirmedLocalExport(
+                            request.plan(), request.workspace(), new LocalArchiveDestination(destination)),
+                    control);
+        } catch (RuntimeException failure) {
+            synchronized (this) {
+                failActiveExport(request);
+            }
+            return Optional.empty();
+        }
+        synchronized (this) {
+            ReportSession session = sessions.get(request.sessionId());
+            if (session == null || activeExports.get(request.sessionId()) != request
+                    || session.snapshot().state() != ReportSessionState.DELIVERING) {
+                return Optional.empty();
+            }
+            session.transitionTo(result.status() == ReportTransportResult.Status.SUCCESS
+                    ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
+            activeExports.remove(request.sessionId());
+            return Optional.of(result);
+        }
+    }
+
+    /** Returns a failed local delivery to READY so the user can prepare a fresh export attempt. */
+    public synchronized boolean retryLocalExport(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null || session.snapshot().state() != ReportSessionState.FAILED_DELIVERY) {
+            return false;
+        }
+        session.transitionTo(ReportSessionState.READY);
+        return true;
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
@@ -487,6 +615,8 @@ public final class BugReportCommandService {
         preparedSnapshots.remove(id);
         activeSanitizations.remove(id);
         activeReviews.remove(id);
+        activeExportPreparations.remove(id);
+        activeExports.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -514,6 +644,105 @@ public final class BugReportCommandService {
                 && plan.providerVersion().equals(result.providerVersion())
                 && plan.categoryId().equals(result.categoryId())
                 && result.planFingerprint().filter(request.planFingerprint()::equals).isPresent();
+    }
+
+    private boolean isActiveExportPreparation(LocalExportPreparationRequest request) {
+        ReportSession session = sessions.get(request.sessionId());
+        return session != null
+                && activeExportPreparations.get(request.sessionId()) == request
+                && session.snapshot().state() == ReportSessionState.READY
+                && session.snapshot().revision() == request.readyRevision();
+    }
+
+    private boolean isActiveExport(LocalExportRequest request) {
+        ReportSession session = sessions.get(request.sessionId());
+        return session != null
+                && activeExports.get(request.sessionId()) == request
+                && session.snapshot().state() == ReportSessionState.READY
+                && session.snapshot().revision() == request.readyRevision();
+    }
+
+    private void failActiveExport(LocalExportRequest request) {
+        ReportSession session = sessions.get(request.sessionId());
+        if (session != null && activeExports.get(request.sessionId()) == request
+                && session.snapshot().state() == ReportSessionState.DELIVERING) {
+            session.transitionTo(ReportSessionState.FAILED_DELIVERY);
+            activeExports.remove(request.sessionId());
+        }
+    }
+
+    private static Path safeArchiveDestination(Path gameDirectory, String fileName) throws IOException {
+        String name = Objects.requireNonNull(fileName, "archiveFileName");
+        if (!name.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}\\.bugreport\\.zip")) {
+            throw new IllegalArgumentException("Archive file name is invalid");
+        }
+        Path gameRoot = gameDirectory.toAbsolutePath().normalize();
+        if (!Files.isDirectory(gameRoot, LinkOption.NOFOLLOW_LINKS)
+                || !gameRoot.equals(gameRoot.toRealPath(LinkOption.NOFOLLOW_LINKS))
+                || !gameRoot.equals(gameRoot.toRealPath())) {
+            throw new IOException("Game directory is not a safe export root");
+        }
+        Path root = gameRoot.resolve("bugreport-exports");
+        try {
+            Files.createDirectory(root);
+        } catch (java.nio.file.FileAlreadyExistsException ignored) {
+            // The following identity checks distinguish an existing safe directory from a redirect.
+        }
+        if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)
+                || !root.equals(root.toRealPath(LinkOption.NOFOLLOW_LINKS))
+                || !root.equals(root.toRealPath())) {
+            throw new IOException("Bug Report export directory is not safe");
+        }
+        Path target = root.resolve(name).normalize();
+        if (!target.getParent().equals(root)) {
+            throw new IllegalArgumentException("Archive destination escapes the export directory");
+        }
+        return target;
+    }
+
+    private static ReportManifest manifest(LocalExportPreparationRequest request) {
+        ReportSessionSnapshot snapshot = request.session();
+        return ReportManifest.builder(
+                        snapshot.id(),
+                        Instant.now(),
+                        new ManifestProducer("0.3.0", ApiVersion.parse("0.3.0")),
+                        new ManifestEnvironment("1.21.1", "neoforge", "21.1", SupportedSide.PHYSICAL_CLIENT))
+                .target(new ManifestTarget(
+                        snapshot.providerSpecification().id(),
+                        snapshot.providerSpecification().version(),
+                        snapshot.selectedCategory().orElseThrow().id()))
+                .reviewedFields(request.fields())
+                .entries(request.prepared().artifacts().stream()
+                        .map(BugReportCommandService::manifestEntry)
+                        .toList())
+                .build();
+    }
+
+    private static ManifestEntry manifestEntry(PreparedWorkspaceArtifact prepared) {
+        ReviewedWorkspaceArtifact artifact = prepared.artifact();
+        if (artifact instanceof ReviewedWorkspaceArtifact.Source source) {
+            CollectedSourceFile collected = source.collected();
+            List<ManifestEntryProvenance> provenance = collected.provenances().stream()
+                    .map(BugReportCommandService::sourceProvenance)
+                    .toList();
+            return new ManifestEntry("content/" + artifact.artifactName(), artifact.byteCount(),
+                    artifact.checksum(), artifact.contentType(), Optional.empty(),
+                    prepared.effectivePrivacy(), artifact.qualityRole(),
+                    ManifestCollectionStatus.SOURCE_COLLECTED, prepared.sanitizationStatus(), provenance,
+                    prepared.sanitizationFindings(), ExtensionMetadata.empty());
+        }
+        CollectedGeneratedArtifact generated = ((ReviewedWorkspaceArtifact.Generated) artifact).collected();
+        return new ManifestEntry("content/" + artifact.artifactName(), artifact.byteCount(), artifact.checksum(),
+                artifact.contentType(), Optional.empty(), prepared.effectivePrivacy(), artifact.qualityRole(),
+                ManifestCollectionStatus.GENERATOR_COMPLETED, prepared.sanitizationStatus(), List.of(
+                        ManifestEntryProvenance.generator(generated.providerId(), generated.providerVersion(),
+                                generated.categoryId(), generated.generatorId(), generated.privacy())),
+                prepared.sanitizationFindings(), ExtensionMetadata.empty());
+    }
+
+    private static ManifestEntryProvenance sourceProvenance(SourceProvenance value) {
+        return ManifestEntryProvenance.source(value.providerId(), value.providerVersion(), value.categoryId(),
+                value.sourceId(), value.kind(), value.privacy());
     }
 
     /** Safe, localized command response without exception text or filesystem data. */
@@ -655,6 +884,125 @@ public final class BugReportCommandService {
             }
             Objects.requireNonNull(reviewedPlan, "reviewedPlan");
             Objects.requireNonNull(planFingerprint, "planFingerprint");
+        }
+    }
+
+    /** Exact service-issued authority to construct the package summary for a READY report. */
+    public static final class LocalExportPreparationRequest {
+        private final ReportSessionId sessionId;
+        private final long readyRevision;
+        private final ReportSessionSnapshot session;
+        private final PreparedWorkspaceSnapshot prepared;
+        private final ReportWorkspace workspace;
+        private final FormSubmission fields;
+
+        private LocalExportPreparationRequest(
+                ReportSessionId sessionId,
+                long readyRevision,
+                ReportSessionSnapshot session,
+                PreparedWorkspaceSnapshot prepared,
+                ReportWorkspace workspace,
+                FormSubmission fields) {
+            this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
+            this.readyRevision = readyRevision;
+            this.session = Objects.requireNonNull(session, "session");
+            this.prepared = Objects.requireNonNull(prepared, "prepared");
+            this.workspace = Objects.requireNonNull(workspace, "workspace");
+            this.fields = Objects.requireNonNull(fields, "fields");
+            if (readyRevision < 0 || !sessionId.equals(session.id())
+                    || !sessionId.equals(workspace.sessionId())) {
+                throw new IllegalArgumentException("Export preparation identity is inconsistent");
+            }
+        }
+
+        public ReportSessionId sessionId() { return sessionId; }
+        public long readyRevision() { return readyRevision; }
+        ReportSessionSnapshot session() { return session; }
+        PreparedWorkspaceSnapshot prepared() { return prepared; }
+        ReportWorkspace workspace() { return workspace; }
+        FormSubmission fields() { return fields; }
+    }
+
+    /** Exact service-issued authority for one user-confirmed local export. */
+    public static final class LocalExportRequest {
+        private final ReportSessionId sessionId;
+        private final long readyRevision;
+        private final ReportSessionSnapshot session;
+        private final ReportWorkspace workspace;
+        private final ReportPackagePlan plan;
+
+        private LocalExportRequest(
+                ReportSessionId sessionId,
+                long readyRevision,
+                ReportSessionSnapshot session,
+                ReportWorkspace workspace,
+                ReportPackagePlan plan) {
+            this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
+            this.readyRevision = readyRevision;
+            this.session = Objects.requireNonNull(session, "session");
+            this.workspace = Objects.requireNonNull(workspace, "workspace");
+            this.plan = Objects.requireNonNull(plan, "plan");
+            if (readyRevision < 0 || !sessionId.equals(session.id())
+                    || !sessionId.equals(workspace.sessionId())) {
+                throw new IllegalArgumentException("Local export identity is inconsistent");
+            }
+        }
+
+        public ReportSessionId sessionId() { return sessionId; }
+        public long readyRevision() { return readyRevision; }
+        /** Safe package summary for the confirmation screen; it exposes no workspace path. */
+        public ExportSummary summary() {
+            return new ExportSummary(
+                    sessionId,
+                    session.providerSpecification().id(),
+                    session.selectedCategory().orElseThrow().id(),
+                    plan.entries().size(),
+                    plan.totalUncompressedBytes(),
+                    plan.markdownDocument().isPresent());
+        }
+        ReportWorkspace workspace() { return workspace; }
+        ReportPackagePlan plan() { return plan; }
+    }
+
+    /**
+     * Opaque execution authority minted only after the application service has accepted the
+     * explicit local-export action for its exact active request. It is never returned to UI code.
+     */
+    public static final class ConfirmedLocalExport {
+        private final ReportPackagePlan plan;
+        private final ReportWorkspace workspace;
+        private final LocalArchiveDestination destination;
+
+        private ConfirmedLocalExport(
+                ReportPackagePlan plan, ReportWorkspace workspace, LocalArchiveDestination destination) {
+            this.plan = Objects.requireNonNull(plan, "plan");
+            this.workspace = Objects.requireNonNull(workspace, "workspace");
+            this.destination = Objects.requireNonNull(destination, "destination");
+        }
+
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public ReportPackagePlan plan() { return plan; }
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public ReportWorkspace workspace() { return workspace; }
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public LocalArchiveDestination destination() { return destination; }
+    }
+
+    /** Path-free data rendered before a user confirms a local archive write. */
+    public record ExportSummary(
+            ReportSessionId sessionId,
+            ProviderId providerId,
+            CategoryId categoryId,
+            int entryCount,
+            long totalBytes,
+            boolean includesMarkdown) {
+        public ExportSummary {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(providerId, "providerId");
+            Objects.requireNonNull(categoryId, "categoryId");
+            if (entryCount <= 0 || totalBytes < 0) {
+                throw new IllegalArgumentException("Export summary is invalid");
+            }
         }
     }
 

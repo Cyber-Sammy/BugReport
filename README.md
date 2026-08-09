@@ -68,6 +68,10 @@ Implemented and executable:
   collection into a private product-owned workspace, followed by off-thread
   text sanitization, binary/warning confirmation, exact-byte sealing, and a
   trusted `READY` session transition;
+- a final package-summary screen that derives a deterministic ZIP plan from the
+  exact sealed workspace, requires a separate explicit local-save click, and
+  writes a private ZIP off the render thread into the product-owned
+  `bugreport-exports` game-directory child;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -80,14 +84,13 @@ Implemented and executable:
 
 Not implemented yet:
 
-- final package summary, destination selection, and export-confirmation screens;
 - remote report delivery and its transport policy;
 - end-user report submission.
 
 The current build is suitable for testing API packaging, optional installation,
 side safety, provider discovery, the headless Core report lifecycle, and the
-player-facing session, form, collection, sanitization, and artifact-review flow
-in real mods. It does not yet expose packaging or export through gameplay UI.
+player-facing session, form, collection, sanitization, review, package summary,
+and explicit local ZIP-export flow in real mods.
 
 ## Supported platform
 
@@ -173,8 +176,12 @@ The UI supplies only cancellation and typed inclusion/confirmation decisions:
 it cannot select a sanitization pipeline, construct an execution/review token,
 or mint prepared package authority.
 Back returns to the form without losing its values and revokes the prior
-confirmation and plan authority. Package summary, destination preview, and
-explicit local export remain later M3 work.
+confirmation and plan authority. Once the reviewed bytes are `READY`, the
+export screen builds the deterministic package plan off-thread, shows its
+provider/category, entry count, and byte total, then requires a distinct
+explicit save action. The archive name is constrained to a single safe
+`.bugreport.zip` filename and is published only in the validated
+`bugreport-exports` child of the active game directory.
 
 For a local physical-client boundary smoke test, run:
 
