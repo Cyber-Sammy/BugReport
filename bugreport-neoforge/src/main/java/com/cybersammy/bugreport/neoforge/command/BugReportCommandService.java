@@ -36,7 +36,7 @@ import com.cybersammy.bugreport.core.manifest.ReportManifest;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
 import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
-import com.cybersammy.bugreport.core.transport.LocalExportTransportBridge;
+import com.cybersammy.bugreport.core.transport.NeoForgeLocalExportTransportAdapter;
 import com.cybersammy.bugreport.core.transport.ReportTransportResult;
 import com.cybersammy.bugreport.core.transport.TransportRunControl;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
@@ -61,7 +61,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
-public final class BugReportCommandService extends LocalExportTransportBridge {
+public final class BugReportCommandService {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
@@ -566,8 +566,10 @@ public final class BugReportCommandService extends LocalExportTransportBridge {
         }
         ReportTransportResult result;
         try {
-            result = executeConfirmedLocalExport(
-                    request.plan(), request.workspace(), new LocalArchiveDestination(destination), control);
+            result = NeoForgeLocalExportTransportAdapter.executeConfirmed(
+                    new ConfirmedLocalExport(
+                            request.plan(), request.workspace(), new LocalArchiveDestination(destination)),
+                    control);
         } catch (RuntimeException failure) {
             synchronized (this) {
                 failActiveExport(request);
@@ -960,6 +962,30 @@ public final class BugReportCommandService extends LocalExportTransportBridge {
         }
         ReportWorkspace workspace() { return workspace; }
         ReportPackagePlan plan() { return plan; }
+    }
+
+    /**
+     * Opaque execution authority minted only after the application service has accepted the
+     * explicit local-export action for its exact active request. It is never returned to UI code.
+     */
+    public static final class ConfirmedLocalExport {
+        private final ReportPackagePlan plan;
+        private final ReportWorkspace workspace;
+        private final LocalArchiveDestination destination;
+
+        private ConfirmedLocalExport(
+                ReportPackagePlan plan, ReportWorkspace workspace, LocalArchiveDestination destination) {
+            this.plan = Objects.requireNonNull(plan, "plan");
+            this.workspace = Objects.requireNonNull(workspace, "workspace");
+            this.destination = Objects.requireNonNull(destination, "destination");
+        }
+
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public ReportPackagePlan plan() { return plan; }
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public ReportWorkspace workspace() { return workspace; }
+        /** Internal bridge access only; callers cannot construct a confirmation. */
+        public LocalArchiveDestination destination() { return destination; }
     }
 
     /** Path-free data rendered before a user confirms a local archive write. */

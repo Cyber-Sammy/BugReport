@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
+import com.cybersammy.bugreport.core.transport.NeoForgeLocalExportTransportAdapter;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
@@ -371,6 +372,14 @@ final class BugReportCommandServiceTest {
                         .getDeclaredConstructors())
                 .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
                         constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(BugReportCommandService.ConfirmedLocalExport.class
+                        .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertEquals(1, NeoForgeLocalExportTransportAdapter.class.getDeclaredMethods().length);
+        assertEquals(BugReportCommandService.ConfirmedLocalExport.class,
+                NeoForgeLocalExportTransportAdapter.class.getDeclaredMethods()[0]
+                        .getParameterTypes()[0]);
         assertTrue(java.util.Arrays.stream(
                         BugReportCommandService.WorkspaceReviewRequest.class
                                 .getDeclaredConstructors())
