@@ -1,4 +1,4 @@
-package com.cybersammy.bugreport.neoforge.command;
+package com.cybersammy.bugreport.core.transport;
 
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
@@ -35,10 +35,6 @@ import com.cybersammy.bugreport.core.manifest.ManifestTarget;
 import com.cybersammy.bugreport.core.manifest.ReportManifest;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
-import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
-import com.cybersammy.bugreport.core.transport.LocalZipExportCoordinator;
-import com.cybersammy.bugreport.core.transport.ReportTransportResult;
-import com.cybersammy.bugreport.core.transport.TransportRunControl;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.CollectedGeneratedArtifact;
@@ -566,8 +562,15 @@ public final class BugReportCommandService {
         }
         ReportTransportResult result;
         try {
-            result = LocalZipExportCoordinator.exportConfirmed(
-                    request.plan(), request.workspace(), new LocalArchiveDestination(destination), control);
+            ReportPackagePlan packagePlan = request.plan();
+            LocalArchiveDestination localDestination = new LocalArchiveDestination(destination);
+            result = new LocalZipTransport().execute(
+                    new ReportTransportRequest(
+                            packagePlan,
+                            request.workspace(),
+                            localDestination,
+                            LocalExportConsent.issueConfirmed(packagePlan, localDestination)),
+                    control);
         } catch (RuntimeException failure) {
             synchronized (this) {
                 failActiveExport(request);

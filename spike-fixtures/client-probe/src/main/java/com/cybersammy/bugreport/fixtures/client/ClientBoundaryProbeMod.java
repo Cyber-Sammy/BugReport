@@ -2,7 +2,7 @@ package com.cybersammy.bugreport.fixtures.client;
 
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.neoforge.BugReportMod;
-import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.core.transport.BugReportCommandService;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandTree;
 import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import java.io.IOException;

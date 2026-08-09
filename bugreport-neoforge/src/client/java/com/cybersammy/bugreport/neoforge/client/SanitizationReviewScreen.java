@@ -2,7 +2,7 @@ package com.cybersammy.bugreport.neoforge.client;
 
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
-import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.core.transport.BugReportCommandService;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;

@@ -11,7 +11,7 @@ import com.cybersammy.bugreport.core.source.SourceSelectionPlan;
 import com.cybersammy.bugreport.core.source.UnavailableSourcePlan;
 import com.cybersammy.bugreport.core.source.UserSelectionSourcePlan;
 import com.cybersammy.bugreport.neoforge.BugReportMod;
-import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.core.transport.BugReportCommandService;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.List;

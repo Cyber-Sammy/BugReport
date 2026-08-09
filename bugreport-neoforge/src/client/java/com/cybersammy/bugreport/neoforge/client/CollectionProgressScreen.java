@@ -8,7 +8,7 @@ import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
 import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
-import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.core.transport.BugReportCommandService;
 import java.nio.file.Path;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;

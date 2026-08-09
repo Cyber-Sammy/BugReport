@@ -1,5 +1,4 @@
-package com.cybersammy.bugreport.neoforge.command;
-
+package com.cybersammy.bugreport.core.transport;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -376,6 +375,17 @@ final class BugReportCommandServiceTest {
                                 .getDeclaredConstructors())
                 .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
                         constructor.getModifiers())));
+    }
+
+    @Test
+    void localExportConsentIssuanceRemainsInternalToTheTrustedTransportPackage() throws Exception {
+        assertFalse(java.lang.reflect.Modifier.isPublic(LocalExportConsent.class.getModifiers()));
+        assertFalse(java.lang.reflect.Modifier.isPublic(LocalExportConsent.class
+                .getDeclaredMethod(
+                        "issueConfirmed",
+                        com.cybersammy.bugreport.core.packaging.ReportPackagePlan.class,
+                        LocalArchiveDestination.class)
+                .getModifiers()));
     }
 
     @Test
