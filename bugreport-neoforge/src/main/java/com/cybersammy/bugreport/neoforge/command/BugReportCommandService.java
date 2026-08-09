@@ -18,6 +18,7 @@ import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import java.util.LinkedHashMap;
@@ -251,7 +252,10 @@ public final class BugReportCommandService {
         session.transitionTo(ReportSessionState.COLLECTING);
         ReportSessionSnapshot collecting = session.snapshot();
         return Optional.of(new CollectionExecutionRequest(
-                collecting.id(), collecting.revision(), reviewedPlan));
+                collecting.id(),
+                collecting.revision(),
+                reviewedPlan,
+                CollectionPlanFingerprint.from(reviewedPlan.selectedFilePlan())));
     }
 
     /** Records a terminal collection result only for the exact active collection generation. */
@@ -266,7 +270,7 @@ public final class BugReportCommandService {
         ReportSessionSnapshot collecting = session.snapshot();
         if (collecting.state() != ReportSessionState.COLLECTING
                 || collecting.revision() != request.collectionRevision()
-                || !matchesPlan(request.reviewedPlan(), terminal)) {
+                || !matchesPlan(request, terminal)) {
             return false;
         }
         switch (terminal.status()) {
@@ -333,11 +337,13 @@ public final class BugReportCommandService {
         }
     }
 
-    private static boolean matchesPlan(ReviewedCollectionPlan reviewedPlan, FileCollectionResult result) {
-        CategorySourcePlan plan = reviewedPlan.plan();
+    private static boolean matchesPlan(
+            CollectionExecutionRequest request, FileCollectionResult result) {
+        CategorySourcePlan plan = request.reviewedPlan().plan();
         return plan.providerId().equals(result.providerId())
                 && plan.providerVersion().equals(result.providerVersion())
-                && plan.categoryId().equals(result.categoryId());
+                && plan.categoryId().equals(result.categoryId())
+                && result.planFingerprint().filter(request.planFingerprint()::equals).isPresent();
     }
 
     /** Safe, localized command response without exception text or filesystem data. */
@@ -468,13 +474,17 @@ public final class BugReportCommandService {
 
     /** Exact immutable authority for one asynchronous collection execution. */
     public record CollectionExecutionRequest(
-            ReportSessionId sessionId, long collectionRevision, ReviewedCollectionPlan reviewedPlan) {
+            ReportSessionId sessionId,
+            long collectionRevision,
+            ReviewedCollectionPlan reviewedPlan,
+            CollectionPlanFingerprint planFingerprint) {
         public CollectionExecutionRequest {
             Objects.requireNonNull(sessionId, "sessionId");
             if (collectionRevision < 0) {
                 throw new IllegalArgumentException("collectionRevision must be non-negative");
             }
             Objects.requireNonNull(reviewedPlan, "reviewedPlan");
+            Objects.requireNonNull(planFingerprint, "planFingerprint");
         }
     }
 }
