@@ -16,6 +16,7 @@ import com.cybersammy.bugreport.api.identifier.NamespaceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
 import com.cybersammy.bugreport.api.specification.FieldKind;
@@ -35,10 +36,15 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
+import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
+import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
+import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
 import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
+import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
@@ -235,18 +241,88 @@ final class BugReportCommandServiceTest {
         assertTrue(service.acceptCollectionPlan(request, reviewed));
         BugReportCommandService.CollectionExecutionRequest execution =
                 service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(execution.sessionId());
         FileCollectionResult result = FileCollectionCoordinator.collect(
                 reviewed.selectedFilePlan(),
                 ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
-                new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
-                        .create(execution.sessionId()),
+                workspace,
                 new CollectionRunControl());
 
-        assertTrue(service.acceptCollectionResult(execution, result));
-        assertFalse(service.acceptCollectionResult(execution, result));
+        assertTrue(service.acceptCollectionResult(execution, result, workspace));
+        assertFalse(service.acceptCollectionResult(execution, result, workspace));
         assertSame(result, service.collectionResult(sessionId).orElseThrow());
+        assertSame(workspace, service.collectionWorkspace(sessionId).orElseThrow());
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.SANITIZING,
                 service.form(sessionId).orElseThrow().state());
+    }
+
+    @Test
+    void advancesExactSanitizedBytesThroughReviewToReady(@TempDir Path gameDirectory)
+            throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        Files.writeString(
+                gameDirectory.resolve("logs/client.log"),
+                "Authorization: Bearer secret_token_123456\n");
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        var planRequest = service.confirmForm(sessionId, validSubmission())
+                .planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                emptyCategoryPlan(gameDirectory), Set.of(DiagnosticSourceId.of("client_log")));
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+        var collection = service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(collection.sessionId());
+        FileCollectionResult files = FileCollectionCoordinator.collect(
+                reviewed.selectedFilePlan(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                workspace,
+                new CollectionRunControl());
+        assertTrue(service.acceptCollectionResult(collection, files, workspace));
+
+        var sanitization = service.beginSanitization(sessionId).orElseThrow();
+        assertTrue(service.beginSanitization(sessionId).isEmpty());
+        var batch = WorkspaceReviewCoordinator.sanitize(
+                files,
+                workspace,
+                ignored -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
+                        "C:\\Users\\Alice",
+                        "Alice",
+                        SanitizationCaseSensitivity.INSENSITIVE),
+                CancellationSignal.neverCancelled());
+        var otherBatch = WorkspaceReviewCoordinator.sanitize(
+                files,
+                workspace,
+                ignored -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
+                        "C:\\Users\\Alice",
+                        "Alice",
+                        SanitizationCaseSensitivity.INSENSITIVE),
+                CancellationSignal.neverCancelled());
+        var review = service.acceptSanitization(sanitization, batch).orElseThrow();
+        Set<String> includedArtifacts = Set.of(batch.artifacts().getFirst().artifactName());
+        var mismatchedPrepared = WorkspaceReviewCoordinator.prepare(
+                review.session(), otherBatch, includedArtifacts, Set.of());
+        assertFalse(service.acceptPreparedReview(review, mismatchedPrepared));
+        var prepared = WorkspaceReviewCoordinator.prepare(
+                review.session(), review.batch(), includedArtifacts, Set.of());
+
+        assertTrue(service.acceptPreparedReview(review, prepared));
+        assertSame(prepared.snapshot(), service.preparedSnapshot(sessionId).orElseThrow());
+        String artifactName = prepared.snapshot().artifacts().getFirst()
+                .artifact().artifactName();
+        assertEquals(
+                "Authorization: <bearer-token>\n",
+                Files.readString(workspace.directory().resolve(artifactName)));
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.READY,
+                service.form(sessionId).orElseThrow().state());
+        assertFalse(service.acceptPreparedReview(review, prepared));
     }
 
     @Test
@@ -273,7 +349,9 @@ final class BugReportCommandServiceTest {
                         .create(execution.sessionId()),
                 new CollectionRunControl());
 
-        assertFalse(service.acceptCollectionResult(execution, mismatched));
+        assertFalse(service.acceptCollectionResult(execution, mismatched,
+                new FileReportWorkspaceStore(gameDirectory.resolve("other-workspaces").toAbsolutePath())
+                        .create(execution.sessionId())));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
                 service.form(sessionId).orElseThrow().state());
     }

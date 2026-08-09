@@ -13,7 +13,8 @@ The M0 architecture and risk-closure milestone, the M1 contracts, registry,
 and build-foundation milestone, and the M2 secure headless reporting engine are
 complete. M3 client workflow work is in progress, with its command, provider,
 category, declarative form, and collection-plan boundaries available for
-gameplay testing.
+gameplay testing, including collection progress plus sanitization and artifact
+review.
 
 Implemented and executable:
 
@@ -64,7 +65,9 @@ Implemented and executable:
   paged form screen covering every declarative field kind with Core validation,
   a revision-bound background collection-plan review over approved local roots
   with explicit source inclusion choices, and cancellable background file
-  collection into a private product-owned workspace;
+  collection into a private product-owned workspace, followed by off-thread
+  text sanitization, binary/warning confirmation, exact-byte sealing, and a
+  trusted `READY` session transition;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -77,14 +80,14 @@ Implemented and executable:
 
 Not implemented yet:
 
-- collection review, progress, and export-confirmation screens;
+- final package summary, destination selection, and export-confirmation screens;
 - remote report delivery and its transport policy;
 - end-user report submission.
 
 The current build is suitable for testing API packaging, optional installation,
 side safety, provider discovery, the headless Core report lifecycle, and the
-first player-facing session/form flow in real mods. It does not yet expose the
-collection, review, or export portions of the engine through gameplay UI.
+player-facing session, form, collection, sanitization, and artifact-review flow
+in real mods. It does not yet expose packaging or export through gameplay UI.
 
 ## Supported platform
 
@@ -156,13 +159,19 @@ severity, side context, and read-only information; validation remains in Core.
 Back preserves the current in-memory draft, while Cancel discards the session.
 After a successful validation, **Plan** revalidates and confirms the typed
 form, then builds a source and size preview in the background. The preview
-allows declared available sources to be included or excluded before collection,
-copying, or generator I/O; unavailable sources cannot be selected. Accepting the selection binds it to
+allows declared available sources to be included or excluded before collection
+copying or generator I/O; unavailable sources cannot be selected. Accepting the selection binds it to
 the exact confirmation revision. Accepting a plan starts bounded file collection
 in the background, displays polling progress, and allows cooperative cancellation.
+Complete and partial results can then enter the sanitization/review screen.
+Supported text is sanitized in the private workspace off the render thread;
+failed artifacts remain unselectable, and binary artifacts or unresolved
+findings require a separate explicit confirmation before inclusion. Accepting
+the review seals and revalidates the exact selected bytes and advances the
+session to `READY` with package authority retained by the application service.
 Back returns to the form without losing its values and revokes the prior
-confirmation and plan authority. Sanitization, review, and export interaction
-remain later M3 work.
+confirmation and plan authority. Package summary, destination preview, and
+explicit local export remain later M3 work.
 
 For a local physical-client boundary smoke test, run:
 

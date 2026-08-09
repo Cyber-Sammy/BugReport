@@ -21,11 +21,15 @@ import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
+import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
+import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
+import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
@@ -35,6 +39,12 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
     private final Map<ReportSessionId, FileCollectionResult> collectionResults = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ReportWorkspace> collectionWorkspaces = new LinkedHashMap<>();
+    private final Map<ReportSessionId, WorkspaceReviewCoordinator.SanitizationBatch>
+            sanitizationBatches = new LinkedHashMap<>();
+    private final Map<ReportSessionId, PreparedWorkspaceSnapshot> preparedSnapshots =
+            new LinkedHashMap<>();
+    private final Set<ReportSessionId> activeSanitizations = new java.util.HashSet<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
@@ -260,9 +270,10 @@ public final class BugReportCommandService {
 
     /** Records a terminal collection result only for the exact active collection generation. */
     public synchronized boolean acceptCollectionResult(
-            CollectionExecutionRequest request, FileCollectionResult result) {
+            CollectionExecutionRequest request, FileCollectionResult result, ReportWorkspace workspace) {
         Objects.requireNonNull(request, "request");
         FileCollectionResult terminal = Objects.requireNonNull(result, "result");
+        ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         ReportSession session = sessions.get(request.sessionId());
         if (session == null) {
             return false;
@@ -270,6 +281,7 @@ public final class BugReportCommandService {
         ReportSessionSnapshot collecting = session.snapshot();
         if (collecting.state() != ReportSessionState.COLLECTING
                 || collecting.revision() != request.collectionRevision()
+                || !collecting.id().equals(trustedWorkspace.sessionId())
                 || !matchesPlan(request, terminal)) {
             return false;
         }
@@ -280,6 +292,7 @@ public final class BugReportCommandService {
             case CANCELLED -> session.cancel(CancellationReason.USER_REQUESTED);
         }
         collectionResults.put(collecting.id(), terminal);
+        collectionWorkspaces.put(collecting.id(), trustedWorkspace);
         return true;
     }
 
@@ -306,6 +319,112 @@ public final class BugReportCommandService {
                 : Optional.ofNullable(collectionResults.get(session.snapshot().id()));
     }
 
+    /** Returns the Core-owned workspace only for a terminal accepted collection result. */
+    public synchronized Optional<ReportWorkspace> collectionWorkspace(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
+                : Optional.ofNullable(collectionWorkspaces.get(session.snapshot().id()));
+    }
+
+    /** Starts sanitization from an exact complete or partial accepted collection result. */
+    public synchronized Optional<SanitizationExecutionRequest> beginSanitization(
+            String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() == ReportSessionState.PARTIALLY_COLLECTED) {
+            session.transitionTo(ReportSessionState.SANITIZING);
+            snapshot = session.snapshot();
+        }
+        if (snapshot.state() != ReportSessionState.SANITIZING) {
+            return Optional.empty();
+        }
+        FileCollectionResult files = collectionResults.get(snapshot.id());
+        ReportWorkspace workspace = collectionWorkspaces.get(snapshot.id());
+        if (files == null || workspace == null
+                || (files.status() != FileCollectionResult.Status.COMPLETE
+                        && files.status() != FileCollectionResult.Status.PARTIAL)
+                || !activeSanitizations.add(snapshot.id())) {
+            return Optional.empty();
+        }
+        return Optional.of(new SanitizationExecutionRequest(
+                snapshot.id(), snapshot.revision(), files, workspace));
+    }
+
+    /** Accepts only coordinator-issued evidence for the exact active sanitization generation. */
+    public synchronized Optional<WorkspaceReviewRequest> acceptSanitization(
+            SanitizationExecutionRequest request,
+            WorkspaceReviewCoordinator.SanitizationBatch batch) {
+        Objects.requireNonNull(request, "request");
+        WorkspaceReviewCoordinator.SanitizationBatch evidence =
+                Objects.requireNonNull(batch, "batch");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.SANITIZING
+                || snapshot.revision() != request.sanitizationRevision()
+                || !WorkspaceReviewCoordinator.matches(
+                        evidence, request.files(), request.workspace())) {
+            return Optional.empty();
+        }
+        session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
+        ReportSessionSnapshot review = session.snapshot();
+        activeSanitizations.remove(review.id());
+        sanitizationBatches.put(review.id(), evidence);
+        return Optional.of(new WorkspaceReviewRequest(
+                review.id(), review.revision(), review, evidence));
+    }
+
+    /** Marks the exact active sanitization generation failed without exposing internal causes. */
+    public synchronized boolean failSanitization(SanitizationExecutionRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return false;
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.SANITIZING
+                || snapshot.revision() != request.sanitizationRevision()) {
+            return false;
+        }
+        session.transitionTo(ReportSessionState.FAILED_SANITIZATION);
+        activeSanitizations.remove(snapshot.id());
+        return true;
+    }
+
+    /** Accepts prepared package authority only for the exact current review revision. */
+    public synchronized boolean acceptPreparedReview(
+            WorkspaceReviewRequest request, WorkspaceReviewCoordinator.PreparedReview prepared) {
+        Objects.requireNonNull(request, "request");
+        WorkspaceReviewCoordinator.PreparedReview authority =
+                Objects.requireNonNull(prepared, "prepared");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null) {
+            return false;
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.REVIEW_REQUIRED
+                || snapshot.revision() != request.reviewRevision()
+                || !authority.snapshot().reviewedSnapshot().sessionId().equals(snapshot.id())
+                || !authority.belongsTo(request.batch())
+                || sanitizationBatches.get(snapshot.id()) != request.batch()) {
+            return false;
+        }
+        session.transitionTo(ReportSessionState.READY);
+        preparedSnapshots.put(snapshot.id(), authority.snapshot());
+        return true;
+    }
+
+    public synchronized Optional<PreparedWorkspaceSnapshot> preparedSnapshot(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
+                : Optional.ofNullable(preparedSnapshots.get(session.snapshot().id()));
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
@@ -317,6 +436,10 @@ public final class BugReportCommandService {
         confirmedForms.remove(id);
         collectionPlans.remove(id);
         collectionResults.remove(id);
+        collectionWorkspaces.remove(id);
+        sanitizationBatches.remove(id);
+        preparedSnapshots.remove(id);
+        activeSanitizations.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -485,6 +608,40 @@ public final class BugReportCommandService {
             }
             Objects.requireNonNull(reviewedPlan, "reviewedPlan");
             Objects.requireNonNull(planFingerprint, "planFingerprint");
+        }
+    }
+
+    /** Exact immutable authority for one asynchronous sanitization execution. */
+    public record SanitizationExecutionRequest(
+            ReportSessionId sessionId,
+            long sanitizationRevision,
+            FileCollectionResult files,
+            ReportWorkspace workspace) {
+        public SanitizationExecutionRequest {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(files, "files");
+            Objects.requireNonNull(workspace, "workspace");
+            if (sanitizationRevision < 0 || !sessionId.equals(workspace.sessionId())) {
+                throw new IllegalArgumentException("Sanitization request identity is inconsistent");
+            }
+        }
+    }
+
+    /** Exact immutable authority for one user review of coordinator-issued evidence. */
+    public record WorkspaceReviewRequest(
+            ReportSessionId sessionId,
+            long reviewRevision,
+            ReportSessionSnapshot session,
+            WorkspaceReviewCoordinator.SanitizationBatch batch) {
+        public WorkspaceReviewRequest {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(session, "session");
+            Objects.requireNonNull(batch, "batch");
+            if (reviewRevision < 0
+                    || !sessionId.equals(session.id())
+                    || reviewRevision != session.revision()) {
+                throw new IllegalArgumentException("Workspace review request identity is inconsistent");
+            }
         }
     }
 }
