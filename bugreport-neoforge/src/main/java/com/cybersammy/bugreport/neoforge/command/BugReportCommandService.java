@@ -1,4 +1,4 @@
-package com.cybersammy.bugreport.core.transport;
+package com.cybersammy.bugreport.neoforge.command;
 
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
@@ -35,6 +35,10 @@ import com.cybersammy.bugreport.core.manifest.ManifestTarget;
 import com.cybersammy.bugreport.core.manifest.ReportManifest;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlan;
 import com.cybersammy.bugreport.core.packaging.ReportPackagePlanFactory;
+import com.cybersammy.bugreport.core.transport.LocalArchiveDestination;
+import com.cybersammy.bugreport.core.transport.LocalExportTransportBridge;
+import com.cybersammy.bugreport.core.transport.ReportTransportResult;
+import com.cybersammy.bugreport.core.transport.TransportRunControl;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.CollectedGeneratedArtifact;
@@ -57,7 +61,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
-public final class BugReportCommandService {
+public final class BugReportCommandService extends LocalExportTransportBridge {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
@@ -562,15 +566,8 @@ public final class BugReportCommandService {
         }
         ReportTransportResult result;
         try {
-            ReportPackagePlan packagePlan = request.plan();
-            LocalArchiveDestination localDestination = new LocalArchiveDestination(destination);
-            result = new LocalZipTransport().execute(
-                    new ReportTransportRequest(
-                            packagePlan,
-                            request.workspace(),
-                            localDestination,
-                            LocalExportConsent.issueConfirmed(packagePlan, localDestination)),
-                    control);
+            result = executeConfirmedLocalExport(
+                    request.plan(), request.workspace(), new LocalArchiveDestination(destination), control);
         } catch (RuntimeException failure) {
             synchronized (this) {
                 failActiveExport(request);

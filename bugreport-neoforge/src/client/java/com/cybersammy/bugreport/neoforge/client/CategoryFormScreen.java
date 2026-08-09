@@ -9,7 +9,7 @@ import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
 import com.cybersammy.bugreport.core.form.ReportSideContext;
-import com.cybersammy.bugreport.core.transport.BugReportCommandService;
+import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;

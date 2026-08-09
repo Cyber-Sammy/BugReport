@@ -1,7 +1,7 @@
 package com.cybersammy.bugreport.neoforge.client;
 
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
-import com.cybersammy.bugreport.core.transport.BugReportCommandService;
+import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;

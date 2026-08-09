@@ -3,7 +3,7 @@ package com.cybersammy.bugreport.neoforge.client;
 import com.cybersammy.bugreport.core.transport.ReportTransportResult;
 import com.cybersammy.bugreport.core.transport.TransportProgressSnapshot;
 import com.cybersammy.bugreport.core.transport.TransportRunControl;
-import com.cybersammy.bugreport.core.transport.BugReportCommandService;
+import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.nio.file.Path;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
