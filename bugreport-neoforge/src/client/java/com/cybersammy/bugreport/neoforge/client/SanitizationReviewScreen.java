@@ -1,14 +1,8 @@
 package com.cybersammy.bugreport.neoforge.client;
 
-import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
-import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
-import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
-import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
-import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
-import java.io.File;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -54,24 +48,8 @@ final class SanitizationReviewScreen extends Screen {
     private void startSanitization() {
         Thread.ofVirtual().name("bugreport-workspace-sanitization").start(() -> {
             try {
-                WorkspaceReviewCoordinator.SanitizationBatch batch =
-                        WorkspaceReviewCoordinator.sanitize(
-                                execution.files(), execution.workspace(), source -> {
-                                    SanitizationArtifactPolicy artifactPolicy = source.provenances()
-                                                    .stream()
-                                                    .anyMatch(provenance -> provenance.kind()
-                                                            == DiagnosticSourceKind.MOD_CONFIGURATION)
-                                            ? SanitizationArtifactPolicy.CONFIGURATION
-                                            : SanitizationArtifactPolicy.LOG;
-                                    return ProductSanitization.textPipeline(
-                                            SanitizationPolicy.standard(artifactPolicy),
-                                            System.getProperty("user.home"),
-                                            System.getProperty("user.name"),
-                                            File.separatorChar == '\\'
-                                                    ? SanitizationCaseSensitivity.INSENSITIVE
-                                                    : SanitizationCaseSensitivity.SENSITIVE);
-                                }, () -> cancellationRequested);
-                var accepted = commands.acceptSanitization(execution, batch);
+                var accepted = commands.executeSanitization(
+                        execution, () -> cancellationRequested);
                 Minecraft.getInstance().execute(() -> accepted.ifPresentOrElse(
                         this::presentReview, this::presentFailure));
             } catch (RuntimeException failure) {
@@ -201,10 +179,10 @@ final class SanitizationReviewScreen extends Screen {
         Set<String> confirmations = Set.copyOf(explicitlyReviewed);
         Thread.ofVirtual().name("bugreport-workspace-review").start(() -> {
             try {
-                WorkspaceReviewCoordinator.PreparedReview prepared = WorkspaceReviewCoordinator.prepare(
-                        review.session(), review.batch(), selected, confirmations);
-                boolean accepted = commands.acceptPreparedReview(review, prepared);
-                Minecraft.getInstance().execute(() -> presentPrepared(accepted));
+                var prepared = commands.confirmReview(
+                        review,
+                        new BugReportCommandService.ReviewDecision(selected, confirmations));
+                Minecraft.getInstance().execute(() -> presentPrepared(prepared.isPresent()));
             } catch (RuntimeException failure) {
                 Minecraft.getInstance().execute(this::presentPreparationFailure);
             }
@@ -274,6 +252,7 @@ final class SanitizationReviewScreen extends Screen {
             Component row = Component.translatable(
                     "bugreport.screen.review.artifact",
                     index + 1,
+                    Component.translatable(artifact.labelKey().value()),
                     artifact.contentType().name(),
                     artifact.privacy().name(),
                     artifact.byteCount(),

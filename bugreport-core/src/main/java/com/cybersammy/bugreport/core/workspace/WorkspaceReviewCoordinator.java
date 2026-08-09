@@ -3,8 +3,13 @@ package com.cybersammy.bugreport.core.workspace;
 import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
+import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
+import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
+import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
 import com.cybersammy.bugreport.core.sanitization.SanitizationPipeline;
+import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
@@ -26,11 +31,46 @@ public final class WorkspaceReviewCoordinator {
      * cannot be admitted by {@link #prepare}. The returned batch is opaque authority issued only
      * after the coordinator published and checksummed the exact final bytes.
      */
-    public static SanitizationBatch sanitize(
+    /** Executes the fixed product sanitization policy for one trusted session collection. */
+    public static SanitizationBatch sanitizeProduct(
+            ReportSessionSnapshot session,
+            FileCollectionResult files,
+            ReportWorkspace workspace,
+            String homeDirectory,
+            String username,
+            SanitizationCaseSensitivity caseSensitivity,
+            CancellationSignal cancellation) {
+        ReportSessionSnapshot trustedSession = Objects.requireNonNull(session, "session");
+        FileCollectionResult result = Objects.requireNonNull(files, "files");
+        if (!trustedSession.id().equals(Objects.requireNonNull(workspace, "workspace").sessionId())
+                || !trustedSession.providerSpecification().id().equals(result.providerId())
+                || !trustedSession.providerSpecification().version().equals(result.providerVersion())
+                || trustedSession.selectedCategory().stream()
+                        .noneMatch(category -> category.id().equals(result.categoryId()))) {
+            throw new IllegalArgumentException(
+                    "Sanitization input does not belong to the trusted report session");
+        }
+        SanitizationCaseSensitivity sensitivity =
+                Objects.requireNonNull(caseSensitivity, "caseSensitivity");
+        return sanitize(
+                trustedSession,
+                result,
+                workspace,
+                source -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.standard(artifactPolicy(source)),
+                        homeDirectory,
+                        username,
+                        sensitivity),
+                cancellation);
+    }
+
+    static SanitizationBatch sanitize(
+            ReportSessionSnapshot session,
             FileCollectionResult files,
             ReportWorkspace workspace,
             Function<CollectedSourceFile, SanitizationPipeline> pipelines,
             CancellationSignal cancellation) {
+        ReportSessionSnapshot trustedSession = Objects.requireNonNull(session, "session");
         FileCollectionResult result = Objects.requireNonNull(files, "files");
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         Function<CollectedSourceFile, SanitizationPipeline> pipelineFactory =
@@ -43,7 +83,8 @@ public final class WorkspaceReviewCoordinator {
                 if (source.contentType() == DiagnosticContentType.BINARY) {
                     var assessment = ProductSanitization.assessBinary(
                             source.artifactName(), source.privacy());
-                    reviews.add(ArtifactReview.binary(source, assessment.classification()));
+                    reviews.add(ArtifactReview.binary(
+                            source, labelKey(trustedSession, source), assessment.classification()));
                     return;
                 }
                 try {
@@ -55,9 +96,13 @@ public final class WorkspaceReviewCoordinator {
                                             pipelineFactory.apply(source), "sanitization pipeline"),
                                     signal);
                     evidence.add(sanitized);
-                    reviews.add(ArtifactReview.sanitized(sanitized.source(), sanitized.result()));
+                    reviews.add(ArtifactReview.sanitized(
+                            sanitized.source(),
+                            labelKey(trustedSession, source),
+                            sanitized.result()));
                 } catch (RuntimeException failure) {
-                    reviews.add(ArtifactReview.failed(source));
+                    reviews.add(ArtifactReview.failed(
+                            source, labelKey(trustedSession, source)));
                 }
             });
         }
@@ -65,6 +110,25 @@ public final class WorkspaceReviewCoordinator {
         FileCollectionResult finalFiles = finalFileResult(result, evidence);
         return new SanitizationBatch(
                 trustedWorkspace.sessionId(), result, finalFiles, trustedWorkspace, evidence, reviews);
+    }
+
+    private static SanitizationArtifactPolicy artifactPolicy(CollectedSourceFile source) {
+        return source.provenances().stream()
+                        .anyMatch(provenance -> provenance.kind()
+                                == DiagnosticSourceKind.MOD_CONFIGURATION)
+                ? SanitizationArtifactPolicy.CONFIGURATION
+                : SanitizationArtifactPolicy.LOG;
+    }
+
+    private static LocalizationKey labelKey(
+            ReportSessionSnapshot session, CollectedSourceFile source) {
+        var sourceId = source.provenances().getFirst().sourceId();
+        var declaration = session.providerSpecification().sources().get(sourceId);
+        if (declaration == null) {
+            throw new IllegalArgumentException(
+                    "Collected source is not declared by the trusted report provider");
+        }
+        return declaration.labelKey();
     }
 
     /** Reports whether a batch belongs to the exact accepted collection boundary. */
@@ -221,6 +285,7 @@ public final class WorkspaceReviewCoordinator {
     /** Privacy-safe metadata rendered by first-party review UI without paths or contents. */
     public record ArtifactReview(
             String artifactName,
+            LocalizationKey labelKey,
             DiagnosticContentType contentType,
             com.cybersammy.bugreport.api.classification.PrivacyClassification privacy,
             com.cybersammy.bugreport.api.specification.ReportQualityRole qualityRole,
@@ -231,6 +296,7 @@ public final class WorkspaceReviewCoordinator {
             boolean explicitReviewRequired) {
         public ArtifactReview {
             Objects.requireNonNull(artifactName, "artifactName");
+            Objects.requireNonNull(labelKey, "labelKey");
             Objects.requireNonNull(contentType, "contentType");
             Objects.requireNonNull(privacy, "privacy");
             Objects.requireNonNull(qualityRole, "qualityRole");
@@ -243,9 +309,9 @@ public final class WorkspaceReviewCoordinator {
         }
 
         private static ArtifactReview sanitized(
-                CollectedSourceFile source, SanitizationResult result) {
+                CollectedSourceFile source, LocalizationKey labelKey, SanitizationResult result) {
             return new ArtifactReview(
-                    source.artifactName(), source.contentType(), source.privacy(),
+                    source.artifactName(), labelKey, source.contentType(), source.privacy(),
                     source.qualityRole(), source.inclusionDefault(), source.byteCount(),
                     ArtifactReviewStatus.SANITIZED, result.findings().size(),
                     result.hasUnresolvedWarnings());
@@ -253,16 +319,18 @@ public final class WorkspaceReviewCoordinator {
 
         private static ArtifactReview binary(
                 CollectedSourceFile source,
+                LocalizationKey labelKey,
                 com.cybersammy.bugreport.api.classification.PrivacyClassification privacy) {
             return new ArtifactReview(
-                    source.artifactName(), source.contentType(), privacy,
+                    source.artifactName(), labelKey, source.contentType(), privacy,
                     source.qualityRole(), source.inclusionDefault(), source.byteCount(),
                     ArtifactReviewStatus.BINARY_REVIEW_REQUIRED, 0, true);
         }
 
-        private static ArtifactReview failed(CollectedSourceFile source) {
+        private static ArtifactReview failed(
+                CollectedSourceFile source, LocalizationKey labelKey) {
             return new ArtifactReview(
-                    source.artifactName(), source.contentType(), source.privacy(),
+                    source.artifactName(), labelKey, source.contentType(), source.privacy(),
                     source.qualityRole(), InclusionDefault.EXCLUDED, source.byteCount(),
                     ArtifactReviewStatus.FAILED, 0, false);
         }

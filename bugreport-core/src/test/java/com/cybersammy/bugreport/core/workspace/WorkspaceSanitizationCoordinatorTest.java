@@ -83,6 +83,13 @@ final class WorkspaceSanitizationCoordinatorTest {
                 .create(com.cybersammy.bugreport.core.session.ReportSessionId.parse(
                         "00000000-0000-4000-8000-000000000301"));
         CollectedSourceFile copied = WorkspaceSourceCollector.collect(plan.files().getFirst(), roots, workspace);
+        var session = new com.cybersammy.bugreport.core.session.ReportSessionFactory(
+                        ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
+                                specification.id().namespace(),
+                                "SanitizationFixture",
+                                provider))))
+                .create(workspace.sessionId(), specification.id());
+        session.selectCategory(CategoryId.of("general"));
 
         FileCollectionResult collectedResult = new FileCollectionResult(
                 specification.id(),
@@ -102,6 +109,7 @@ final class WorkspaceSanitizationCoordinatorTest {
                         OptionalInt.empty()));
         WorkspaceReviewCoordinator.SanitizationBatch cancelledBatch =
                 WorkspaceReviewCoordinator.sanitize(
+                        session.snapshot(),
                         collectedResult,
                         workspace,
                         ignored -> new SanitizationPipeline(List.of()),

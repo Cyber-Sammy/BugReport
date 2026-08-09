@@ -65,7 +65,7 @@
   "bugreport.screen.review.accept": "Accept reviewed data",
   "bugreport.screen.review.preparing": "Sealing reviewed report data…",
   "bugreport.screen.review.accepted": "Report data is reviewed and ready.",
-  "bugreport.screen.review.artifact": "#%s %s · %s · %s bytes · %s · %s findings",
+  "bugreport.screen.review.artifact": "#%s %s · %s · %s · %s bytes · %s · %s findings",
   "bugreport.screen.select_provider.empty": "No compatible Bug Report providers are available.",
   "bugreport.screen.select_category.title": "Select a report category for %s",
   "bugreport.command.help": "Bug Report: /bugreport list, /bugreport create <mod-id> [category-id], /bugreport open <report-id>, /bugreport discard <report-id>",

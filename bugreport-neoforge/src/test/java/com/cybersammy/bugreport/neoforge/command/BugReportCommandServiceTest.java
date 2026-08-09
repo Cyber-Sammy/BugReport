@@ -36,15 +36,10 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
-import com.cybersammy.bugreport.core.sanitization.ProductSanitization;
-import com.cybersammy.bugreport.core.sanitization.SanitizationArtifactPolicy;
-import com.cybersammy.bugreport.core.sanitization.SanitizationCaseSensitivity;
-import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
 import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
-import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
@@ -258,7 +253,8 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
-    void advancesExactSanitizedBytesThroughReviewToReady(@TempDir Path gameDirectory)
+    void advancesOnlyServiceIssuedSanitizationAndReviewAuthorityToReady(
+            @TempDir Path gameDirectory)
             throws Exception {
         Files.createDirectories(gameDirectory.resolve("logs"));
         Files.createDirectories(gameDirectory.resolve("crash-reports"));
@@ -287,42 +283,72 @@ final class BugReportCommandServiceTest {
 
         var sanitization = service.beginSanitization(sessionId).orElseThrow();
         assertTrue(service.beginSanitization(sessionId).isEmpty());
-        var batch = WorkspaceReviewCoordinator.sanitize(
-                files,
-                workspace,
-                ignored -> ProductSanitization.textPipeline(
-                        SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
-                        "C:\\Users\\Alice",
-                        "Alice",
-                        SanitizationCaseSensitivity.INSENSITIVE),
-                CancellationSignal.neverCancelled());
-        var otherBatch = WorkspaceReviewCoordinator.sanitize(
-                files,
-                workspace,
-                ignored -> ProductSanitization.textPipeline(
-                        SanitizationPolicy.strictPrivacy(SanitizationArtifactPolicy.LOG),
-                        "C:\\Users\\Alice",
-                        "Alice",
-                        SanitizationCaseSensitivity.INSENSITIVE),
-                CancellationSignal.neverCancelled());
-        var review = service.acceptSanitization(sanitization, batch).orElseThrow();
-        Set<String> includedArtifacts = Set.of(batch.artifacts().getFirst().artifactName());
-        var mismatchedPrepared = WorkspaceReviewCoordinator.prepare(
-                review.session(), otherBatch, includedArtifacts, Set.of());
-        assertFalse(service.acceptPreparedReview(review, mismatchedPrepared));
-        var prepared = WorkspaceReviewCoordinator.prepare(
-                review.session(), review.batch(), includedArtifacts, Set.of());
+        var sanitizationConstructor =
+                BugReportCommandService.SanitizationExecutionRequest.class.getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.class,
+                        long.class,
+                        com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
+                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.ReportWorkspace.class);
+        sanitizationConstructor.setAccessible(true);
+        var syntheticSanitization = sanitizationConstructor.newInstance(
+                sanitization.sessionId(),
+                sanitization.sanitizationRevision(),
+                sanitization.session(),
+                sanitization.files(),
+                sanitization.workspace());
+        assertTrue(service.executeSanitization(
+                syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
+        var review = service.executeSanitization(
+                sanitization, CancellationSignal.neverCancelled()).orElseThrow();
+        Set<String> includedArtifacts = Set.of(
+                review.batch().artifacts().getFirst().artifactName());
+        var reviewConstructor = BugReportCommandService.WorkspaceReviewRequest.class
+                .getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.class,
+                        long.class,
+                        com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .SanitizationBatch.class);
+        reviewConstructor.setAccessible(true);
+        var syntheticReview = reviewConstructor.newInstance(
+                review.sessionId(),
+                review.reviewRevision(),
+                review.session(),
+                review.batch());
+        assertTrue(service.confirmReview(
+                syntheticReview,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
+        var prepared = service.confirmReview(
+                review,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of()))
+                .orElseThrow();
 
-        assertTrue(service.acceptPreparedReview(review, prepared));
-        assertSame(prepared.snapshot(), service.preparedSnapshot(sessionId).orElseThrow());
-        String artifactName = prepared.snapshot().artifacts().getFirst()
+        assertSame(prepared, service.preparedSnapshot(sessionId).orElseThrow());
+        String artifactName = prepared.artifacts().getFirst()
                 .artifact().artifactName();
         assertEquals(
                 "Authorization: <bearer-token>\n",
                 Files.readString(workspace.directory().resolve(artifactName)));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.READY,
                 service.form(sessionId).orElseThrow().state());
-        assertFalse(service.acceptPreparedReview(review, prepared));
+        assertTrue(service.confirmReview(
+                review,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
+    }
+
+    @Test
+    void sanitizationAndReviewAuthorityTokensCannotBeConstructedByCallers() {
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.SanitizationExecutionRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.WorkspaceReviewRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
     }
 
     @Test

@@ -169,6 +169,9 @@ failed artifacts remain unselectable, and binary artifacts or unresolved
 findings require a separate explicit confirmation before inclusion. Accepting
 the review seals and revalidates the exact selected bytes and advances the
 session to `READY` with package authority retained by the application service.
+The UI supplies only cancellation and typed inclusion/confirmation decisions:
+it cannot select a sanitization pipeline, construct an execution/review token,
+or mint prepared package authority.
 Back returns to the form without losing its values and revokes the prior
 confirmation and plan authority. Package summary, destination preview, and
 explicit local export remain later M3 work.
