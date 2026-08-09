@@ -33,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -82,6 +83,43 @@ final class WorkspaceSanitizationCoordinatorTest {
                 .create(com.cybersammy.bugreport.core.session.ReportSessionId.parse(
                         "00000000-0000-4000-8000-000000000301"));
         CollectedSourceFile copied = WorkspaceSourceCollector.collect(plan.files().getFirst(), roots, workspace);
+        var session = new com.cybersammy.bugreport.core.session.ReportSessionFactory(
+                        ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
+                                specification.id().namespace(),
+                                "SanitizationFixture",
+                                provider))))
+                .create(workspace.sessionId(), specification.id());
+        session.selectCategory(CategoryId.of("general"));
+
+        FileCollectionResult collectedResult = new FileCollectionResult(
+                specification.id(),
+                specification.version(),
+                CategoryId.of("general"),
+                FileCollectionResult.Status.COMPLETE,
+                List.of(FileCollectionResult.SourceOutcome.collected(1, copied)),
+                new CollectionProgressSnapshot(
+                        CollectionProgressSnapshot.State.COMPLETE,
+                        1,
+                        1,
+                        1,
+                        0,
+                        0,
+                        copied.byteCount(),
+                        copied.byteCount(),
+                        OptionalInt.empty()));
+        WorkspaceReviewCoordinator.SanitizationBatch cancelledBatch =
+                WorkspaceReviewCoordinator.sanitize(
+                        session.snapshot(),
+                        collectedResult,
+                        workspace,
+                        ignored -> new SanitizationPipeline(List.of()),
+                        () -> true);
+        assertEquals(
+                WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED,
+                cancelledBatch.artifacts().getFirst().status());
+        assertEquals(
+                "Authorization: Bearer secret_token_123456\n",
+                Files.readString(workspace.directory().resolve(copied.artifactName())));
 
         WorkspaceSanitizationCoordinator.SanitizedSource sanitized =
                 WorkspaceSanitizationCoordinator.sanitize(

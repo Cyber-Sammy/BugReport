@@ -24,6 +24,7 @@ final class CollectionProgressScreen extends Screen {
     private volatile boolean visible;
     private boolean started;
     private boolean terminal;
+    private FileCollectionResult terminalResult;
     private Component status = Component.translatable("bugreport.screen.collection.starting");
 
     CollectionProgressScreen(
@@ -41,6 +42,14 @@ final class CollectionProgressScreen extends Screen {
                 .bounds(width / 2 - 58, height - 32, 116, 20).build();
         cancel.active = !terminal;
         addRenderableWidget(cancel);
+        if (terminalResult != null
+                && (terminalResult.status() == FileCollectionResult.Status.COMPLETE
+                        || terminalResult.status() == FileCollectionResult.Status.PARTIAL)) {
+            addRenderableWidget(Button.builder(
+                            Component.translatable("bugreport.screen.collection.review"),
+                            ignored -> continueToReview())
+                    .bounds(width / 2 - 58, height - 56, 116, 20).build());
+        }
         if (!started) {
             started = true;
             startCollection(Minecraft.getInstance().gameDirectory.toPath());
@@ -57,7 +66,7 @@ final class CollectionProgressScreen extends Screen {
                 ReportWorkspace workspace = store.create(request.sessionId());
                 FileCollectionResult result = FileCollectionCoordinator.collect(
                         request.reviewedPlan().selectedFilePlan(), roots, workspace, control);
-                boolean accepted = commands.acceptCollectionResult(request, result);
+                boolean accepted = commands.acceptCollectionResult(request, result, workspace);
                 Minecraft.getInstance().execute(() -> presentResult(result, accepted));
             } catch (RuntimeException exception) {
                 commands.failCollectionSetup(request);
@@ -77,6 +86,7 @@ final class CollectionProgressScreen extends Screen {
             return;
         }
         terminal = true;
+        terminalResult = result;
         status = Component.translatable(
                 "bugreport.screen.collection.result",
                 result.status().name(),
@@ -84,6 +94,14 @@ final class CollectionProgressScreen extends Screen {
                 result.progress().failedFiles(),
                 result.progress().cancelledFiles());
         rebuildWidgets();
+    }
+
+    private void continueToReview() {
+        commands.beginSanitization(request.sessionId().toString()).ifPresentOrElse(
+                sanitization -> {
+                    visible = false;
+                    minecraft.setScreen(new SanitizationReviewScreen(commands, sanitization));
+                }, this::presentFailure);
     }
 
     private void presentFailure() {

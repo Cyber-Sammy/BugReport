@@ -16,6 +16,7 @@ import com.cybersammy.bugreport.api.identifier.NamespaceId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
+import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
 import com.cybersammy.bugreport.api.specification.FieldKind;
@@ -235,18 +236,119 @@ final class BugReportCommandServiceTest {
         assertTrue(service.acceptCollectionPlan(request, reviewed));
         BugReportCommandService.CollectionExecutionRequest execution =
                 service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(execution.sessionId());
         FileCollectionResult result = FileCollectionCoordinator.collect(
                 reviewed.selectedFilePlan(),
                 ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
-                new FileReportWorkspaceStore(gameDirectory.resolve("workspaces").toAbsolutePath())
-                        .create(execution.sessionId()),
+                workspace,
                 new CollectionRunControl());
 
-        assertTrue(service.acceptCollectionResult(execution, result));
-        assertFalse(service.acceptCollectionResult(execution, result));
+        assertTrue(service.acceptCollectionResult(execution, result, workspace));
+        assertFalse(service.acceptCollectionResult(execution, result, workspace));
         assertSame(result, service.collectionResult(sessionId).orElseThrow());
+        assertSame(workspace, service.collectionWorkspace(sessionId).orElseThrow());
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.SANITIZING,
                 service.form(sessionId).orElseThrow().state());
+    }
+
+    @Test
+    void advancesOnlyServiceIssuedSanitizationAndReviewAuthorityToReady(
+            @TempDir Path gameDirectory)
+            throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        Files.writeString(
+                gameDirectory.resolve("logs/client.log"),
+                "Authorization: Bearer secret_token_123456\n");
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        var planRequest = service.confirmForm(sessionId, validSubmission())
+                .planRequest().orElseThrow();
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                emptyCategoryPlan(gameDirectory), Set.of(DiagnosticSourceId.of("client_log")));
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+        var collection = service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(collection.sessionId());
+        FileCollectionResult files = FileCollectionCoordinator.collect(
+                reviewed.selectedFilePlan(),
+                ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                workspace,
+                new CollectionRunControl());
+        assertTrue(service.acceptCollectionResult(collection, files, workspace));
+
+        var sanitization = service.beginSanitization(sessionId).orElseThrow();
+        assertTrue(service.beginSanitization(sessionId).isEmpty());
+        var sanitizationConstructor =
+                BugReportCommandService.SanitizationExecutionRequest.class.getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.class,
+                        long.class,
+                        com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
+                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.ReportWorkspace.class);
+        sanitizationConstructor.setAccessible(true);
+        var syntheticSanitization = sanitizationConstructor.newInstance(
+                sanitization.sessionId(),
+                sanitization.sanitizationRevision(),
+                sanitization.session(),
+                sanitization.files(),
+                sanitization.workspace());
+        assertTrue(service.executeSanitization(
+                syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
+        var review = service.executeSanitization(
+                sanitization, CancellationSignal.neverCancelled()).orElseThrow();
+        Set<String> includedArtifacts = Set.of(
+                review.batch().artifacts().getFirst().artifactName());
+        var reviewConstructor = BugReportCommandService.WorkspaceReviewRequest.class
+                .getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.session.ReportSessionId.class,
+                        long.class,
+                        com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .SanitizationBatch.class);
+        reviewConstructor.setAccessible(true);
+        var syntheticReview = reviewConstructor.newInstance(
+                review.sessionId(),
+                review.reviewRevision(),
+                review.session(),
+                review.batch());
+        assertTrue(service.confirmReview(
+                syntheticReview,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
+        var prepared = service.confirmReview(
+                review,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of()))
+                .orElseThrow();
+
+        assertSame(prepared, service.preparedSnapshot(sessionId).orElseThrow());
+        String artifactName = prepared.artifacts().getFirst()
+                .artifact().artifactName();
+        assertEquals(
+                "Authorization: <bearer-token>\n",
+                Files.readString(workspace.directory().resolve(artifactName)));
+        assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.READY,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.confirmReview(
+                review,
+                new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
+    }
+
+    @Test
+    void sanitizationAndReviewAuthorityTokensCannotBeConstructedByCallers() {
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.SanitizationExecutionRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.WorkspaceReviewRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> java.lang.reflect.Modifier.isPrivate(
+                        constructor.getModifiers())));
     }
 
     @Test
@@ -273,7 +375,9 @@ final class BugReportCommandServiceTest {
                         .create(execution.sessionId()),
                 new CollectionRunControl());
 
-        assertFalse(service.acceptCollectionResult(execution, mismatched));
+        assertFalse(service.acceptCollectionResult(execution, mismatched,
+                new FileReportWorkspaceStore(gameDirectory.resolve("other-workspaces").toAbsolutePath())
+                        .create(execution.sessionId())));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
                 service.form(sessionId).orElseThrow().state());
     }
