@@ -5,6 +5,8 @@ import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandTree;
 import com.cybersammy.bugreport.neoforge.command.FileReportHistoryRecorder;
+import com.cybersammy.bugreport.neoforge.command.FileReportDraftPersistence;
+import com.cybersammy.bugreport.core.draft.FileDraftStore;
 import com.cybersammy.bugreport.core.history.FileReportHistoryStore;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import java.util.Objects;
@@ -12,6 +14,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -23,7 +26,8 @@ import net.neoforged.neoforge.common.NeoForge;
 @Mod(value = BugReportMod.MOD_ID, dist = Dist.CLIENT)
 public final class BugReportClientMod {
     private final BugReportCommandService commands =
-            new BugReportCommandService(BugReportMod::providerRegistry, historyRecorder());
+            new BugReportCommandService(
+                    BugReportMod::providerRegistry, historyRecorder(), draftPersistence());
 
     public BugReportClientMod(IEventBus modEventBus) {
         Objects.requireNonNull(modEventBus, "modEventBus");
@@ -39,23 +43,46 @@ public final class BugReportClientMod {
     }
 
     private static BugReportCommandService.ReportHistoryRecorder historyRecorder() {
+        return productDirectory("bugreport-history")
+                .<BugReportCommandService.ReportHistoryRecorder>map(
+                        directory ->
+                                new FileReportHistoryRecorder(
+                                        new FileReportHistoryStore(directory)))
+                .orElseGet(BugReportCommandService.ReportHistoryRecorder::empty);
+    }
+
+    private static BugReportCommandService.ReportDraftPersistence draftPersistence() {
+        return productDirectory("bugreport-drafts")
+                .<BugReportCommandService.ReportDraftPersistence>map(
+                        directory ->
+                                new FileReportDraftPersistence(new FileDraftStore(directory)))
+                .orElseGet(BugReportCommandService.ReportDraftPersistence::empty);
+    }
+
+    private static Optional<Path> productDirectory(String name) {
         try {
             Path gameDirectory = Minecraft.getInstance().gameDirectory.toPath()
                     .toAbsolutePath().normalize();
             if (!Files.isDirectory(gameDirectory, LinkOption.NOFOLLOW_LINKS)
                     || !gameDirectory.equals(gameDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS))
                     || !gameDirectory.equals(gameDirectory.toRealPath())) {
-                return BugReportCommandService.ReportHistoryRecorder.empty();
+                return Optional.empty();
             }
-            Path directory = gameDirectory.resolve("bugreport-history");
+            Path directory = gameDirectory.resolve(name);
             try {
                 Files.createDirectory(directory);
             } catch (java.nio.file.FileAlreadyExistsException ignored) {
-                // FileReportHistoryStore revalidates this existing direct child.
+                // The bounded store revalidates this existing direct child.
             }
-            return new FileReportHistoryRecorder(new FileReportHistoryStore(directory));
+            if (Files.isSymbolicLink(directory)
+                    || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
+                    || !directory.equals(directory.toRealPath(LinkOption.NOFOLLOW_LINKS))
+                    || !directory.equals(directory.toRealPath())) {
+                return Optional.empty();
+            }
+            return Optional.of(directory);
         } catch (RuntimeException | java.io.IOException failure) {
-            return BugReportCommandService.ReportHistoryRecorder.empty();
+            return Optional.empty();
         }
     }
 

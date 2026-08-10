@@ -17,8 +17,11 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Consumer;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -30,6 +33,7 @@ import net.minecraft.network.chat.Component;
 final class CategoryFormScreen extends Screen {
     private static final int CONTROL_WIDTH = 280;
     private static final int MAX_EDIT_CHARACTERS = FieldValue.MAX_TEXT_CODE_POINTS;
+    private static final int AUTOSAVE_DELAY_TICKS = 40;
 
     private final BugReportCommandService commands;
     private final String sessionId;
@@ -41,8 +45,23 @@ final class CategoryFormScreen extends Screen {
     private int page;
     private Component status;
     private boolean validationSuccessful;
+    private long editGeneration = 1;
+    private long savedGeneration;
+    private int autosaveDelay = AUTOSAVE_DELAY_TICKS;
+    private boolean saveInProgress;
+    private Runnable afterSave;
+    private boolean discardInProgress;
+    private boolean confirmationInProgress;
 
     CategoryFormScreen(BugReportCommandService commands, String sessionId, Screen parent) {
+        this(commands, sessionId, parent, FormSubmission.empty());
+    }
+
+    CategoryFormScreen(
+            BugReportCommandService commands,
+            String sessionId,
+            Screen parent,
+            FormSubmission recoveredSubmission) {
         super(Component.translatable("bugreport.screen.form.title"));
         this.commands = commands;
         this.sessionId = sessionId;
@@ -58,6 +77,7 @@ final class CategoryFormScreen extends Screen {
                 }
             }
         }
+        restoreDraft(recoveredSubmission);
     }
 
     @Override
@@ -89,7 +109,7 @@ final class CategoryFormScreen extends Screen {
         continueButton.active = validationSuccessful;
         addRenderableWidget(continueButton);
         addRenderableWidget(Button.builder(Component.translatable("gui.back"),
-                        ignored -> minecraft.setScreen(parent))
+                        ignored -> saveAndReturn())
                 .bounds(left, height - 30, 136, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancelSession())
                 .bounds(left + 144, height - 30, 136, 20).build());
@@ -272,6 +292,13 @@ final class CategoryFormScreen extends Screen {
     }
 
     private void continueToPlan() {
+        if (confirmationInProgress) {
+            return;
+        }
+        persistThen(this::confirmAndContinue);
+    }
+
+    private void confirmAndContinue() {
         fieldErrors.clear();
         validationSuccessful = false;
         SubmissionAttempt attempt = buildSubmission();
@@ -282,8 +309,34 @@ final class CategoryFormScreen extends Screen {
             rebuildWidgets();
             return;
         }
-        BugReportCommandService.FormConfirmationResult result = commands.confirmForm(
-                sessionId, attempt.submission());
+        FormSubmission submission = attempt.submission();
+        confirmationInProgress = true;
+        long generation = editGeneration;
+        Thread.ofVirtual()
+                .name("bugreport-form-confirmation")
+                .start(
+                        () -> {
+                            BugReportCommandService.FormConfirmationResult result =
+                                    commands.confirmForm(sessionId, submission);
+                            Minecraft.getInstance()
+                                    .execute(() -> presentConfirmation(result, generation));
+                        });
+    }
+
+    private void presentConfirmation(
+            BugReportCommandService.FormConfirmationResult result, long generation) {
+        confirmationInProgress = false;
+        if (discardInProgress || Minecraft.getInstance().screen != this) {
+            return;
+        }
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.ACCEPTED
+                && generation != editGeneration) {
+            commands.returnToForm(sessionId);
+            requireFreshDraftPersistence();
+            status = Component.translatable("bugreport.screen.form.changed_during_confirmation");
+            rebuildWidgets();
+            return;
+        }
         if (result.status() == BugReportCommandService.FormConfirmationStatus.INVALID) {
             applyValidation(result.validation().orElseThrow());
             rebuildWidgets();
@@ -296,6 +349,11 @@ final class CategoryFormScreen extends Screen {
         }
         if (result.status() == BugReportCommandService.FormConfirmationStatus.INVALID_STATE) {
             status = Component.translatable("bugreport.screen.form.error.invalid_state");
+            rebuildWidgets();
+            return;
+        }
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.PERSISTENCE_FAILED) {
+            status = Component.translatable("bugreport.screen.form.error.draft_save_failed");
             rebuildWidgets();
             return;
         }
@@ -395,6 +453,8 @@ final class CategoryFormScreen extends Screen {
         fieldErrors.remove(fieldId);
         status = null;
         validationSuccessful = false;
+        editGeneration++;
+        autosaveDelay = AUTOSAVE_DELAY_TICKS;
     }
 
     private static int maximumCharacters(FieldSpecification field) {
@@ -430,18 +490,167 @@ final class CategoryFormScreen extends Screen {
         return index + 1 == values.length ? null : values[index + 1];
     }
 
-    void discardSession() {
-        commands.discard(sessionId);
+    void discardSession(Consumer<Boolean> completion) {
+        Objects.requireNonNull(completion, "completion");
+        if (discardInProgress) {
+            return;
+        }
+        discardInProgress = true;
+        Thread.ofVirtual()
+                .name("bugreport-draft-session-discard")
+                .start(
+                        () -> {
+                            boolean discarded = "bugreport.command.discard.success"
+                                    .equals(
+                                            commands.discard(sessionId)
+                                                    .getFirst()
+                                                    .translationKey());
+                            Minecraft.getInstance()
+                                    .execute(
+                                            () -> {
+                                                discardInProgress = false;
+                                                completion.accept(discarded);
+                                            });
+                        });
+    }
+
+    void requireFreshDraftPersistence() {
+        editGeneration++;
+        autosaveDelay = 0;
+    }
+
+    private void saveAndReturn() {
+        if (confirmationInProgress) {
+            return;
+        }
+        persistThen(() -> minecraft.setScreen(parent));
+    }
+
+    private void persistThen(Runnable action) {
+        afterSave = Objects.requireNonNull(action, "action");
+        startDraftSave(true);
+    }
+
+    private void startDraftSave(boolean reportInvalidInput) {
+        if (saveInProgress) {
+            return;
+        }
+        if (savedGeneration == editGeneration) {
+            runAfterSave();
+            return;
+        }
+        SubmissionAttempt attempt = buildSubmission();
+        if (attempt.errorField() != null) {
+            autosaveDelay = AUTOSAVE_DELAY_TICKS;
+            if (reportInvalidInput) {
+                fieldErrors.put(attempt.errorField(), attempt.errorMessage());
+                showFirstError();
+                status = Component.translatable("bugreport.screen.form.invalid");
+                rebuildWidgets();
+            }
+            return;
+        }
+        saveInProgress = true;
+        long generation = editGeneration;
+        FormSubmission submission = attempt.submission();
+        Thread.ofVirtual()
+                .name("bugreport-draft-save")
+                .start(
+                        () -> {
+                            BugReportCommandService.DraftSaveStatus result =
+                                    commands.saveFormDraft(sessionId, submission);
+                            Minecraft.getInstance()
+                                    .execute(() -> finishDraftSave(result, generation));
+                        });
+    }
+
+    private void finishDraftSave(
+            BugReportCommandService.DraftSaveStatus result, long generation) {
+        saveInProgress = false;
+        if (result != BugReportCommandService.DraftSaveStatus.SAVED
+                && result != BugReportCommandService.DraftSaveStatus.UNAVAILABLE) {
+            afterSave = null;
+            autosaveDelay = AUTOSAVE_DELAY_TICKS;
+            status = Component.translatable("bugreport.screen.form.error.draft_save_failed");
+            rebuildWidgets();
+            return;
+        }
+        savedGeneration = Math.max(savedGeneration, generation);
+        if (savedGeneration != editGeneration) {
+            autosaveDelay = afterSave == null ? AUTOSAVE_DELAY_TICKS : 0;
+            if (afterSave != null) {
+                startDraftSave(true);
+            }
+            return;
+        }
+        runAfterSave();
+    }
+
+    private void runAfterSave() {
+        Runnable action = afterSave;
+        afterSave = null;
+        if (action != null) {
+            action.run();
+        }
     }
 
     private void cancelSession() {
-        discardSession();
-        minecraft.setScreen(null);
+        discardSession(
+                discarded -> {
+                    if (discarded) {
+                        minecraft.setScreen(null);
+                    } else {
+                        status = Component.translatable(
+                                "bugreport.command.error.draft_discard_failed");
+                        rebuildWidgets();
+                    }
+                });
     }
 
     @Override
     public void onClose() {
-        minecraft.setScreen(parent);
+        saveAndReturn();
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (savedGeneration == editGeneration || saveInProgress || afterSave != null) {
+            return;
+        }
+        if (autosaveDelay > 0) {
+            autosaveDelay--;
+        }
+        if (autosaveDelay == 0) {
+            startDraftSave(false);
+        }
+    }
+
+    private void restoreDraft(FormSubmission recoveredSubmission) {
+        Objects.requireNonNull(recoveredSubmission, "recoveredSubmission")
+                .values()
+                .forEach(
+                        (fieldId, value) -> {
+                            if (value instanceof FieldValue.Text text) {
+                                draft.put(fieldId, text.value());
+                            } else if (value instanceof FieldValue.TextList list) {
+                                draft.put(fieldId, String.join("\n", list.values()));
+                            } else if (value instanceof FieldValue.Checkbox checkbox) {
+                                draft.put(fieldId, checkbox.checked());
+                            } else if (value instanceof FieldValue.Selection selection) {
+                                draft.put(fieldId, selection.optionId());
+                            } else if (value instanceof FieldValue.MultiSelection selection) {
+                                draft.put(fieldId, new TreeSet<>(selection.optionIds()));
+                            } else if (value instanceof FieldValue.IntegerNumber number) {
+                                draft.put(fieldId, number.value().toString());
+                            } else if (value instanceof FieldValue.DecimalNumber number) {
+                                draft.put(fieldId, number.value().toString());
+                            } else if (value instanceof FieldValue.Severity severity) {
+                                draft.put(fieldId, severity.value());
+                            } else if (value instanceof FieldValue.SideContext sideContext) {
+                                draft.put(fieldId, sideContext.value());
+                            }
+                        });
     }
 
     @Override

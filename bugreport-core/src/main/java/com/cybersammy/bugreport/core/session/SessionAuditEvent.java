@@ -82,6 +82,20 @@ public sealed interface SessionAuditEvent {
         }
     }
 
+    /** Records persistence of changed form values without retaining their contents. */
+    record FormDraftUpdated(
+            ReportSessionId sessionId,
+            long sequence,
+            long revision,
+            Instant occurredAt)
+            implements SessionAuditEvent {
+        /** Validates privacy-minimized form-draft update metadata. */
+        public FormDraftUpdated {
+            SessionAuditEventChecks.requireMutationMetadata(
+                    sessionId, sequence, revision, occurredAt);
+        }
+    }
+
     /** Records one successful ordinary lifecycle transition. */
     record StateTransitioned(
             ReportSessionId sessionId,

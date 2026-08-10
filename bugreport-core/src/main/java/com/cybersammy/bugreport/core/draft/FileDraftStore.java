@@ -131,6 +131,37 @@ public final class FileDraftStore {
         return new DraftLoadBatch(outcomes, temporaryFilesDeleted, limitReached);
     }
 
+    /**
+     * Deletes the exact canonical draft owned by one session.
+     *
+     * @return whether a canonical draft file existed and was deleted
+     */
+    public synchronized boolean delete(ReportSessionId sessionId) {
+        ReportSessionId id = Objects.requireNonNull(sessionId, "sessionId");
+        if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        requireSafeRoot();
+        Path target = draftPath(id);
+        if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+                || Files.isSymbolicLink(target)) {
+            throw new DraftStoreException(
+                    DraftStoreCode.EXISTING_DRAFT_INVALID,
+                    "Draft path is not a safe regular file: " + id);
+        }
+        try {
+            return Files.deleteIfExists(target);
+        } catch (IOException exception) {
+            throw new DraftStoreException(
+                    DraftStoreCode.IO_FAILURE,
+                    "Could not delete report draft " + id,
+                    exception);
+        }
+    }
+
     private DraftLoadOutcome loadOne(Path path) {
         ReportSessionId filenameId = sessionIdFromFilename(path);
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)

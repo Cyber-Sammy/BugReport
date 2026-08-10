@@ -137,6 +137,31 @@ public final class ReportSession {
         return currentSnapshot();
     }
 
+    /**
+     * Publishes a new revision for form values that have been durably persisted elsewhere.
+     *
+     * <p>The audit event deliberately records no field identifiers or values. Callers must
+     * complete persistence before invoking this method, or persist the returned revision as part
+     * of one application-level transaction.
+     *
+     * @return resulting immutable session snapshot
+     */
+    public synchronized ReportSessionSnapshot recordFormDraftUpdate() {
+        if (state != ReportSessionState.FORM_IN_PROGRESS) {
+            throw new IllegalStateException(
+                    "Form drafts can only be updated while form entry is in progress");
+        }
+        long nextRevision = nextRevision();
+        long nextSequence = nextAuditSequence();
+        Instant occurredAt = auditInstant();
+        appendAuditEvent(
+                new SessionAuditEvent.FormDraftUpdated(
+                        id, nextSequence, nextRevision, occurredAt));
+        revision = nextRevision;
+        lastAuditSequence = nextSequence;
+        return currentSnapshot();
+    }
+
     /** Applies one valid direct transition and returns the resulting snapshot. */
     public synchronized ReportSessionSnapshot transitionTo(ReportSessionState requestedState) {
         Objects.requireNonNull(requestedState, "requestedState");

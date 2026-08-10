@@ -74,6 +74,10 @@ Implemented and executable:
   `bugreport-exports` game-directory child;
 - a compact persisted report-history screen for completed and failed local
   deliveries, backed by the corruption-tolerant path-free Core history index;
+- off-thread typed form autosave into a bounded product-owned draft directory,
+  plus a restart-recovery screen that rebinds every draft to the current trusted
+  registry and restores form editing without restoring collection, review, or
+  export authority;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy
@@ -161,7 +165,18 @@ the provider and category creates the session directly. Category selection
 opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
-Back preserves the current in-memory draft, while Cancel discards the session.
+Form edits are periodically saved off the render thread. Back waits for the
+latest typed draft to be persisted, while Cancel discards both the session and
+its canonical persisted draft and reports failure without cancelling when that
+durable deletion cannot be completed. A form draft is deleted before the
+session may enter `COLLECTION_PLANNED`; later collection, review, and delivery
+states therefore cannot leave an older resumable form projection. The provider
+selector exposes a bounded recovery
+screen after restart. A recoverable entry is rebound to the exact current
+provider version and category before it can resume; malformed, disabled,
+missing, or structurally incompatible entries remain isolated and may only be
+discarded. Recovery always returns to `FORM_IN_PROGRESS` and never restores
+collection plans, workspace/prepared snapshots, consent, or export authority.
 After a successful validation, **Plan** revalidates and confirms the typed
 form, then builds a source and size preview in the background. The preview
 allows declared available sources to be included or excluded before collection

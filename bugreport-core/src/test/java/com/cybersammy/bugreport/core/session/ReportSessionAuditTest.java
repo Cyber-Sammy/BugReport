@@ -88,6 +88,23 @@ final class ReportSessionAuditTest {
     }
 
     @Test
+    void formDraftUpdatePublishesPrivacyMinimizedRevisionOnlyWhileEditing() {
+        ReportSession session = session(Clock.fixed(AUDIT_TIME, ZoneOffset.UTC));
+
+        assertThrows(IllegalStateException.class, session::recordFormDraftUpdate);
+        session.selectCategory(GENERAL);
+        ReportSessionSnapshot updated = session.recordFormDraftUpdate();
+
+        SessionAuditEvent.FormDraftUpdated event =
+                assertInstanceOf(
+                        SessionAuditEvent.FormDraftUpdated.class,
+                        updated.auditTrail().events().getLast());
+        assertEquals(2, event.revision());
+        assertEquals(2, event.sequence());
+        assertEquals(ReportSessionState.FORM_IN_PROGRESS, updated.state());
+    }
+
+    @Test
     void clockFailureLeavesSessionAndAuditTrailUnchanged() {
         Clock clock = new Clock() {
             private boolean created;

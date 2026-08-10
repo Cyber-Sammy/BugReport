@@ -177,6 +177,7 @@ final class CollectionPlanScreen extends Screen {
     private void returnToForm() {
         visible = false;
         commands.returnToForm(request.sessionId().toString());
+        formScreen.requireFreshDraftPersistence();
         minecraft.setScreen(formScreen);
     }
 

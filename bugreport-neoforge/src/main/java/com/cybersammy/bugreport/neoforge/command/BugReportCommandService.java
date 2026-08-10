@@ -8,6 +8,12 @@ import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.validation.ValidationResult;
 import com.cybersammy.bugreport.core.form.FieldValidator;
 import com.cybersammy.bugreport.core.form.FormSubmission;
+import com.cybersammy.bugreport.core.draft.DraftLoadBatch;
+import com.cybersammy.bugreport.core.draft.DraftLoadOutcome;
+import com.cybersammy.bugreport.core.draft.DraftResolutionException;
+import com.cybersammy.bugreport.core.draft.DraftResolutionCode;
+import com.cybersammy.bugreport.core.draft.DraftResolver;
+import com.cybersammy.bugreport.core.draft.ReportDraft;
 import com.cybersammy.bugreport.core.registry.ProviderRegistrySnapshot;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.core.registry.RegisteredProvider;
@@ -15,6 +21,9 @@ import com.cybersammy.bugreport.core.session.CancellationReason;
 import com.cybersammy.bugreport.core.session.ReportSession;
 import com.cybersammy.bugreport.core.session.ReportSessionFactory;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
+import com.cybersammy.bugreport.core.session.RecoveredReportSession;
+import com.cybersammy.bugreport.core.session.ReportSessionRecoveryException;
+import com.cybersammy.bugreport.core.session.ReportSessionRecoveryCode;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
@@ -56,18 +65,23 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
 public final class BugReportCommandService {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
     private final ReportHistoryRecorder history;
+    private final ReportDraftPersistence drafts;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
+    private final Map<ReportSessionId, PersistedFormDraft> persistedForms = new LinkedHashMap<>();
+    private final Set<ReportSessionId> persistedDraftFiles = new LinkedHashSet<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
     private final Map<ReportSessionId, FileCollectionResult> collectionResults = new LinkedHashMap<>();
     private final Map<ReportSessionId, ReportWorkspace> collectionWorkspaces = new LinkedHashMap<>();
@@ -82,15 +96,32 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, LocalExportPreparationRequest> activeExportPreparations =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, LocalExportRequest> activeExports = new LinkedHashMap<>();
+    private final Map<ReportSessionId, RecoveredReportSession> recoverableDrafts =
+            new LinkedHashMap<>();
+    private final Map<ReportSessionId, DraftRecoveryChoice> rejectedDrafts =
+            new LinkedHashMap<>();
+    private boolean draftsScanned;
+    private boolean draftScanFailed;
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
-        this(registrySupplier, ReportHistoryRecorder.empty());
+        this(
+                registrySupplier,
+                ReportHistoryRecorder.empty(),
+                ReportDraftPersistence.empty());
     }
 
     public BugReportCommandService(
             Supplier<ProviderRegistrySnapshot> registrySupplier, ReportHistoryRecorder history) {
+        this(registrySupplier, history, ReportDraftPersistence.empty());
+    }
+
+    public BugReportCommandService(
+            Supplier<ProviderRegistrySnapshot> registrySupplier,
+            ReportHistoryRecorder history,
+            ReportDraftPersistence drafts) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
         this.history = Objects.requireNonNull(history, "history");
+        this.drafts = Objects.requireNonNull(drafts, "drafts");
     }
 
     public List<Message> help() {
@@ -203,6 +234,24 @@ public final class BugReportCommandService {
         return new FormResult(validation, false);
     }
 
+    /** Persists current typed form values under a newly published session revision. */
+    public synchronized DraftSaveStatus saveFormDraft(
+            String sessionValue, FormSubmission submission) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return DraftSaveStatus.UNKNOWN_SESSION;
+        }
+        if (!drafts.available()) {
+            return DraftSaveStatus.UNAVAILABLE;
+        }
+        if (session.snapshot().state() != ReportSessionState.FORM_IN_PROGRESS) {
+            return DraftSaveStatus.INVALID_STATE;
+        }
+        return persistFormDraft(session, Objects.requireNonNull(submission, "submission"))
+                ? DraftSaveStatus.SAVED
+                : DraftSaveStatus.FAILED;
+    }
+
     /**
      * Revalidates and accepts form values before atomically advancing to collection planning.
      *
@@ -224,6 +273,24 @@ public final class BugReportCommandService {
                 category, Objects.requireNonNull(submission, "submission"));
         if (!validation.isValid()) {
             return FormConfirmationResult.invalid(validation);
+        }
+
+        if (drafts.available()
+                && !Optional.ofNullable(persistedForms.get(snapshot.id()))
+                        .filter(persisted -> persisted.revision() == snapshot.revision())
+                        .map(PersistedFormDraft::submission)
+                        .filter(submission::equals)
+                        .isPresent()) {
+            return FormConfirmationResult.persistenceFailed();
+        }
+        if (drafts.available()) {
+            try {
+                drafts.delete(snapshot.id());
+            } catch (RuntimeException failure) {
+                return FormConfirmationResult.persistenceFailed();
+            }
+            persistedForms.remove(snapshot.id());
+            persistedDraftFiles.remove(snapshot.id());
         }
 
         session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
@@ -614,15 +681,83 @@ public final class BugReportCommandService {
         return history.entries();
     }
 
+    /** Returns one bounded, lazily loaded view of restart-recoverable drafts. */
+    public synchronized DraftRecoveryOverview draftRecovery() {
+        scanDraftsIfNeeded();
+        List<DraftRecoveryChoice> choices = new java.util.ArrayList<>();
+        recoverableDrafts.forEach(
+                (id, recovered) -> choices.add(recoveryChoice(recovered)));
+        choices.addAll(rejectedDrafts.values());
+        choices.sort(java.util.Comparator.comparing(choice -> choice.sessionId().toString()));
+        return new DraftRecoveryOverview(choices, draftScanFailed);
+    }
+
+    /** Consumes one recoverable persisted draft and installs only its safe session/form state. */
+    public synchronized Optional<DraftResume> resumeDraft(ReportSessionId sessionId) {
+        scanDraftsIfNeeded();
+        ReportSessionId id = Objects.requireNonNull(sessionId, "sessionId");
+        if (sessions.containsKey(id)) {
+            return Optional.empty();
+        }
+        RecoveredReportSession recovered = recoverableDrafts.remove(id);
+        if (recovered == null) {
+            return Optional.empty();
+        }
+        ReportSession session = recovered.session();
+        ReportSessionSnapshot snapshot = session.snapshot();
+        if (snapshot.state() != ReportSessionState.FORM_IN_PROGRESS
+                || snapshot.selectedCategory().isEmpty()) {
+            recoverableDrafts.put(id, recovered);
+            return Optional.empty();
+        }
+        sessions.put(id, session);
+        persistedDraftFiles.add(id);
+        return Optional.of(
+                new DraftResume(
+                        id,
+                        snapshot.providerSpecification().id(),
+                        snapshot.selectedCategory().orElseThrow().id(),
+                        recovered.formSubmission(),
+                        recovered.recordedState()));
+    }
+
+    /** Deletes one still-pending canonical restart draft without creating a live session. */
+    public synchronized boolean discardRecoveredDraft(ReportSessionId sessionId) {
+        scanDraftsIfNeeded();
+        ReportSessionId id = Objects.requireNonNull(sessionId, "sessionId");
+        if (!recoverableDrafts.containsKey(id) && !rejectedDrafts.containsKey(id)) {
+            return false;
+        }
+        try {
+            if (!drafts.delete(id)) {
+                return false;
+            }
+        } catch (RuntimeException failure) {
+            return false;
+        }
+        recoverableDrafts.remove(id);
+        rejectedDrafts.remove(id);
+        return true;
+    }
+
     public synchronized List<Message> discard(String sessionValue) {
         ReportSessionId id = parseSessionId(sessionValue);
         if (id == null || !sessions.containsKey(id)) {
             return List.of(new Message("bugreport.command.error.unknown_session"));
         }
         ReportSession session = sessions.get(id);
+        if (persistedDraftFiles.contains(id)) {
+            try {
+                drafts.delete(id);
+            } catch (RuntimeException failure) {
+                return List.of(new Message("bugreport.command.error.draft_discard_failed"));
+            }
+            persistedDraftFiles.remove(id);
+        }
         session.cancel(CancellationReason.USER_REQUESTED);
         sessions.remove(id);
         confirmedForms.remove(id);
+        persistedForms.remove(id);
         collectionPlans.remove(id);
         collectionResults.remove(id);
         collectionWorkspaces.remove(id);
@@ -633,6 +768,131 @@ public final class BugReportCommandService {
         activeExportPreparations.remove(id);
         activeExports.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
+    }
+
+    private boolean persistFormDraft(ReportSession session, FormSubmission submission) {
+        try {
+            ReportSessionSnapshot before = session.snapshot();
+            long persistedRevision = Math.addExact(before.revision(), 1);
+            ReportDraft draft = new ReportDraft(
+                    before.id(),
+                    persistedRevision,
+                    before.providerSpecification().id(),
+                    before.providerSpecification().version(),
+                    before.selectedCategory().map(CategorySpecification::id),
+                    before.state(),
+                    submission);
+            DraftResolver.resolve(draft, registry());
+            drafts.save(draft);
+            persistedDraftFiles.add(before.id());
+            ReportSessionSnapshot snapshot = session.recordFormDraftUpdate();
+            if (snapshot.revision() != persistedRevision) {
+                throw new IllegalStateException(
+                        "Persisted form draft and session revision diverged");
+            }
+            persistedForms.put(
+                    snapshot.id(), new PersistedFormDraft(snapshot.revision(), submission));
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    private void scanDraftsIfNeeded() {
+        if (draftsScanned || !drafts.available()) {
+            return;
+        }
+        draftsScanned = true;
+        final DraftLoadBatch batch;
+        try {
+            batch = drafts.loadAll();
+        } catch (RuntimeException failure) {
+            draftScanFailed = true;
+            return;
+        }
+        draftScanFailed = batch.scanLimitReached();
+        ReportSessionFactory factory = new ReportSessionFactory(registry());
+        for (DraftLoadOutcome outcome : batch.outcomes()) {
+            if (outcome instanceof DraftLoadOutcome.Rejected rejected) {
+                rejectedDrafts.put(
+                        rejected.sessionId(),
+                        DraftRecoveryChoice.rejected(
+                                rejected.sessionId(), DraftRecoveryStatus.FILE_REJECTED));
+                continue;
+            }
+            DraftLoadOutcome.Loaded loaded = (DraftLoadOutcome.Loaded) outcome;
+            ReportDraft draft = loaded.decoded().draft();
+            try {
+                RecoveredReportSession recovered = factory.recover(draft);
+                if (recovered.session().snapshot().state()
+                        != ReportSessionState.FORM_IN_PROGRESS) {
+                    rejectedDrafts.put(
+                            loaded.sessionId(),
+                            DraftRecoveryChoice.rejected(
+                                    loaded.sessionId(),
+                                    draft.providerId(),
+                                    draft.recordedState(),
+                                    DraftRecoveryStatus.NO_SELECTED_CATEGORY));
+                } else {
+                    recoverableDrafts.put(loaded.sessionId(), recovered);
+                }
+            } catch (DraftResolutionException failure) {
+                rejectedDrafts.put(
+                        loaded.sessionId(),
+                        DraftRecoveryChoice.rejected(
+                                loaded.sessionId(),
+                                draft.providerId(),
+                                draft.recordedState(),
+                                recoveryStatus(failure.code())));
+            } catch (ReportSessionRecoveryException failure) {
+                rejectedDrafts.put(
+                        loaded.sessionId(),
+                        DraftRecoveryChoice.rejected(
+                                loaded.sessionId(),
+                                draft.providerId(),
+                                draft.recordedState(),
+                                recoveryStatus(failure.code())));
+            }
+        }
+    }
+
+    private static DraftRecoveryChoice recoveryChoice(RecoveredReportSession recovered) {
+        ReportSessionSnapshot snapshot = recovered.session().snapshot();
+        CategorySpecification category = snapshot.selectedCategory().orElseThrow();
+        return new DraftRecoveryChoice(
+                snapshot.id(),
+                Optional.of(snapshot.providerSpecification().id()),
+                Optional.of(snapshot.providerSpecification().labelKey()),
+                Optional.of(category.labelKey()),
+                Optional.of(recovered.recordedState()),
+                DraftRecoveryStatus.READY);
+    }
+
+    private static DraftRecoveryStatus recoveryStatus(DraftResolutionCode code) {
+        return switch (code) {
+            case PROVIDER_MISSING -> DraftRecoveryStatus.PROVIDER_MISSING;
+            case PROVIDER_DISABLED -> DraftRecoveryStatus.PROVIDER_DISABLED;
+            case PROVIDER_VERSION_MISMATCH ->
+                    DraftRecoveryStatus.PROVIDER_VERSION_MISMATCH;
+            case CATEGORY_MISSING -> DraftRecoveryStatus.CATEGORY_MISSING;
+            case INVALID_FORM_STRUCTURE -> DraftRecoveryStatus.INVALID_FORM_STRUCTURE;
+        };
+    }
+
+    private static DraftRecoveryStatus recoveryStatus(ReportSessionRecoveryCode code) {
+        return switch (code) {
+            case TERMINAL_DRAFT -> DraftRecoveryStatus.TERMINAL_DRAFT;
+            case REVISION_EXHAUSTED -> DraftRecoveryStatus.REVISION_EXHAUSTED;
+        };
+    }
+
+    private record PersistedFormDraft(long revision, FormSubmission submission) {
+        private PersistedFormDraft {
+            if (revision < 0) {
+                throw new IllegalArgumentException("Persisted draft revision must be non-negative");
+            }
+            Objects.requireNonNull(submission, "submission");
+        }
     }
 
     private ProviderRegistrySnapshot registry() {
@@ -882,6 +1142,13 @@ public final class BugReportCommandService {
             return new FormConfirmationResult(
                     FormConfirmationStatus.INVALID_STATE, Optional.empty(), Optional.empty());
         }
+
+        private static FormConfirmationResult persistenceFailed() {
+            return new FormConfirmationResult(
+                    FormConfirmationStatus.PERSISTENCE_FAILED,
+                    Optional.empty(),
+                    Optional.empty());
+        }
     }
 
     /** Stable non-sensitive outcome for the form-to-plan lifecycle boundary. */
@@ -889,7 +1156,17 @@ public final class BugReportCommandService {
         ACCEPTED,
         INVALID,
         UNKNOWN_SESSION,
-        INVALID_STATE
+        INVALID_STATE,
+        PERSISTENCE_FAILED
+    }
+
+    /** Stable non-sensitive outcome for explicit form-draft persistence. */
+    public enum DraftSaveStatus {
+        SAVED,
+        UNKNOWN_SESSION,
+        INVALID_STATE,
+        UNAVAILABLE,
+        FAILED
     }
 
     /** Identity-only request for client-side source planning. */
@@ -1042,6 +1319,121 @@ public final class BugReportCommandService {
             if (entryCount <= 0 || totalBytes < 0) {
                 throw new IllegalArgumentException("Export summary is invalid");
             }
+        }
+    }
+
+    /** Safe product-facing status for one canonical persisted draft. */
+    public enum DraftRecoveryStatus {
+        READY,
+        FILE_REJECTED,
+        PROVIDER_MISSING,
+        PROVIDER_DISABLED,
+        PROVIDER_VERSION_MISMATCH,
+        CATEGORY_MISSING,
+        INVALID_FORM_STRUCTURE,
+        TERMINAL_DRAFT,
+        REVISION_EXHAUSTED,
+        NO_SELECTED_CATEGORY
+    }
+
+    /** Path-free recovery-list entry; only READY entries may be resumed. */
+    public record DraftRecoveryChoice(
+            ReportSessionId sessionId,
+            Optional<ProviderId> providerId,
+            Optional<LocalizationKey> providerLabel,
+            Optional<LocalizationKey> categoryLabel,
+            Optional<ReportSessionState> recordedState,
+            DraftRecoveryStatus status) {
+        public DraftRecoveryChoice {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(providerId, "providerId");
+            Objects.requireNonNull(providerLabel, "providerLabel");
+            Objects.requireNonNull(categoryLabel, "categoryLabel");
+            Objects.requireNonNull(recordedState, "recordedState");
+            Objects.requireNonNull(status, "status");
+            if (status == DraftRecoveryStatus.READY
+                    != (providerId.isPresent()
+                            && providerLabel.isPresent()
+                            && categoryLabel.isPresent()
+                            && recordedState.isPresent())) {
+                throw new IllegalArgumentException(
+                        "Only a ready recovery choice carries complete trusted labels");
+            }
+        }
+
+        private static DraftRecoveryChoice rejected(
+                ReportSessionId sessionId, DraftRecoveryStatus status) {
+            return new DraftRecoveryChoice(
+                    sessionId,
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    status);
+        }
+
+        private static DraftRecoveryChoice rejected(
+                ReportSessionId sessionId,
+                ProviderId providerId,
+                ReportSessionState recordedState,
+                DraftRecoveryStatus status) {
+            return new DraftRecoveryChoice(
+                    sessionId,
+                    Optional.of(providerId),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.of(recordedState),
+                    status);
+        }
+
+        public boolean resumable() {
+            return status == DraftRecoveryStatus.READY;
+        }
+    }
+
+    /** One bounded restart scan, including a safe aggregate scan warning. */
+    public record DraftRecoveryOverview(
+            List<DraftRecoveryChoice> choices, boolean scanIncomplete) {
+        public DraftRecoveryOverview {
+            choices = List.copyOf(Objects.requireNonNull(choices, "choices"));
+        }
+    }
+
+    /** Safe state returned after consuming one exact restart-recovery candidate. */
+    public record DraftResume(
+            ReportSessionId sessionId,
+            ProviderId providerId,
+            CategoryId categoryId,
+            FormSubmission formSubmission,
+            ReportSessionState recordedState) {
+        public DraftResume {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(providerId, "providerId");
+            Objects.requireNonNull(categoryId, "categoryId");
+            Objects.requireNonNull(formSubmission, "formSubmission");
+            Objects.requireNonNull(recordedState, "recordedState");
+        }
+    }
+
+    /** Product-side persistence boundary for bounded report drafts. */
+    public interface ReportDraftPersistence {
+        boolean available();
+
+        void save(ReportDraft draft);
+
+        DraftLoadBatch loadAll();
+
+        boolean delete(ReportSessionId sessionId);
+
+        static ReportDraftPersistence empty() {
+            return new ReportDraftPersistence() {
+                @Override public boolean available() { return false; }
+                @Override public void save(ReportDraft draft) {}
+                @Override public DraftLoadBatch loadAll() {
+                    return new DraftLoadBatch(List.of(), 0, false);
+                }
+                @Override public boolean delete(ReportSessionId sessionId) { return false; }
+            };
         }
     }
 
