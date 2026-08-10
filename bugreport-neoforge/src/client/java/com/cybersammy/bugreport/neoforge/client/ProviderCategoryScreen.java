@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.neoforge.client;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -14,6 +15,8 @@ final class ProviderCategoryScreen extends Screen {
     private BugReportCommandService.ProviderChoice selectedProvider;
     private Component status;
     private CategoryFormScreen activeForm;
+    private BugReportCommandService.DraftRecoveryOverview recoveryOverview;
+    private boolean recoveryLoading;
 
     ProviderCategoryScreen(BugReportCommandService commands) {
         super(Component.translatable("bugreport.screen.select_provider.title"));
@@ -69,6 +72,17 @@ final class ProviderCategoryScreen extends Screen {
             addRenderableWidget(back);
         }
         if (selectedProvider == null) {
+            loadRecoveryOverview();
+            int recoveryCount = recoveryOverview == null
+                    ? 0
+                    : recoveryOverview.choices().size();
+            if (recoveryCount > 0) {
+                addRenderableWidget(Button.builder(
+                                Component.translatable(
+                                        "bugreport.screen.recovery.open", recoveryCount),
+                                ignored -> minecraft.setScreen(new DraftRecoveryScreen(commands, this)))
+                        .bounds(left, height - 56, 240, 20).build());
+            }
             addRenderableWidget(Button.builder(Component.translatable("bugreport.screen.history.open"),
                             ignored -> minecraft.setScreen(new ReportHistoryScreen(commands, this)))
                     .bounds(left, height - 32, 116, 20).build());
@@ -101,6 +115,46 @@ final class ProviderCategoryScreen extends Screen {
             activeForm = null;
         }
         onClose();
+    }
+
+    void resumeRecoveredDraft(BugReportCommandService.DraftResume resumed) {
+        recoveryOverview = commands.draftRecovery();
+        selectedProvider = commands.providerChoice(resumed.providerId()).orElseThrow();
+        activeForm = new CategoryFormScreen(
+                commands,
+                resumed.sessionId().toString(),
+                this,
+                resumed.formSubmission());
+        status = Component.translatable(
+                "bugreport.screen.recovery.resumed", resumed.recordedState().name());
+        minecraft.setScreen(activeForm);
+    }
+
+    void updateRecoveryOverview(BugReportCommandService.DraftRecoveryOverview overview) {
+        recoveryOverview = overview;
+    }
+
+    private void loadRecoveryOverview() {
+        if (recoveryOverview != null || recoveryLoading) {
+            return;
+        }
+        recoveryLoading = true;
+        Thread.ofVirtual()
+                .name("bugreport-draft-scan")
+                .start(
+                        () -> {
+                            BugReportCommandService.DraftRecoveryOverview loaded =
+                                    commands.draftRecovery();
+                            Minecraft.getInstance()
+                                    .execute(
+                                            () -> {
+                                                recoveryOverview = loaded;
+                                                recoveryLoading = false;
+                                                if (Minecraft.getInstance().screen == this) {
+                                                    rebuildWidgets();
+                                                }
+                                            });
+                        });
     }
 
     @Override

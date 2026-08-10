@@ -45,6 +45,10 @@ import com.cybersammy.bugreport.core.form.FieldValue;
 import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.form.ReportSeverity;
 import com.cybersammy.bugreport.core.form.ReportSideContext;
+import com.cybersammy.bugreport.core.draft.FileDraftStore;
+import com.cybersammy.bugreport.core.draft.ReportDraft;
+import com.cybersammy.bugreport.core.session.ReportSessionId;
+import com.cybersammy.bugreport.core.session.ReportSessionState;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.file.Path;
@@ -452,6 +456,109 @@ final class BugReportCommandServiceTest {
                 confirmation.status());
         assertEquals(before.state(), service.form(sessionId).orElseThrow().state());
         assertTrue(service.confirmedForm(sessionId).isEmpty());
+    }
+
+    @Test
+    void restartRecoversTypedFormButNoCollectionOrDeliveryAuthority(@TempDir Path directory) {
+        FileReportDraftPersistence persistence =
+                new FileReportDraftPersistence(new FileDraftStore(directory.resolve("drafts")));
+        BugReportCommandService first = new BugReportCommandService(
+                BugReportCommandServiceTest::registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                persistence);
+        String sessionId = (String) first.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        FormSubmission submission = validSubmission();
+
+        assertEquals(
+                BugReportCommandService.DraftSaveStatus.SAVED,
+                first.saveFormDraft(sessionId, submission));
+
+        BugReportCommandService restarted = new BugReportCommandService(
+                BugReportCommandServiceTest::registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new FileReportDraftPersistence(new FileDraftStore(directory.resolve("drafts"))));
+        BugReportCommandService.DraftRecoveryOverview recovery = restarted.draftRecovery();
+        assertEquals(1, recovery.choices().size());
+        assertEquals(
+                BugReportCommandService.DraftRecoveryStatus.READY,
+                recovery.choices().getFirst().status());
+
+        BugReportCommandService.DraftResume resumed = restarted
+                .resumeDraft(ReportSessionId.parse(sessionId))
+                .orElseThrow();
+        assertEquals(submission, resumed.formSubmission());
+        assertEquals(ReportSessionState.FORM_IN_PROGRESS,
+                restarted.form(sessionId).orElseThrow().state());
+        assertTrue(restarted.beginCollection(sessionId).isEmpty());
+        assertTrue(restarted.beginLocalExport(sessionId).isEmpty());
+        assertTrue(restarted.submitForm(sessionId, resumed.formSubmission()).validation().isValid());
+        assertEquals(
+                BugReportCommandService.FormConfirmationStatus.PERSISTENCE_FAILED,
+                restarted.confirmForm(sessionId, submission).status());
+        assertEquals(
+                BugReportCommandService.DraftSaveStatus.SAVED,
+                restarted.saveFormDraft(sessionId, submission));
+        assertEquals(
+                BugReportCommandService.FormConfirmationStatus.ACCEPTED,
+                restarted.confirmForm(sessionId, submission).status());
+    }
+
+    @Test
+    void corruptAndUnavailableDraftsAreIsolatedAndExplicitlyDiscardable(
+            @TempDir Path directory) throws Exception {
+        Path root = directory.resolve("drafts");
+        Files.createDirectories(root);
+        ReportSessionId corruptId =
+                ReportSessionId.parse("00000000-0000-4000-8000-000000000301");
+        ReportSessionId missingProviderId =
+                ReportSessionId.parse("00000000-0000-4000-8000-000000000302");
+        ReportSessionId missingCategoryId =
+                ReportSessionId.parse("00000000-0000-4000-8000-000000000303");
+        Files.writeString(root.resolve(corruptId + ".json"), "{");
+        new FileDraftStore(root).save(new ReportDraft(
+                missingProviderId,
+                1,
+                ProviderId.parse("missing_mod"),
+                ProviderVersion.parse("1.0.0"),
+                Optional.of(CategoryId.of("general")),
+                ReportSessionState.FORM_IN_PROGRESS,
+                FormSubmission.empty()));
+        new FileDraftStore(root).save(new ReportDraft(
+                missingCategoryId,
+                1,
+                ProviderId.parse("example_mod"),
+                ProviderVersion.parse("1.0.0"),
+                Optional.of(CategoryId.of("removed")),
+                ReportSessionState.FORM_IN_PROGRESS,
+                FormSubmission.empty()));
+        BugReportCommandService service = new BugReportCommandService(
+                BugReportCommandServiceTest::registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new FileReportDraftPersistence(new FileDraftStore(root)));
+
+        List<BugReportCommandService.DraftRecoveryChoice> choices =
+                service.draftRecovery().choices();
+        assertEquals(3, choices.size());
+        assertTrue(choices.stream().anyMatch(choice ->
+                choice.sessionId().equals(corruptId)
+                        && choice.status()
+                                == BugReportCommandService.DraftRecoveryStatus.FILE_REJECTED));
+        assertTrue(choices.stream().anyMatch(choice ->
+                choice.sessionId().equals(missingProviderId)
+                        && choice.status()
+                                == BugReportCommandService.DraftRecoveryStatus.PROVIDER_MISSING));
+        assertTrue(choices.stream().anyMatch(choice ->
+                choice.sessionId().equals(missingCategoryId)
+                        && choice.status()
+                                == BugReportCommandService.DraftRecoveryStatus.CATEGORY_MISSING));
+        assertTrue(service.discardRecoveredDraft(corruptId));
+        assertTrue(service.discardRecoveredDraft(missingProviderId));
+        assertTrue(service.discardRecoveredDraft(missingCategoryId));
+        assertTrue(service.draftRecovery().choices().isEmpty());
+        assertFalse(Files.exists(root.resolve(corruptId + ".json")));
+        assertFalse(Files.exists(root.resolve(missingProviderId + ".json")));
+        assertFalse(Files.exists(root.resolve(missingCategoryId + ".json")));
     }
 
     private static ProviderRegistrySnapshot registry() {

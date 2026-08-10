@@ -144,6 +144,19 @@ final class FileDraftStoreTest {
         assertEquals(DraftLoadFailureCode.FORMAT_INVALID, rejected.code());
     }
 
+    @Test
+    void deletesOnlyTheExactCanonicalSessionDraft() {
+        Path root = temporaryDirectory.resolve("drafts");
+        FileDraftStore store = new FileDraftStore(root);
+        store.save(draft(1, SESSION_ID));
+        store.save(draft(1, OTHER_SESSION_ID));
+
+        assertTrue(store.delete(SESSION_ID));
+        assertFalse(store.delete(SESSION_ID));
+        assertFalse(Files.exists(root.resolve(SESSION_ID + ".json")));
+        assertTrue(Files.exists(root.resolve(OTHER_SESSION_ID + ".json")));
+    }
+
     private static ReportDraft draft(long revision, ReportSessionId sessionId) {
         return new ReportDraft(
                 sessionId,

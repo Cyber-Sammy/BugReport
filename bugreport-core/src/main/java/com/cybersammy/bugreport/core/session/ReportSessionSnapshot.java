@@ -88,6 +88,13 @@ public record ReportSessionSnapshot(
                     requireCategoryAuditState(selected.categoryId(), selectedCategory, state);
             case SessionAuditEvent.CategoryChanged changed ->
                     requireCategoryAuditState(changed.categoryId(), selectedCategory, state);
+            case SessionAuditEvent.FormDraftUpdated ignored -> {
+                if (state != ReportSessionState.FORM_IN_PROGRESS
+                        || selectedCategory.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "Form-draft audit event requires an editable selected category");
+                }
+            }
             case SessionAuditEvent.StateTransitioned transition -> {
                 if (state != transition.state()) {
                     throw new IllegalArgumentException(
