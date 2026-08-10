@@ -4,19 +4,28 @@ import com.cybersammy.bugreport.api.specification.RelativePath;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +43,8 @@ import com.mojang.blaze3d.platform.NativeImage;
 /** Explicit bounded picker for recent local screenshots and a new in-game capture. */
 public final class ScreenshotSelectionScreen extends Screen {
     private static final int MAX_DIRECTORY_ENTRIES = 128;
+    private static final int MAX_INPUT_BYTES = 32 * 1024 * 1024;
+    private static final int COPY_BUFFER_BYTES = 64 * 1024;
     private static final int PAGE_SIZE = 5;
     private static final DateTimeFormatter CAPTURE_NAME = DateTimeFormatter
             .ofPattern("uuuu-MM-dd_HH.mm.ss.SSS", Locale.ROOT)
@@ -45,7 +56,8 @@ public final class ScreenshotSelectionScreen extends Screen {
     private final ReviewedCollectionPlan reviewed;
     private final Consumer<BugReportCommandService.CollectionExecutionRequest> completion;
     private final Path screenshotsDirectory;
-    private final Set<RelativePath> selected = new LinkedHashSet<>();
+    private final Map<RelativePath, ScreenshotCollectionRequest.SelectedImage> selected =
+            new LinkedHashMap<>();
     private List<Candidate> candidates = List.of();
     private int page;
     private boolean loading;
@@ -89,7 +101,7 @@ public final class ScreenshotSelectionScreen extends Screen {
         int last = Math.min(first + PAGE_SIZE, candidates.size());
         for (int index = first; index < last; index++) {
             Candidate candidate = candidates.get(index);
-            boolean included = selected.contains(candidate.path());
+            boolean included = selected.containsKey(candidate.path());
             Button button = Button.builder(
                             Component.literal((included ? "[x] " : "[ ] ")
                                     + candidate.path().value()
@@ -150,7 +162,7 @@ public final class ScreenshotSelectionScreen extends Screen {
             Minecraft.getInstance().execute(() -> {
                 loading = false;
                 candidates = result;
-                selected.retainAll(result.stream()
+                selected.keySet().retainAll(result.stream()
                         .map(Candidate::path)
                         .collect(java.util.stream.Collectors.toSet()));
                 status = result.isEmpty()
@@ -186,7 +198,7 @@ public final class ScreenshotSelectionScreen extends Screen {
             BasicFileAttributes attributes = Files.readAttributes(
                     child, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
             if (!attributes.isRegularFile()
-                    || attributes.size() > 32L * 1024L * 1024L) {
+                    || attributes.size() > MAX_INPUT_BYTES) {
                 continue;
             }
             int[] dimensions = imageDimensions(child);
@@ -234,46 +246,128 @@ public final class ScreenshotSelectionScreen extends Screen {
 
     private void toggle(Candidate candidate) {
         RelativePath path = candidate.path();
-        if (!selected.remove(path)) {
-            if (selected.size() >= ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES) {
-                status = Component.translatable(
-                        "bugreport.screen.screenshot.limit",
-                        ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES);
-                return;
-            }
-            selected.add(path);
+        if (selected.remove(path) != null) {
+            rebuildWidgets();
+            return;
         }
-        loadPreview(candidate);
-        rebuildWidgets();
+        if (selected.size() >= ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES) {
+            status = Component.translatable(
+                    "bugreport.screen.screenshot.limit",
+                    ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES);
+            return;
+        }
+        observeAndSelect(path);
     }
 
-    private void loadPreview(Candidate candidate) {
+    private void observeAndSelect(RelativePath relativePath) {
+        completing = true;
+        status = Component.translatable("bugreport.screen.screenshot.preparing");
+        rebuildWidgets();
         long generation = ++previewGeneration;
         Thread.ofVirtual().name("bugreport-screenshot-preview").start(() -> {
-            NativeImage image = null;
+            ObservedPreview observed;
             try {
-                Path path = screenshotsDirectory.resolve(candidate.path().value()).normalize();
-                if (!screenshotsDirectory.equals(path.getParent())
-                        || Files.size(path) > 32L * 1024L * 1024L) {
-                    return;
-                }
-                image = NativeImage.read(Files.readAllBytes(path));
+                observed = readObservedPreview(relativePath);
             } catch (IOException | RuntimeException failure) {
-                return;
+                observed = null;
             }
-            NativeImage loaded = image;
+            ObservedPreview result = observed;
             Minecraft.getInstance().execute(() -> {
                 if (generation != previewGeneration || minecraft.screen != this) {
-                    loaded.close();
+                    if (result != null) {
+                        result.image().close();
+                    }
                     return;
                 }
+                completing = false;
+                if (result == null) {
+                    status = Component.translatable("bugreport.screen.screenshot.invalid");
+                    rebuildWidgets();
+                    return;
+                }
+                selected.put(relativePath, result.selection());
                 releasePreview();
-                previewWidth = loaded.getWidth();
-                previewHeight = loaded.getHeight();
+                previewWidth = result.image().getWidth();
+                previewHeight = result.image().getHeight();
                 previewTexture = minecraft.getTextureManager().register(
-                        "bugreport-screenshot-preview", new DynamicTexture(loaded));
+                        "bugreport-screenshot-preview", new DynamicTexture(result.image()));
+                status = Component.translatable(
+                        "bugreport.screen.screenshot.selected", selected.size());
+                rebuildWidgets();
             });
         });
+    }
+
+    private ObservedPreview readObservedPreview(RelativePath relativePath) throws IOException {
+        Path path = screenshotsDirectory.resolve(relativePath.value()).normalize();
+        if (!screenshotsDirectory.equals(path.getParent())) {
+            throw new IOException("Selected screenshot escaped the screenshots directory");
+        }
+        BasicFileAttributes before = Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!before.isRegularFile()
+                || before.isSymbolicLink()
+                || before.size() > MAX_INPUT_BYTES) {
+            throw new IOException("Selected screenshot is unsafe");
+        }
+        byte[] bytes = readBounded(path);
+        BasicFileAttributes after = Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!sameSnapshot(before, after) || bytes.length != after.size()) {
+            throw new IOException("Selected screenshot changed while previewing");
+        }
+        NativeImage image = NativeImage.read(bytes);
+        ScreenshotCollectionRequest.SelectedImage selection =
+                new ScreenshotCollectionRequest.SelectedImage(
+                        relativePath,
+                        after.size(),
+                        after.lastModifiedTime().toInstant(),
+                        sha256(bytes));
+        return new ObservedPreview(selection, image);
+    }
+
+    private static byte[] readBounded(Path path) throws IOException {
+        Set<OpenOption> options = Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+        try (FileChannel channel = FileChannel.open(path, options)) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            ByteBuffer buffer = ByteBuffer.allocate(COPY_BUFFER_BYTES);
+            int total = 0;
+            while (true) {
+                int read = channel.read(buffer);
+                if (read < 0) {
+                    return output.toByteArray();
+                }
+                if (read == 0) {
+                    continue;
+                }
+                total = Math.addExact(total, read);
+                if (total > MAX_INPUT_BYTES) {
+                    throw new IOException("Selected screenshot exceeds the preview byte limit");
+                }
+                buffer.flip();
+                output.write(buffer.array(), 0, buffer.remaining());
+                buffer.clear();
+            }
+        }
+    }
+
+    private static boolean sameSnapshot(
+            BasicFileAttributes first, BasicFileAttributes second) {
+        boolean sameIdentity = first.fileKey() != null && second.fileKey() != null
+                ? first.fileKey().equals(second.fileKey())
+                : first.creationTime().equals(second.creationTime());
+        return sameIdentity
+                && first.isRegularFile() == second.isRegularFile()
+                && first.size() == second.size()
+                && first.lastModifiedTime().equals(second.lastModifiedTime());
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Required SHA-256 is unavailable", exception);
+        }
     }
 
     private void releasePreview() {
@@ -291,6 +385,15 @@ public final class ScreenshotSelectionScreen extends Screen {
     }
 
     private void capture() {
+        commands.beginScreenshotCapture(sessionId.toString(), reviewed).ifPresentOrElse(
+                this::capture,
+                () -> {
+                    status = Component.translatable("bugreport.screen.screenshot.invalid");
+                    rebuildWidgets();
+                });
+    }
+
+    private void capture(BugReportCommandService.ScreenshotCaptureRequest request) {
         completing = true;
         status = Component.translatable("bugreport.screen.screenshot.capturing");
         rebuildWidgets();
@@ -301,21 +404,24 @@ public final class ScreenshotSelectionScreen extends Screen {
                         Minecraft.getInstance().gameDirectory,
                         filename,
                         Minecraft.getInstance().getMainRenderTarget(),
-                        ignored -> Minecraft.getInstance().execute(() -> finishCapture(filename)))));
+                        ignored -> Minecraft.getInstance()
+                                .execute(() -> finishCapture(request, filename)))));
     }
 
-    private void finishCapture(String filename) {
+    private void finishCapture(
+            BugReportCommandService.ScreenshotCaptureRequest request, String filename) {
         minecraft.setScreen(this);
         Path captured = screenshotsDirectory.resolve(filename);
-        if (!Files.isRegularFile(captured, LinkOption.NOFOLLOW_LINKS)) {
+        boolean authorityAccepted = commands.acceptScreenshotCapture(request);
+        if (!authorityAccepted || !Files.isRegularFile(captured, LinkOption.NOFOLLOW_LINKS)) {
             completing = false;
             status = Component.translatable("bugreport.screen.screenshot.capture_failed");
             rebuildWidgets();
             return;
         }
-        selected.add(RelativePath.of(filename));
         candidates = List.of();
         completing = false;
+        observeAndSelect(RelativePath.of(filename));
         loadCandidates();
     }
 
@@ -325,7 +431,7 @@ public final class ScreenshotSelectionScreen extends Screen {
         rebuildWidgets();
         try {
             ScreenshotCollectionRequest request = ScreenshotCollectionRequest.from(
-                    reviewed, List.copyOf(selected));
+                    reviewed, List.copyOf(selected.values()));
             commands.beginCollectionWithScreenshots(sessionId.toString(), request).ifPresentOrElse(
                     completion,
                     () -> {
@@ -389,4 +495,7 @@ public final class ScreenshotSelectionScreen extends Screen {
     }
 
     private record Candidate(RelativePath path, Instant modified, int width, int height) {}
+
+    private record ObservedPreview(
+            ScreenshotCollectionRequest.SelectedImage selection, NativeImage image) {}
 }

@@ -5,6 +5,7 @@ import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.CancellationSignal;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
 import com.cybersammy.bugreport.api.validation.ValidationResult;
 import com.cybersammy.bugreport.core.form.FieldValidator;
 import com.cybersammy.bugreport.core.form.FormSubmission;
@@ -101,6 +102,8 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, LocalExportPreparationRequest> activeExportPreparations =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, LocalExportRequest> activeExports = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ScreenshotCaptureRequest> activeScreenshotCaptures =
+            new LinkedHashMap<>();
     private final Map<ReportSessionId, RecoveredReportSession> recoverableDrafts =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, DraftRecoveryChoice> rejectedDrafts =
@@ -405,7 +408,7 @@ public final class BugReportCommandService {
             ScreenshotCollectionRequest expected = ScreenshotCollectionRequest.from(
                     reviewedPlan,
                     selectedScreenshots.entries().stream()
-                            .map(ScreenshotCollectionRequest.Entry::relativePath)
+                            .map(ScreenshotCollectionRequest.Entry::selectedImage)
                             .distinct()
                             .toList());
             if (!expected.fingerprint().equals(selectedScreenshots.fingerprint())) {
@@ -414,6 +417,7 @@ public final class BugReportCommandService {
         } catch (IllegalArgumentException invalidSelection) {
             return Optional.empty();
         }
+        activeScreenshotCaptures.remove(planned.id());
         session.transitionTo(ReportSessionState.COLLECTING);
         ReportSessionSnapshot collecting = session.snapshot();
         return Optional.of(new CollectionExecutionRequest(
@@ -422,6 +426,42 @@ public final class BugReportCommandService {
                 reviewedPlan,
                 selectedScreenshots,
                 CategoryCollectionFingerprint.from(reviewedPlan, selectedScreenshots)));
+    }
+
+    /** Issues one opaque permission to capture a framebuffer for the exact planning generation. */
+    synchronized Optional<ScreenshotCaptureRequest> beginScreenshotCapture(
+            String sessionValue, ReviewedCollectionPlan reviewedPlan) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        ReviewedCollectionPlan current = collectionPlans.get(snapshot.id());
+        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
+                || current != Objects.requireNonNull(reviewedPlan, "reviewedPlan")
+                || current.includedSources().stream().noneMatch(source ->
+                        source.provenance().kind() == DiagnosticSourceKind.USER_SELECTED_SCREENSHOT)) {
+            return Optional.empty();
+        }
+        ScreenshotCaptureRequest request =
+                new ScreenshotCaptureRequest(snapshot.id(), snapshot.revision(), current);
+        activeScreenshotCaptures.put(snapshot.id(), request);
+        return Optional.of(request);
+    }
+
+    /** Consumes a capture permission only while its exact session generation remains current. */
+    synchronized boolean acceptScreenshotCapture(ScreenshotCaptureRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId);
+        if (session == null || activeScreenshotCaptures.get(request.sessionId) != request) {
+            return false;
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        boolean accepted = snapshot.state() == ReportSessionState.COLLECTION_PLANNED
+                && snapshot.revision() == request.collectionPlanRevision
+                && collectionPlans.get(request.sessionId) == request.reviewedPlan;
+        activeScreenshotCaptures.remove(request.sessionId, request);
+        return accepted;
     }
 
     /** Records a terminal collection result only for the exact active collection generation. */
@@ -844,6 +884,7 @@ public final class BugReportCommandService {
         activeReviews.remove(id);
         activeExportPreparations.remove(id);
         activeExports.remove(id);
+        activeScreenshotCaptures.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -1292,6 +1333,26 @@ public final class BugReportCommandService {
             Objects.requireNonNull(providerId, "providerId");
             Objects.requireNonNull(providerVersion, "providerVersion");
             Objects.requireNonNull(categoryId, "categoryId");
+        }
+    }
+
+    /** Opaque, single-use authority for one user-initiated framebuffer capture. */
+    static final class ScreenshotCaptureRequest {
+        private final ReportSessionId sessionId;
+        private final long collectionPlanRevision;
+        private final ReviewedCollectionPlan reviewedPlan;
+
+        private ScreenshotCaptureRequest(
+                ReportSessionId sessionId,
+                long collectionPlanRevision,
+                ReviewedCollectionPlan reviewedPlan) {
+            this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
+            if (collectionPlanRevision < 0) {
+                throw new IllegalArgumentException(
+                        "collectionPlanRevision must be non-negative");
+            }
+            this.collectionPlanRevision = collectionPlanRevision;
+            this.reviewedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan");
         }
     }
 

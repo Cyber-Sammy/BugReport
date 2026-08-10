@@ -68,10 +68,11 @@ Implemented and executable:
   collection into a private product-owned workspace, followed by off-thread
   text sanitization, binary/warning confirmation, exact-byte sealing, and a
   trusted `READY` session transition;
-- a bounded screenshot-attachment screen that can capture the current game view or select up to
-  eight recent PNG/JPEG files from the local `screenshots/` directory, previews their dimensions
-  and image contents, rejects redirected/changed/oversized inputs, strips metadata through PNG
-  re-encoding, and retains every image as a separately reviewable sensitive artifact;
+- a bounded screenshot-attachment screen that can capture the current game view through a
+  single-use session/revision authority or select up to eight recent PNG/JPEG files from the local
+  `screenshots/` directory; selection binds the exact previewed bytes by size, modification time,
+  and SHA-256 so replacement before collection is rejected, while accepted images are metadata-
+  stripped through PNG re-encoding and retained as separately reviewable sensitive artifacts;
 - a final package-summary screen that derives a deterministic ZIP plan from the
   exact sealed workspace, requires a separate explicit local-save click, and
   writes a private ZIP off the render thread into the product-owned

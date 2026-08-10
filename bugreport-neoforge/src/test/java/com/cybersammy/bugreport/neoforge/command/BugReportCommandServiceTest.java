@@ -69,10 +69,66 @@ final class BugReportCommandServiceTest {
         var method = BugReportCommandService.class.getDeclaredMethod(
                 "beginCollectionWithScreenshots", String.class, ScreenshotCollectionRequest.class);
         assertFalse(Modifier.isPublic(method.getModifiers()));
+        assertFalse(Modifier.isPublic(BugReportCommandService.class
+                .getDeclaredMethod(
+                        "beginScreenshotCapture", String.class, ReviewedCollectionPlan.class)
+                .getModifiers()));
+        assertFalse(Modifier.isPublic(
+                BugReportCommandService.ScreenshotCaptureRequest.class.getModifiers()));
+        assertFalse(Modifier.isPublic(BugReportCommandService.class
+                .getDeclaredMethod(
+                        "acceptScreenshotCapture",
+                        BugReportCommandService.ScreenshotCaptureRequest.class)
+                .getModifiers()));
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.ScreenshotCaptureRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> Modifier.isPrivate(constructor.getModifiers())));
         assertTrue(Modifier.isPublic(
                 BugReportCommandService.class
                         .getDeclaredMethod("beginCollection", String.class)
                         .getModifiers()));
+    }
+
+    @Test
+    void screenshotCaptureAuthorityIsExactSingleUseAndRevokedWithSession(
+            @TempDir Path gameDirectory) throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        ProviderRegistrySnapshot registry = screenshotRegistry();
+        BugReportCommandService service = new BugReportCommandService(() -> registry);
+        String sessionId = (String) service.create("screenshot_mod", "general")
+                .getFirst()
+                .arguments()[0];
+        var planRequest = service.confirmForm(sessionId, FormSubmission.empty())
+                .planRequest()
+                .orElseThrow();
+        var plan = new com.cybersammy.bugreport.core.source.CategoryCollectionPlanner(
+                        registry,
+                        ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                        SupportedSide.PHYSICAL_CLIENT)
+                .plan(ProviderId.parse("screenshot_mod"), CategoryId.of("general"));
+        var reviewed = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("screenshot")), Set.of());
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+
+        var issued = service.beginScreenshotCapture(sessionId, reviewed).orElseThrow();
+        var constructor = BugReportCommandService.ScreenshotCaptureRequest.class
+                .getDeclaredConstructor(
+                        ReportSessionId.class, long.class, ReviewedCollectionPlan.class);
+        constructor.setAccessible(true);
+        var synthetic = constructor.newInstance(
+                ReportSessionId.parse(sessionId), service.form(sessionId).orElseThrow().revision(), reviewed);
+        assertFalse(service.acceptScreenshotCapture(synthetic));
+        assertTrue(service.acceptScreenshotCapture(issued));
+        assertFalse(service.acceptScreenshotCapture(issued));
+
+        var revoked = service.beginScreenshotCapture(sessionId, reviewed).orElseThrow();
+        assertEquals("bugreport.command.discard.success", service.discard(sessionId)
+                .getFirst()
+                .translationKey());
+        assertFalse(service.acceptScreenshotCapture(revoked));
     }
     private final BugReportCommandService commands =
             new BugReportCommandService(ProviderRegistrySnapshot::empty);
@@ -808,6 +864,48 @@ final class BugReportCommandServiceTest {
         };
         return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
                 NamespaceId.of("generated_mod"), "GeneratedProvider", provider)));
+    }
+
+    private static ProviderRegistrySnapshot screenshotRegistry() {
+        DiagnosticSourceId sourceId = DiagnosticSourceId.of("screenshot");
+        DiagnosticSourceSpecification source =
+                DiagnosticSourceSpecification.userSelectedScreenshot(sourceId)
+                        .labelKey(LocalizationKey.of("screenshot_mod.source.screenshot"))
+                        .privacy(PrivacyClassification.SENSITIVE)
+                        .contentType(DiagnosticContentType.BINARY)
+                        .qualityRole(ReportQualityRole.OPTIONAL)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .build();
+        ProviderSpecification specification = ProviderSpecification.builder(
+                        ProviderId.parse("screenshot_mod"),
+                        ProviderVersion.parse("1.0.0"),
+                        LocalizationKey.of("screenshot_mod.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addSource(source)
+                .addCategory(CategorySpecification.builder(
+                                CategoryId.of("general"),
+                                LocalizationKey.of("screenshot_mod.category.general"))
+                        .useSource(sourceId)
+                        .build())
+                .build();
+        BugReportProvider provider = new BugReportProvider() {
+            @Override
+            public String providerId() {
+                return "screenshot_mod";
+            }
+
+            @Override
+            public String providerVersion() {
+                return "1.0.0";
+            }
+
+            @Override
+            public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+        return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
+                NamespaceId.of("screenshot_mod"), "ScreenshotProvider", provider)));
     }
 
     private static CategorySourcePlan emptyCategoryPlan(Path gameDirectory) {

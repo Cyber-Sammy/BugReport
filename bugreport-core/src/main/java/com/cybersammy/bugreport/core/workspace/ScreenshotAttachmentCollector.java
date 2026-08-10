@@ -72,7 +72,7 @@ final class ScreenshotAttachmentCollector {
                 continue;
             }
             try {
-                byte[] input = readStableSelectedImage(root, entry.relativePath().value());
+                byte[] input = readStableSelectedImage(root, entry.selectedImage());
                 processed = Math.addExact(processed, input.length);
                 byte[] normalized = normalize(input);
                 if (normalized.length > remainingBytes - retained) {
@@ -93,6 +93,9 @@ final class ScreenshotAttachmentCollector {
             } catch (ImageLimitException failure) {
                 outcomes.add(FileCollectionResult.SourceOutcome.failed(
                         ordinal, List.of(entry.provenance()), failure.code));
+            } catch (StaleSelectionException failure) {
+                outcomes.add(FileCollectionResult.SourceOutcome.failed(
+                        ordinal, List.of(entry.provenance()), SourceCopyCode.SOURCE_CHANGED));
             } catch (IOException | RuntimeException failure) {
                 outcomes.add(FileCollectionResult.SourceOutcome.failed(
                         ordinal, List.of(entry.provenance()), SourceCopyCode.SOURCE_UNSAFE));
@@ -120,13 +123,18 @@ final class ScreenshotAttachmentCollector {
                         OptionalInt.empty()));
     }
 
-    private static byte[] readStableSelectedImage(Path root, String filename) throws IOException {
+    private static byte[] readStableSelectedImage(
+            Path root, ScreenshotCollectionRequest.SelectedImage observation) throws IOException {
         requireTrustedRoot(root);
-        Path selected = root.resolve(filename).normalize();
+        Path selected = root.resolve(observation.relativePath().value()).normalize();
         if (!root.equals(selected.getParent())) {
             throw new IOException("Selected screenshot escaped the screenshots directory");
         }
         BasicFileAttributes before = safeAttributes(selected);
+        if (before.size() != observation.observedSize()
+                || !before.lastModifiedTime().toInstant().equals(observation.observedLastModified())) {
+            throw new StaleSelectionException();
+        }
         if (before.size() > PRODUCT_MAX_INPUT_BYTES) {
             throw new ImageLimitException(SourceCopyCode.BYTE_LIMIT_EXCEEDED);
         }
@@ -139,7 +147,18 @@ final class ScreenshotAttachmentCollector {
         if (!sameSnapshot(before, after) || contents.length != after.size()) {
             throw new IOException("Selected screenshot changed while it was read");
         }
+        if (!sha256(contents).equals(observation.sha256())) {
+            throw new StaleSelectionException();
+        }
         return contents;
+    }
+
+    private static String sha256(byte[] contents) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(contents));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Required SHA-256 is unavailable", exception);
+        }
     }
 
     private static void requireTrustedRoot(Path root) throws IOException {
@@ -423,5 +442,9 @@ final class ScreenshotAttachmentCollector {
             super("Selected screenshot violates a product image limit");
             this.code = Objects.requireNonNull(code, "code");
         }
+    }
+
+    private static final class StaleSelectionException extends IOException {
+        private static final long serialVersionUID = 1L;
     }
 }

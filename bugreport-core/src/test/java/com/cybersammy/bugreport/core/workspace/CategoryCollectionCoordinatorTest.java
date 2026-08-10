@@ -40,8 +40,12 @@ import com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -232,7 +236,7 @@ final class CategoryCollectionCoordinatorTest {
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
                 fixture.plan(), Set.of(SCREENSHOT), Set.of());
         ScreenshotCollectionRequest screenshots = ScreenshotCollectionRequest.from(
-                reviewed, List.of(RelativePath.of("external-image.jpg")));
+                reviewed, List.of(observe(selected)));
         CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
                 fixture.registry(),
                 reviewed,
@@ -288,7 +292,7 @@ final class CategoryCollectionCoordinatorTest {
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
                 fixture.plan(), Set.of(SCREENSHOT), Set.of());
         ScreenshotCollectionRequest screenshots = ScreenshotCollectionRequest.from(
-                reviewed, List.of(RelativePath.of("fake.png")));
+                reviewed, List.of(observe(fixture.screenshots().resolve("fake.png"))));
 
         CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
                 fixture.registry(),
@@ -308,6 +312,66 @@ final class CategoryCollectionCoordinatorTest {
         try (var children = Files.list(fixture.workspace().directory())) {
             assertEquals(1, children.count());
         }
+    }
+
+    @Test
+    void replacementAfterSelectionIsRejectedBeforeWorkspacePublication() throws Exception {
+        ScreenshotFixture fixture = screenshotFixture();
+        Path selected = fixture.screenshots().resolve("selected.png");
+        BufferedImage first = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        first.setRGB(1, 1, 0xFF00AA44);
+        assertTrue(ImageIO.write(first, "png", selected.toFile()));
+        ScreenshotCollectionRequest.SelectedImage observation = observe(selected);
+
+        byte[] original = Files.readAllBytes(selected);
+        FileTime selectedTime = Files.getLastModifiedTime(selected);
+        byte[] replaced = null;
+        for (int color = 1; color <= 4096 && replaced == null; color++) {
+            BufferedImage replacement = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            replacement.setRGB(1, 1, 0xFF000000 | color);
+            ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+            assertTrue(ImageIO.write(replacement, "png", encoded));
+            byte[] candidate = encoded.toByteArray();
+            if (candidate.length == original.length
+                    && !java.util.Arrays.equals(candidate, original)) {
+                replaced = candidate;
+            }
+        }
+        assertTrue(replaced != null);
+        Files.write(selected, replaced);
+        Files.setLastModifiedTime(selected, selectedTime);
+
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                fixture.plan(), Set.of(SCREENSHOT), Set.of());
+        ScreenshotCollectionRequest screenshots =
+                ScreenshotCollectionRequest.from(reviewed, List.of(observation));
+        CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
+                fixture.registry(),
+                reviewed,
+                screenshots,
+                fixture.roots(),
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                new CategoryCollectionRunControl(),
+                command -> false,
+                fixture.screenshots());
+
+        assertEquals(CategoryCollectionResult.Status.FAILED, result.status());
+        assertEquals(
+                SourceCopyCode.SOURCE_CHANGED,
+                result.files().outcomes().getFirst().failureCode().orElseThrow());
+        try (var children = Files.list(fixture.workspace().directory())) {
+            assertEquals(1, children.count());
+        }
+    }
+
+    private static ScreenshotCollectionRequest.SelectedImage observe(Path path) throws Exception {
+        byte[] bytes = Files.readAllBytes(path);
+        return new ScreenshotCollectionRequest.SelectedImage(
+                RelativePath.of(path.getFileName().toString()),
+                bytes.length,
+                Files.getLastModifiedTime(path).toInstant(),
+                HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
     }
 
     private Fixture fixture(AtomicBoolean invoked) throws Exception {
