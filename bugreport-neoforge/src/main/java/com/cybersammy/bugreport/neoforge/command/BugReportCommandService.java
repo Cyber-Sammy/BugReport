@@ -31,6 +31,7 @@ import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint;
 import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.CategoryCollectionResult;
 import com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator;
@@ -366,12 +367,51 @@ public final class BugReportCommandService {
     /** Begins collection only from a currently accepted user-reviewed source selection. */
     public synchronized Optional<CollectionExecutionRequest> beginCollection(String sessionValue) {
         ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReviewedCollectionPlan reviewed = collectionPlans.get(session.snapshot().id());
+        if (reviewed == null) {
+            return Optional.empty();
+        }
+        ScreenshotCollectionRequest screenshots;
+        try {
+            screenshots = ScreenshotCollectionRequest.from(reviewed, List.of());
+        } catch (IllegalArgumentException requiresScreenshotSelection) {
+            return Optional.empty();
+        }
+        return beginCollectionWithScreenshots(sessionValue, screenshots);
+    }
+
+    /** Begins collection from the client screenshot UI with exact user-selected inputs. */
+    synchronized Optional<CollectionExecutionRequest> beginCollectionWithScreenshots(
+            String sessionValue, ScreenshotCollectionRequest screenshots) {
+        ReportSession session = session(sessionValue);
         if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
             return Optional.empty();
         }
         ReportSessionSnapshot planned = session.snapshot();
         ReviewedCollectionPlan reviewedPlan = collectionPlans.get(planned.id());
-        if (reviewedPlan == null) {
+        ScreenshotCollectionRequest selectedScreenshots =
+                Objects.requireNonNull(screenshots, "screenshots");
+        if (reviewedPlan == null
+                || !planned.providerSpecification().id().equals(selectedScreenshots.providerId())
+                || !planned.providerSpecification().version().equals(selectedScreenshots.providerVersion())
+                || planned.selectedCategory().stream()
+                        .noneMatch(category -> category.id().equals(selectedScreenshots.categoryId()))) {
+            return Optional.empty();
+        }
+        try {
+            ScreenshotCollectionRequest expected = ScreenshotCollectionRequest.from(
+                    reviewedPlan,
+                    selectedScreenshots.entries().stream()
+                            .map(ScreenshotCollectionRequest.Entry::relativePath)
+                            .distinct()
+                            .toList());
+            if (!expected.fingerprint().equals(selectedScreenshots.fingerprint())) {
+                return Optional.empty();
+            }
+        } catch (IllegalArgumentException invalidSelection) {
             return Optional.empty();
         }
         session.transitionTo(ReportSessionState.COLLECTING);
@@ -380,7 +420,8 @@ public final class BugReportCommandService {
                 collecting.id(),
                 collecting.revision(),
                 reviewedPlan,
-                CategoryCollectionFingerprint.from(reviewedPlan)));
+                selectedScreenshots,
+                CategoryCollectionFingerprint.from(reviewedPlan, selectedScreenshots)));
     }
 
     /** Records a terminal collection result only for the exact active collection generation. */
@@ -1259,13 +1300,28 @@ public final class BugReportCommandService {
             ReportSessionId sessionId,
             long collectionRevision,
             ReviewedCollectionPlan reviewedPlan,
+            ScreenshotCollectionRequest screenshots,
             CategoryCollectionFingerprint planFingerprint) {
+        public CollectionExecutionRequest(
+                ReportSessionId sessionId,
+                long collectionRevision,
+                ReviewedCollectionPlan reviewedPlan,
+                CategoryCollectionFingerprint planFingerprint) {
+            this(
+                    sessionId,
+                    collectionRevision,
+                    reviewedPlan,
+                    ScreenshotCollectionRequest.from(reviewedPlan, List.of()),
+                    planFingerprint);
+        }
+
         public CollectionExecutionRequest {
             Objects.requireNonNull(sessionId, "sessionId");
             if (collectionRevision < 0) {
                 throw new IllegalArgumentException("collectionRevision must be non-negative");
             }
             Objects.requireNonNull(reviewedPlan, "reviewedPlan");
+            Objects.requireNonNull(screenshots, "screenshots");
             Objects.requireNonNull(planFingerprint, "planFingerprint");
         }
     }

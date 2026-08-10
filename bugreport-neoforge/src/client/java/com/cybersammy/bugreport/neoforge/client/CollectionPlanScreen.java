@@ -11,6 +11,7 @@ import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.SourceSelectionPlan;
 import com.cybersammy.bugreport.core.source.UnavailableSourcePlan;
 import com.cybersammy.bugreport.core.source.UserSelectionSourcePlan;
+import com.cybersammy.bugreport.neoforge.command.ScreenshotSelectionScreen;
 import com.cybersammy.bugreport.neoforge.BugReportMod;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.nio.file.Path;
@@ -201,8 +202,30 @@ final class CollectionPlanScreen extends Screen {
     private void acceptSelection() {
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
                 collectionPlan, includedSourceIds, includedGeneratorIds);
+        if (reviewed.includedSources().stream()
+                .anyMatch(source -> source.selection() instanceof UserSelectionSourcePlan)) {
+            if (!commands.acceptCollectionPlan(request, reviewed)) {
+                status = Component.translatable("bugreport.screen.plan.failed");
+                return;
+            }
+            minecraft.setScreen(new ScreenshotSelectionScreen(
+                    commands,
+                    this,
+                    request.sessionId(),
+                    reviewed,
+                    execution -> {
+                        selectionAccepted = true;
+                        minecraft.setScreen(new CollectionProgressScreen(commands, execution));
+                    }));
+            return;
+        }
+        completeSelection(reviewed);
+    }
+
+    private void completeSelection(ReviewedCollectionPlan reviewed) {
         if (!commands.acceptCollectionPlan(request, reviewed)) {
             status = Component.translatable("bugreport.screen.plan.failed");
+            minecraft.setScreen(this);
             return;
         }
         selectionAccepted = true;
@@ -210,9 +233,11 @@ final class CollectionPlanScreen extends Screen {
                 execution -> minecraft.setScreen(new CollectionProgressScreen(commands, execution)),
                 () -> {
                     status = Component.translatable("bugreport.screen.plan.failed");
+                    minecraft.setScreen(this);
                     rebuildPlanWidgets();
                 });
     }
+
 
     private void returnToForm() {
         visible = false;

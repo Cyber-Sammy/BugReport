@@ -69,12 +69,14 @@ final class CollectionProgressScreen extends Screen {
                 CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
                         BugReportMod.providerRegistry(),
                         request.reviewedPlan(),
+                        request.screenshots(),
                         roots,
                         SupportedSide.PHYSICAL_CLIENT,
                         workspace,
                         control,
                         NeoForgeGameThreadDispatchers.shared()
-                                .dispatcher(SupportedSide.PHYSICAL_CLIENT));
+                                .dispatcher(SupportedSide.PHYSICAL_CLIENT),
+                        absoluteGameDirectory.resolve("screenshots"));
                 boolean accepted = commands.acceptCollectionResult(request, result, workspace);
                 Minecraft.getInstance().execute(() -> presentResult(result, accepted));
             } catch (RuntimeException exception) {

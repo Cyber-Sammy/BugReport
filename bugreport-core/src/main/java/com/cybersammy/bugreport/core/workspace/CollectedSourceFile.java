@@ -11,7 +11,8 @@ import java.util.regex.Pattern;
 
 /** Immutable path-safe metadata for one copied workspace source artifact. */
 public final class CollectedSourceFile {
-    private static final Pattern ARTIFACT_NAME = Pattern.compile("source-[0-9a-f]{64}\\.data");
+    private static final Pattern ARTIFACT_NAME =
+            Pattern.compile("source-[0-9a-f]{64}\\.(?:data|png)");
 
     private final String artifactName;
     private final long byteCount;

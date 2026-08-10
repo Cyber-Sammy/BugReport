@@ -20,9 +20,9 @@ final class AbandonedWorkspaceCleaner {
     private static final int MAXIMUM_ROOT_ENTRIES = 4_096;
     private static final int MAXIMUM_WORKSPACE_ENTRIES = 257;
     private static final Pattern OWNED_ARTIFACT = Pattern.compile(
-            "(?:source-[0-9a-f]{64}\\.data|generated-[0-9a-f]{64}\\.(?:txt|json))");
+            "(?:source-[0-9a-f]{64}\\.(?:data|png)|generated-[0-9a-f]{64}\\.(?:txt|json))");
     private static final Pattern OWNED_TEMPORARY = Pattern.compile(
-            "\\.(?:source-[0-9a-f]{64}\\.data|generated-[0-9a-f]{64}\\.(?:txt|json))"
+            "\\.(?:source-[0-9a-f]{64}\\.(?:data|png)|generated-[0-9a-f]{64}\\.(?:txt|json))"
                     + "\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.part");
 
     private final Path root;

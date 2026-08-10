@@ -37,6 +37,7 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
 import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
@@ -53,6 +54,7 @@ import com.cybersammy.bugreport.core.session.ReportSessionState;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.file.Path;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
@@ -61,6 +63,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class BugReportCommandServiceTest {
+
+    @Test
+    void screenshotAwareCollectionIssuanceIsNotPublicApplicationApi() throws Exception {
+        var method = BugReportCommandService.class.getDeclaredMethod(
+                "beginCollectionWithScreenshots", String.class, ScreenshotCollectionRequest.class);
+        assertFalse(Modifier.isPublic(method.getModifiers()));
+        assertTrue(Modifier.isPublic(
+                BugReportCommandService.class
+                        .getDeclaredMethod("beginCollection", String.class)
+                        .getModifiers()));
+    }
     private final BugReportCommandService commands =
             new BugReportCommandService(ProviderRegistrySnapshot::empty);
 

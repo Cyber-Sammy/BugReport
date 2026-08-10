@@ -145,5 +145,17 @@
   "bugreport.field.side_context.option.singleplayer": "Singleplayer",
   "bugreport.field.side_context.option.unknown": "Not sure",
   "bugreport.field.summary.description": "Summarize the problem in one line.",
-  "bugreport.field.summary.label": "Summary"
+  "bugreport.field.summary.label": "Summary",
+  "bugreport.screen.screenshot.title": "Attach screenshots",
+  "bugreport.screen.screenshot.loading": "Loading recent screenshots...",
+  "bugreport.screen.screenshot.empty": "No supported PNG or JPEG screenshots were found.",
+  "bugreport.screen.screenshot.available": "%s recent screenshots are available.",
+  "bugreport.screen.screenshot.selected": "%s selected (sensitive; each image will be reviewed)",
+  "bugreport.screen.screenshot.capture": "Capture now",
+  "bugreport.screen.screenshot.continue": "Continue",
+  "bugreport.screen.screenshot.capturing": "Capturing the game view...",
+  "bugreport.screen.screenshot.capture_failed": "The screenshot could not be captured safely.",
+  "bugreport.screen.screenshot.preparing": "Binding the selected images to this report...",
+  "bugreport.screen.screenshot.invalid": "The screenshot selection is no longer valid.",
+  "bugreport.screen.screenshot.limit": "At most %s screenshots may be attached."
 }

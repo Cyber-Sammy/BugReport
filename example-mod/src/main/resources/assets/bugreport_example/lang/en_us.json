@@ -7,5 +7,7 @@
   "bugreport_example.provider.name": "Bug Report Example Mod",
   "bugreport_example.provider.privacy_notice": "Review all diagnostics before export.",
   "bugreport_example.source.latest_log": "Latest client log",
-  "bugreport_example.source.latest_log.description": "The newest local client log after sanitization."
+  "bugreport_example.source.latest_log.description": "The newest local client log after sanitization.",
+  "bugreport_example.source.screenshot": "Screenshots",
+  "bugreport_example.source.screenshot.description": "Images explicitly selected or captured by you. Metadata is removed before review."
 }

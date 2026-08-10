@@ -41,6 +41,7 @@ public final class ExampleBugReportProvider implements BugReportProvider {
     private static final ProviderId PROVIDER_ID =
             ProviderId.defaultProvider(NamespaceId.of(ExampleMod.MOD_ID));
     private static final DiagnosticSourceId LATEST_LOG_ID = DiagnosticSourceId.of("latest_log");
+    private static final DiagnosticSourceId SCREENSHOT_ID = DiagnosticSourceId.of("screenshot");
     private static final DiagnosticGeneratorId ENVIRONMENT_ID =
             DiagnosticGeneratorId.of("environment");
     private static final DestinationId LOCAL_ARCHIVE_ID =
@@ -100,6 +101,16 @@ public final class ExampleBugReportProvider implements BugReportProvider {
                                         .build())
                         .build();
 
+        DiagnosticSourceSpecification screenshot =
+                DiagnosticSourceSpecification.userSelectedScreenshot(SCREENSHOT_ID)
+                        .labelKey(key("source.screenshot"))
+                        .descriptionKey(key("source.screenshot.description"))
+                        .privacy(PrivacyClassification.SENSITIVE)
+                        .contentType(DiagnosticContentType.BINARY)
+                        .qualityRole(ReportQualityRole.OPTIONAL)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .build();
+
         SupportDestinationSpecification localArchive =
                 SupportDestinationSpecification.builder(
                                 LOCAL_ARCHIVE_ID,
@@ -115,6 +126,7 @@ public final class ExampleBugReportProvider implements BugReportProvider {
                         .addField(StandardFields.summary())
                         .addField(StandardFields.reproductionSteps())
                         .useSource(LATEST_LOG_ID)
+                        .useSource(SCREENSHOT_ID)
                         .useGenerator(ENVIRONMENT_ID)
                         .useDestination(LOCAL_ARCHIVE_ID)
                         .build();
@@ -127,6 +139,7 @@ public final class ExampleBugReportProvider implements BugReportProvider {
                 .supportSide(SupportedSide.PHYSICAL_CLIENT)
                 .supportSide(SupportedSide.DEDICATED_SERVER)
                 .addSource(latestLog)
+                .addSource(screenshot)
                 .addGenerator(environment)
                 .addDestination(localArchive)
                 .offerCapability(
