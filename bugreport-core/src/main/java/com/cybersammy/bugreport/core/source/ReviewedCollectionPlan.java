@@ -1,6 +1,8 @@
 package com.cybersammy.bugreport.core.source;
 
 import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
+import com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId;
+import com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,12 +20,18 @@ import java.util.Set;
  */
 public final class ReviewedCollectionPlan {
     private final CategorySourcePlan plan;
+    private final CategoryCollectionPlan collectionPlan;
     private final Set<DiagnosticSourceId> includedSourceIds;
+    private final Set<DiagnosticGeneratorId> includedGeneratorIds;
     private final List<CoordinatedSourcePlan> includedSources;
+    private final List<DiagnosticGeneratorSpecification> includedGenerators;
 
     private ReviewedCollectionPlan(
-            CategorySourcePlan plan, Set<DiagnosticSourceId> requestedIncludedSourceIds) {
-        this.plan = Objects.requireNonNull(plan, "plan");
+            CategoryCollectionPlan collectionPlan,
+            Set<DiagnosticSourceId> requestedIncludedSourceIds,
+            Set<DiagnosticGeneratorId> requestedIncludedGeneratorIds) {
+        this.collectionPlan = Objects.requireNonNull(collectionPlan, "collectionPlan");
+        this.plan = collectionPlan.sources();
         Set<DiagnosticSourceId> requested = Set.copyOf(
                 Objects.requireNonNull(requestedIncludedSourceIds, "requestedIncludedSourceIds"));
         LinkedHashSet<DiagnosticSourceId> known = new LinkedHashSet<>();
@@ -51,12 +59,50 @@ public final class ReviewedCollectionPlan {
         }
         includedSourceIds = Collections.unmodifiableSet(selectedIds);
         includedSources = List.copyOf(selected);
+
+        Set<DiagnosticGeneratorId> requestedGenerators = Set.copyOf(
+                Objects.requireNonNull(requestedIncludedGeneratorIds, "requestedIncludedGeneratorIds"));
+        LinkedHashSet<DiagnosticGeneratorId> knownGenerators = collectionPlan.generators().stream()
+                .map(DiagnosticGeneratorSpecification::id)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (!knownGenerators.containsAll(requestedGenerators)) {
+            throw new IllegalArgumentException("Collection selection contains an undeclared generator ID");
+        }
+        if (collectionPlan.generators().stream()
+                .filter(generator -> requestedGenerators.contains(generator.id()))
+                .anyMatch(generator -> !collectionPlan.isAvailable(generator))) {
+            throw new IllegalArgumentException("Unavailable generators cannot be included");
+        }
+        LinkedHashSet<DiagnosticGeneratorId> selectedGeneratorIds = new LinkedHashSet<>();
+        List<DiagnosticGeneratorSpecification> selectedGenerators = new ArrayList<>();
+        for (DiagnosticGeneratorSpecification generator : collectionPlan.generators()) {
+            if (requestedGenerators.contains(generator.id())) {
+                selectedGeneratorIds.add(generator.id());
+                selectedGenerators.add(generator);
+            }
+        }
+        includedGeneratorIds = Collections.unmodifiableSet(selectedGeneratorIds);
+        includedGenerators = List.copyOf(selectedGenerators);
     }
 
     /** Creates a reviewed selection with exactly the requested available source IDs. */
     public static ReviewedCollectionPlan of(
             CategorySourcePlan plan, Set<DiagnosticSourceId> includedSourceIds) {
-        return new ReviewedCollectionPlan(plan, includedSourceIds);
+        return new ReviewedCollectionPlan(
+                new CategoryCollectionPlan(
+                        plan,
+                        com.cybersammy.bugreport.api.classification.SupportedSide.PHYSICAL_CLIENT,
+                        List.of()),
+                includedSourceIds,
+                Set.of());
+    }
+
+    /** Creates a reviewed selection for exact file sources and generated diagnostics. */
+    public static ReviewedCollectionPlan of(
+            CategoryCollectionPlan plan,
+            Set<DiagnosticSourceId> includedSourceIds,
+            Set<DiagnosticGeneratorId> includedGeneratorIds) {
+        return new ReviewedCollectionPlan(plan, includedSourceIds, includedGeneratorIds);
     }
 
     /** Creates the initial selection requested by source declarations. */
@@ -69,12 +115,35 @@ public final class ReviewedCollectionPlan {
                 defaults.add(source.provenance().sourceId());
             }
         }
-        return new ReviewedCollectionPlan(plan, defaults);
+        return new ReviewedCollectionPlan(
+                new CategoryCollectionPlan(
+                        plan,
+                        com.cybersammy.bugreport.api.classification.SupportedSide.PHYSICAL_CLIENT,
+                        List.of()),
+                defaults,
+                Set.of());
+    }
+
+    /** Creates the initial selection requested by source and generator declarations. */
+    public static ReviewedCollectionPlan defaults(CategoryCollectionPlan plan) {
+        Objects.requireNonNull(plan, "plan");
+        Set<DiagnosticSourceId> sources = defaults(plan.sources()).includedSourceIds();
+        LinkedHashSet<DiagnosticGeneratorId> generators = plan.generators().stream()
+                .filter(plan::isAvailable)
+                .filter(generator -> generator.inclusionDefault() == InclusionDefault.INCLUDED)
+                .map(DiagnosticGeneratorSpecification::id)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        return new ReviewedCollectionPlan(plan, sources, generators);
     }
 
     /** Returns the immutable trusted planning result this decision reviews. */
     public CategorySourcePlan plan() {
         return plan;
+    }
+
+    /** Returns the complete trusted source and generator plan. */
+    public CategoryCollectionPlan collectionPlan() {
+        return collectionPlan;
     }
 
     /** Returns selected source IDs in canonical source-plan order. */
@@ -85,6 +154,16 @@ public final class ReviewedCollectionPlan {
     /** Returns selected source outcomes in canonical source-plan order. */
     public List<CoordinatedSourcePlan> includedSources() {
         return includedSources;
+    }
+
+    /** Returns selected generator IDs in canonical plan order. */
+    public Set<DiagnosticGeneratorId> includedGeneratorIds() {
+        return includedGeneratorIds;
+    }
+
+    /** Returns selected generator declarations in canonical plan order. */
+    public List<DiagnosticGeneratorSpecification> includedGenerators() {
+        return includedGenerators;
     }
 
     /**

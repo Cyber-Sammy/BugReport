@@ -40,7 +40,62 @@ final class WorkspaceSanitizationCoordinator {
             CancellationSignal cancellation,
             long maximumBytes) {
         CollectedSourceFile collected = Objects.requireNonNull(source, "source");
-        if (collected.contentType() == DiagnosticContentType.BINARY) {
+        SanitizedBytes sanitized = sanitizeArtifact(
+                collected.artifactName(),
+                collected.contentType(),
+                workspace,
+                pipeline,
+                cancellation,
+                maximumBytes);
+        CollectedSourceFile value = new CollectedSourceFile(
+                collected.artifactName(),
+                sanitized.digest().byteCount(),
+                sanitized.digest().checksum(),
+                collected.provenances(),
+                collected.contentType(),
+                collected.privacy(),
+                collected.qualityRole(),
+                collected.inclusionDefault());
+        return new SanitizedSource(value, sanitized.result());
+    }
+
+    static SanitizedGenerated sanitize(
+            CollectedGeneratedArtifact artifact,
+            ReportWorkspace workspace,
+            SanitizationPipeline pipeline,
+            CancellationSignal cancellation) {
+        CollectedGeneratedArtifact collected = Objects.requireNonNull(artifact, "artifact");
+        SanitizedBytes sanitized = sanitizeArtifact(
+                collected.artifactName(),
+                collected.contentType(),
+                workspace,
+                pipeline,
+                cancellation,
+                MAX_SANITIZED_BYTES);
+        CollectedGeneratedArtifact value = new CollectedGeneratedArtifact(
+                collected.artifactName(),
+                collected.artifactId(),
+                sanitized.digest().byteCount(),
+                sanitized.digest().checksum(),
+                collected.providerId(),
+                collected.providerVersion(),
+                collected.categoryId(),
+                collected.generatorId(),
+                collected.contentType(),
+                collected.privacy(),
+                collected.qualityRole(),
+                collected.inclusionDefault());
+        return new SanitizedGenerated(value, sanitized.result());
+    }
+
+    private static SanitizedBytes sanitizeArtifact(
+            String artifactName,
+            DiagnosticContentType contentType,
+            ReportWorkspace workspace,
+            SanitizationPipeline pipeline,
+            CancellationSignal cancellation,
+            long maximumBytes) {
+        if (contentType == DiagnosticContentType.BINARY) {
             throw new IllegalArgumentException("Binary artifacts must not enter text sanitization");
         }
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
@@ -49,7 +104,7 @@ final class WorkspaceSanitizationCoordinator {
         if (maximumBytes < 1 || maximumBytes > MAX_SANITIZED_BYTES) {
             throw new IllegalArgumentException("Sanitized artifact byte limit is outside the product ceiling");
         }
-        Path target = trustedWorkspace.directory().resolve(collected.artifactName()).normalize();
+        Path target = trustedWorkspace.directory().resolve(artifactName).normalize();
         if (!trustedWorkspace.directory().equals(target.getParent())) {
             throw new IllegalArgumentException("Sanitization artifact escaped its workspace");
         }
@@ -66,7 +121,7 @@ final class WorkspaceSanitizationCoordinator {
                             new BoundedOutputStream(
                                     Channels.newOutputStream(outputChannel), maximumBytes),
                             StandardCharsets.UTF_8))) {
-                result = trustedPipeline.sanitize(collected.artifactName(), input, output, signal);
+                result = trustedPipeline.sanitize(artifactName, input, output, signal);
                 output.flush();
                 outputChannel.force(true);
             }
@@ -75,16 +130,7 @@ final class WorkspaceSanitizationCoordinator {
             trustedWorkspace.requireCurrentOwnership();
             trustedWorkspace.files().replaceAtomically(temporary, target);
             trustedWorkspace.files().verifyPrivateFile(target);
-            CollectedSourceFile sanitized = new CollectedSourceFile(
-                    collected.artifactName(),
-                    digest.byteCount(),
-                    digest.checksum(),
-                    collected.provenances(),
-                    collected.contentType(),
-                    collected.privacy(),
-                    collected.qualityRole(),
-                    collected.inclusionDefault());
-            return new SanitizedSource(sanitized, result);
+            return new SanitizedBytes(digest, result);
         } catch (SanitizationException exception) {
             throw exception;
         } catch (IOException | ArithmeticException exception) {
@@ -154,7 +200,38 @@ final class WorkspaceSanitizationCoordinator {
         }
     }
 
+    static final class SanitizedGenerated {
+        private final CollectedGeneratedArtifact artifact;
+        private final SanitizationResult result;
+
+        private SanitizedGenerated(
+                CollectedGeneratedArtifact artifact, SanitizationResult result) {
+            this.artifact = Objects.requireNonNull(artifact, "artifact");
+            this.result = Objects.requireNonNull(result, "result");
+            if (!artifact.artifactName().equals(result.artifactName())) {
+                throw new IllegalArgumentException(
+                        "Sanitization evidence artifact identity is inconsistent");
+            }
+        }
+
+        CollectedGeneratedArtifact artifact() {
+            return artifact;
+        }
+
+        SanitizationResult result() {
+            return result;
+        }
+
+        boolean matches(ReviewedWorkspaceArtifact value) {
+            return artifact.artifactName().equals(value.artifactName())
+                    && artifact.byteCount() == value.byteCount()
+                    && artifact.checksum().equals(value.checksum());
+        }
+    }
+
     private record ArtifactDigest(long byteCount, Sha256Checksum checksum) {}
+
+    private record SanitizedBytes(ArtifactDigest digest, SanitizationResult result) {}
 
     private static final class BoundedOutputStream extends OutputStream {
         private final OutputStream delegate;

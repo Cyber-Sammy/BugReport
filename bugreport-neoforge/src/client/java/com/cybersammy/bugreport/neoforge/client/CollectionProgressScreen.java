@@ -3,12 +3,14 @@ package com.cybersammy.bugreport.neoforge.client;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.workspace.CollectionProgressSnapshot;
-import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
-import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
-import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionResult;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionRunControl;
 import com.cybersammy.bugreport.core.workspace.FileReportWorkspaceStore;
 import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import com.cybersammy.bugreport.neoforge.BugReportMod;
+import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import java.nio.file.Path;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
@@ -20,11 +22,11 @@ import net.minecraft.network.chat.Component;
 final class CollectionProgressScreen extends Screen {
     private final BugReportCommandService commands;
     private final BugReportCommandService.CollectionExecutionRequest request;
-    private final CollectionRunControl control = new CollectionRunControl();
+    private final CategoryCollectionRunControl control = new CategoryCollectionRunControl();
     private volatile boolean visible;
     private boolean started;
     private boolean terminal;
-    private FileCollectionResult terminalResult;
+    private CategoryCollectionResult terminalResult;
     private Component status = Component.translatable("bugreport.screen.collection.starting");
 
     CollectionProgressScreen(
@@ -43,8 +45,8 @@ final class CollectionProgressScreen extends Screen {
         cancel.active = !terminal;
         addRenderableWidget(cancel);
         if (terminalResult != null
-                && (terminalResult.status() == FileCollectionResult.Status.COMPLETE
-                        || terminalResult.status() == FileCollectionResult.Status.PARTIAL)) {
+                && (terminalResult.status() == CategoryCollectionResult.Status.COMPLETE
+                        || terminalResult.status() == CategoryCollectionResult.Status.PARTIAL)) {
             addRenderableWidget(Button.builder(
                             Component.translatable("bugreport.screen.collection.review"),
                             ignored -> continueToReview())
@@ -64,13 +66,24 @@ final class CollectionProgressScreen extends Screen {
                 FileReportWorkspaceStore store = new FileReportWorkspaceStore(
                         absoluteGameDirectory.resolve("bugreport").resolve("workspaces"));
                 ReportWorkspace workspace = store.create(request.sessionId());
-                FileCollectionResult result = FileCollectionCoordinator.collect(
-                        request.reviewedPlan().selectedFilePlan(), roots, workspace, control);
+                CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
+                        BugReportMod.providerRegistry(),
+                        request.reviewedPlan(),
+                        roots,
+                        SupportedSide.PHYSICAL_CLIENT,
+                        workspace,
+                        control,
+                        NeoForgeGameThreadDispatchers.shared()
+                                .dispatcher(SupportedSide.PHYSICAL_CLIENT));
                 boolean accepted = commands.acceptCollectionResult(request, result, workspace);
                 Minecraft.getInstance().execute(() -> presentResult(result, accepted));
             } catch (RuntimeException exception) {
                 commands.failCollectionSetup(request);
                 Minecraft.getInstance().execute(this::presentFailure);
+            } catch (Error fatal) {
+                commands.failCollectionSetup(request);
+                Minecraft.getInstance().execute(this::presentFailure);
+                throw fatal;
             }
         });
     }
@@ -81,7 +94,7 @@ final class CollectionProgressScreen extends Screen {
         }
     }
 
-    private void presentResult(FileCollectionResult result, boolean accepted) {
+    private void presentResult(CategoryCollectionResult result, boolean accepted) {
         if (!visible || !accepted) {
             return;
         }
@@ -90,9 +103,9 @@ final class CollectionProgressScreen extends Screen {
         status = Component.translatable(
                 "bugreport.screen.collection.result",
                 result.status().name(),
-                result.progress().successfulFiles(),
-                result.progress().failedFiles(),
-                result.progress().cancelledFiles());
+                result.files().progress().successfulFiles(),
+                result.files().progress().failedFiles(),
+                result.files().progress().cancelledFiles());
         rebuildWidgets();
     }
 
@@ -126,10 +139,13 @@ final class CollectionProgressScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         renderBackground(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
-        CollectionProgressSnapshot progress = control.progress();
+        var combined = control.progress();
+        CollectionProgressSnapshot progress = combined.fileProgress();
         Component detail = Component.translatable(
                 "bugreport.screen.collection.progress",
-                progress.state().name(), progress.completedFiles(), progress.totalFiles(),
+                combined.phase().name(),
+                progress.completedFiles() + combined.completedGenerators(),
+                progress.totalFiles() + combined.totalGenerators(),
                 progress.processedBytes(), progress.plannedBytes());
         graphics.drawCenteredString(font, detail, width / 2, 48, 0xE0E0E0);
         graphics.drawCenteredString(font, status, width / 2, 70,

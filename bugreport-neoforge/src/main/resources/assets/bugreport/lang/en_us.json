@@ -43,6 +43,7 @@
   "bugreport.screen.plan.exclude": "Exclude: %s",
   "bugreport.screen.plan.failed": "The collection plan could not be prepared.",
   "bugreport.screen.plan.source": "%s — %s, %s files, %s bytes",
+  "bugreport.screen.plan.generator": "%s — generated diagnostic, %s",
   "bugreport.screen.plan.more_sources": "+%s more declared sources",
   "bugreport.screen.plan.conflicts": "%s source conflicts require review.",
   "bugreport.screen.plan.status.ready": "ready",
