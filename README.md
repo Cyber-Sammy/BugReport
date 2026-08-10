@@ -167,7 +167,11 @@ reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
 Form edits are periodically saved off the render thread. Back waits for the
 latest typed draft to be persisted, while Cancel discards both the session and
-its canonical persisted draft. The provider selector exposes a bounded recovery
+its canonical persisted draft and reports failure without cancelling when that
+durable deletion cannot be completed. A form draft is deleted before the
+session may enter `COLLECTION_PLANNED`; later collection, review, and delivery
+states therefore cannot leave an older resumable form projection. The provider
+selector exposes a bounded recovery
 screen after restart. A recoverable entry is rebound to the exact current
 provider version and category before it can resume; malformed, disabled,
 missing, or structurally incompatible entries remain isolated and may only be

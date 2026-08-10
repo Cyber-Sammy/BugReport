@@ -111,8 +111,18 @@ final class ProviderCategoryScreen extends Screen {
 
     private void cancel() {
         if (activeForm != null) {
-            activeForm.discardSession();
-            activeForm = null;
+            activeForm.discardSession(
+                    discarded -> {
+                        if (!discarded) {
+                            status = Component.translatable(
+                                    "bugreport.command.error.draft_discard_failed");
+                            rebuildWidgets();
+                            return;
+                        }
+                        activeForm = null;
+                        onClose();
+                    });
+            return;
         }
         onClose();
     }

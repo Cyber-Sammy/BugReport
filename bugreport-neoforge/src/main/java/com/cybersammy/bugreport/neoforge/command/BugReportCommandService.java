@@ -65,10 +65,12 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /** Client-command application service bound to the current immutable provider registry. */
@@ -79,6 +81,7 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
     private final Map<ReportSessionId, PersistedFormDraft> persistedForms = new LinkedHashMap<>();
+    private final Set<ReportSessionId> persistedDraftFiles = new LinkedHashSet<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
     private final Map<ReportSessionId, FileCollectionResult> collectionResults = new LinkedHashMap<>();
     private final Map<ReportSessionId, ReportWorkspace> collectionWorkspaces = new LinkedHashMap<>();
@@ -279,6 +282,15 @@ public final class BugReportCommandService {
                         .filter(submission::equals)
                         .isPresent()) {
             return FormConfirmationResult.persistenceFailed();
+        }
+        if (drafts.available()) {
+            try {
+                drafts.delete(snapshot.id());
+            } catch (RuntimeException failure) {
+                return FormConfirmationResult.persistenceFailed();
+            }
+            persistedForms.remove(snapshot.id());
+            persistedDraftFiles.remove(snapshot.id());
         }
 
         session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
@@ -650,13 +662,6 @@ public final class BugReportCommandService {
                     ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
             activeExports.remove(request.sessionId());
             recordDeliveryHistory(session.snapshot(), result);
-            if (result.status() == ReportTransportResult.Status.SUCCESS) {
-                try {
-                    drafts.delete(request.sessionId());
-                } catch (RuntimeException ignored) {
-                    // Export success is authoritative; a leftover draft remains recoverable/discardable.
-                }
-            }
             return Optional.of(result);
         }
     }
@@ -706,6 +711,7 @@ public final class BugReportCommandService {
             return Optional.empty();
         }
         sessions.put(id, session);
+        persistedDraftFiles.add(id);
         return Optional.of(
                 new DraftResume(
                         id,
@@ -740,6 +746,14 @@ public final class BugReportCommandService {
             return List.of(new Message("bugreport.command.error.unknown_session"));
         }
         ReportSession session = sessions.get(id);
+        if (persistedDraftFiles.contains(id)) {
+            try {
+                drafts.delete(id);
+            } catch (RuntimeException failure) {
+                return List.of(new Message("bugreport.command.error.draft_discard_failed"));
+            }
+            persistedDraftFiles.remove(id);
+        }
         session.cancel(CancellationReason.USER_REQUESTED);
         sessions.remove(id);
         confirmedForms.remove(id);
@@ -753,11 +767,6 @@ public final class BugReportCommandService {
         activeReviews.remove(id);
         activeExportPreparations.remove(id);
         activeExports.remove(id);
-        try {
-            drafts.delete(id);
-        } catch (RuntimeException ignored) {
-            // The canonical leftover remains visible to the next recovery scan.
-        }
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -775,6 +784,7 @@ public final class BugReportCommandService {
                     submission);
             DraftResolver.resolve(draft, registry());
             drafts.save(draft);
+            persistedDraftFiles.add(before.id());
             ReportSessionSnapshot snapshot = session.recordFormDraftUpdate();
             if (snapshot.revision() != persistedRevision) {
                 throw new IllegalStateException(

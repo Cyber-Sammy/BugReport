@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -49,6 +50,8 @@ final class CategoryFormScreen extends Screen {
     private int autosaveDelay = AUTOSAVE_DELAY_TICKS;
     private boolean saveInProgress;
     private Runnable afterSave;
+    private boolean discardInProgress;
+    private boolean confirmationInProgress;
 
     CategoryFormScreen(BugReportCommandService commands, String sessionId, Screen parent) {
         this(commands, sessionId, parent, FormSubmission.empty());
@@ -289,6 +292,9 @@ final class CategoryFormScreen extends Screen {
     }
 
     private void continueToPlan() {
+        if (confirmationInProgress) {
+            return;
+        }
         persistThen(this::confirmAndContinue);
     }
 
@@ -303,8 +309,34 @@ final class CategoryFormScreen extends Screen {
             rebuildWidgets();
             return;
         }
-        BugReportCommandService.FormConfirmationResult result = commands.confirmForm(
-                sessionId, attempt.submission());
+        FormSubmission submission = attempt.submission();
+        confirmationInProgress = true;
+        long generation = editGeneration;
+        Thread.ofVirtual()
+                .name("bugreport-form-confirmation")
+                .start(
+                        () -> {
+                            BugReportCommandService.FormConfirmationResult result =
+                                    commands.confirmForm(sessionId, submission);
+                            Minecraft.getInstance()
+                                    .execute(() -> presentConfirmation(result, generation));
+                        });
+    }
+
+    private void presentConfirmation(
+            BugReportCommandService.FormConfirmationResult result, long generation) {
+        confirmationInProgress = false;
+        if (discardInProgress || Minecraft.getInstance().screen != this) {
+            return;
+        }
+        if (result.status() == BugReportCommandService.FormConfirmationStatus.ACCEPTED
+                && generation != editGeneration) {
+            commands.returnToForm(sessionId);
+            requireFreshDraftPersistence();
+            status = Component.translatable("bugreport.screen.form.changed_during_confirmation");
+            rebuildWidgets();
+            return;
+        }
         if (result.status() == BugReportCommandService.FormConfirmationStatus.INVALID) {
             applyValidation(result.validation().orElseThrow());
             rebuildWidgets();
@@ -458,11 +490,39 @@ final class CategoryFormScreen extends Screen {
         return index + 1 == values.length ? null : values[index + 1];
     }
 
-    void discardSession() {
-        commands.discard(sessionId);
+    void discardSession(Consumer<Boolean> completion) {
+        Objects.requireNonNull(completion, "completion");
+        if (discardInProgress) {
+            return;
+        }
+        discardInProgress = true;
+        Thread.ofVirtual()
+                .name("bugreport-draft-session-discard")
+                .start(
+                        () -> {
+                            boolean discarded = "bugreport.command.discard.success"
+                                    .equals(
+                                            commands.discard(sessionId)
+                                                    .getFirst()
+                                                    .translationKey());
+                            Minecraft.getInstance()
+                                    .execute(
+                                            () -> {
+                                                discardInProgress = false;
+                                                completion.accept(discarded);
+                                            });
+                        });
+    }
+
+    void requireFreshDraftPersistence() {
+        editGeneration++;
+        autosaveDelay = 0;
     }
 
     private void saveAndReturn() {
+        if (confirmationInProgress) {
+            return;
+        }
         persistThen(() -> minecraft.setScreen(parent));
     }
 
@@ -535,8 +595,16 @@ final class CategoryFormScreen extends Screen {
     }
 
     private void cancelSession() {
-        discardSession();
-        minecraft.setScreen(null);
+        discardSession(
+                discarded -> {
+                    if (discarded) {
+                        minecraft.setScreen(null);
+                    } else {
+                        status = Component.translatable(
+                                "bugreport.command.error.draft_discard_failed");
+                        rebuildWidgets();
+                    }
+                });
     }
 
     @Override
