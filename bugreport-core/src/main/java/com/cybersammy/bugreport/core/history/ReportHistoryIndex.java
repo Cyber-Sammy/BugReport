@@ -70,11 +70,15 @@ public record ReportHistoryIndex(List<ReportHistoryEntry> entries) {
 
     private static void requireValidTransition(
             ReportHistoryStatus current, ReportHistoryStatus incoming) {
-        if (current != ReportHistoryStatus.DRAFT) {
+        if (current == ReportHistoryStatus.COMPLETED) {
             throw new IllegalStateException("Terminal history entry cannot transition");
         }
-        if (incoming != ReportHistoryStatus.DRAFT
-                && incoming != ReportHistoryStatus.COMPLETED
+        if (current == ReportHistoryStatus.FAILED
+                && incoming != ReportHistoryStatus.FAILED
+                && incoming != ReportHistoryStatus.COMPLETED) {
+            throw new IllegalArgumentException("Failed history entry can only update delivery state");
+        }
+        if (incoming != ReportHistoryStatus.DRAFT && incoming != ReportHistoryStatus.COMPLETED
                 && incoming != ReportHistoryStatus.FAILED) {
             throw new IllegalArgumentException("History transition is invalid");
         }

@@ -87,9 +87,9 @@ public final class ReportHistoryJsonCodec {
         reader.endObject();
     }
     private static EntriesResult readEntries(JsonReader reader) throws IOException {
-        token(reader,JsonToken.BEGIN_ARRAY,"History entries must be an array"); reader.beginArray(); List<ReportHistoryEntry> entries=new ArrayList<>();
+        token(reader,JsonToken.BEGIN_ARRAY,"History entries must be an array"); reader.beginArray(); List<ReportHistoryEntry> entries=new ArrayList<>(); Set<ReportSessionId> seen=new HashSet<>();
         int skipped=0;
-        while(reader.hasNext()) { if(entries.size()+skipped==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); RawEntry raw; try { raw=readRawEntry(reader); } catch (HistoryFormatException exception) { skipped++; drainEntry(reader); continue; } try { entries.add(buildEntry(raw)); } catch (HistoryFormatException exception) { skipped++; } }
+        while(reader.hasNext()) { if(entries.size()+skipped==ReportHistoryIndex.MAX_ENTRIES) throw new HistoryFormatException("History index exceeds entry bound"); RawEntry raw; try { raw=readRawEntry(reader); } catch (HistoryFormatException exception) { skipped++; drainEntry(reader); continue; } try { ReportHistoryEntry entry=buildEntry(raw); if(!seen.add(entry.sessionId())) { skipped++; continue; } entries.add(entry); } catch (HistoryFormatException exception) { skipped++; } }
         reader.endArray(); return new EntriesResult(List.copyOf(entries),skipped);
     }
     private static RawEntry readRawEntry(JsonReader reader) throws IOException {
