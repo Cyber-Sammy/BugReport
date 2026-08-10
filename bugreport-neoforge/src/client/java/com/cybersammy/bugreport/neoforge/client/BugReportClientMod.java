@@ -4,9 +4,14 @@ import com.cybersammy.bugreport.neoforge.BugReportMod;
 import com.cybersammy.bugreport.neoforge.NeoForgeGameThreadDispatchers;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandTree;
+import com.cybersammy.bugreport.neoforge.command.FileReportHistoryRecorder;
+import com.cybersammy.bugreport.core.history.FileReportHistoryStore;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import java.util.Objects;
 import java.util.concurrent.RejectedExecutionException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -18,7 +23,7 @@ import net.neoforged.neoforge.common.NeoForge;
 @Mod(value = BugReportMod.MOD_ID, dist = Dist.CLIENT)
 public final class BugReportClientMod {
     private final BugReportCommandService commands =
-            new BugReportCommandService(BugReportMod::providerRegistry);
+            new BugReportCommandService(BugReportMod::providerRegistry, historyRecorder());
 
     public BugReportClientMod(IEventBus modEventBus) {
         Objects.requireNonNull(modEventBus, "modEventBus");
@@ -31,6 +36,27 @@ public final class BugReportClientMod {
             }
         });
         NeoForge.EVENT_BUS.addListener(this::onRegisterClientCommands);
+    }
+
+    private static BugReportCommandService.ReportHistoryRecorder historyRecorder() {
+        try {
+            Path gameDirectory = Minecraft.getInstance().gameDirectory.toPath()
+                    .toAbsolutePath().normalize();
+            if (!Files.isDirectory(gameDirectory, LinkOption.NOFOLLOW_LINKS)
+                    || !gameDirectory.equals(gameDirectory.toRealPath(LinkOption.NOFOLLOW_LINKS))
+                    || !gameDirectory.equals(gameDirectory.toRealPath())) {
+                return BugReportCommandService.ReportHistoryRecorder.empty();
+            }
+            Path directory = gameDirectory.resolve("bugreport-history");
+            try {
+                Files.createDirectory(directory);
+            } catch (java.nio.file.FileAlreadyExistsException ignored) {
+                // FileReportHistoryStore revalidates this existing direct child.
+            }
+            return new FileReportHistoryRecorder(new FileReportHistoryStore(directory));
+        } catch (RuntimeException | java.io.IOException failure) {
+            return BugReportCommandService.ReportHistoryRecorder.empty();
+        }
     }
 
     private void onRegisterClientCommands(RegisterClientCommandsEvent event) {

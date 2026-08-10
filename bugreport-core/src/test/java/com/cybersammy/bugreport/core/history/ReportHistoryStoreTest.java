@@ -94,6 +94,24 @@ final class ReportHistoryStoreTest {
     }
 
     @Test
+    void isolatesDuplicateSessionEntryWithoutDiscardingValidHistory() {
+        String json = """
+                {"schemaId":"bugreport:history_index","schemaVersion":"1.0","entries":[
+                {"sessionId":"00000000-0000-4000-8000-000000000151","providerId":"example_mod","providerVersion":"1.0.0","status":"DRAFT","revision":1,"updatedAt":"2026-01-01T00:00:00Z"},
+                {"sessionId":"00000000-0000-4000-8000-000000000152","providerId":"example_mod","providerVersion":"1.0.0","status":"DRAFT","revision":1,"updatedAt":"2026-01-02T00:00:00Z"},
+                {"sessionId":"00000000-0000-4000-8000-000000000151","providerId":"example_mod","providerVersion":"1.0.0","status":"DRAFT","revision":2,"updatedAt":"2026-01-03T00:00:00Z"},
+                {"sessionId":"00000000-0000-4000-8000-000000000153","providerId":"example_mod","providerVersion":"1.0.0","status":"DRAFT","revision":1,"updatedAt":"2026-01-04T00:00:00Z"}]}
+                """;
+        DecodedHistoryIndex decoded = ReportHistoryJsonCodec.decodeRecovering(json.getBytes(StandardCharsets.UTF_8));
+
+        assertEquals(1, decoded.skippedEntries());
+        assertEquals(List.of("00000000-0000-4000-8000-000000000153",
+                "00000000-0000-4000-8000-000000000152",
+                "00000000-0000-4000-8000-000000000151"), decoded.index().entries().stream()
+                .map(entry -> entry.sessionId().toString()).toList());
+    }
+
+    @Test
     void semanticInvalidEntryDoesNotConsumeItsValidFollower() {
         String json = """
                 {"schemaId":"bugreport:history_index","schemaVersion":"1.0","entries":[
@@ -126,6 +144,25 @@ final class ReportHistoryStoreTest {
         assertThrows(IllegalStateException.class, () -> index.upsert(completed).upsert(ReportHistoryEntry.failed(completed, 3, Instant.now())));
         ReportHistoryEntry foreign = new ReportHistoryEntry(draft.sessionId(), ProviderId.parse("other_mod"), draft.providerVersion(), draft.categoryId(), ReportHistoryStatus.FAILED, 2, Instant.now(), Optional.empty());
         assertThrows(IllegalArgumentException.class, () -> index.upsert(foreign));
+    }
+
+    @Test
+    void failedDeliveryHistoryCanAdvanceToARepeatedFailureOrCompletion() {
+        ReportHistoryEntry draft = entry("00000000-0000-4000-8000-000000000161", 1,
+                Instant.parse("2026-01-01T00:00:00Z"));
+        ReportHistoryEntry firstFailure = ReportHistoryEntry.failed(draft, 2,
+                Instant.parse("2026-01-02T00:00:00Z"));
+        ReportHistoryEntry repeatedFailure = ReportHistoryEntry.failed(firstFailure, 4,
+                Instant.parse("2026-01-03T00:00:00Z"));
+        ReportHistoryEntry completed = new ReportHistoryEntry(
+                draft.sessionId(), draft.providerId(), draft.providerVersion(), draft.categoryId(),
+                ReportHistoryStatus.COMPLETED, 6, Instant.parse("2026-01-04T00:00:00Z"),
+                Optional.of(new ReportArchiveSummary(1,
+                        new com.cybersammy.bugreport.core.workspace.Sha256Checksum("0".repeat(64)), 1)));
+
+        ReportHistoryIndex index = ReportHistoryIndex.empty().upsert(draft)
+                .upsert(firstFailure).upsert(repeatedFailure).upsert(completed);
+        assertEquals(completed, index.entries().getFirst());
     }
 
     private static ReportHistoryEntry entry(String id, long revision, Instant updatedAt) {
