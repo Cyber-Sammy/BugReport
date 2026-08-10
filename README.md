@@ -72,6 +72,8 @@ Implemented and executable:
   exact sealed workspace, requires a separate explicit local-save click, and
   writes a private ZIP off the render thread into the product-owned
   `bugreport-exports` game-directory child;
+- a compact persisted report-history screen for completed and failed local
+  deliveries, backed by the corruption-tolerant path-free Core history index;
 - an example provider mod that starts with or without Bug Report installed;
 - loader-neutral API and Core module boundaries;
 - typed canonical identifiers, independent version domains, side and privacy

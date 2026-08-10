@@ -68,6 +68,11 @@ final class ProviderCategoryScreen extends Screen {
             back.active = activeForm == null;
             addRenderableWidget(back);
         }
+        if (selectedProvider == null) {
+            addRenderableWidget(Button.builder(Component.translatable("bugreport.screen.history.open"),
+                            ignored -> minecraft.setScreen(new ReportHistoryScreen(commands, this)))
+                    .bounds(left, height - 32, 116, 20).build());
+        }
         addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
                 .bounds(left + 124, height - 32, 116, 20).build());
     }

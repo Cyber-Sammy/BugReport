@@ -43,6 +43,8 @@ import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.ReviewedWorkspaceArtifact;
 import com.cybersammy.bugreport.core.workspace.CollectedGeneratedArtifact;
 import com.cybersammy.bugreport.core.workspace.CollectedSourceFile;
+import com.cybersammy.bugreport.core.history.ReportHistoryEntry;
+import com.cybersammy.bugreport.core.history.ReportHistoryStatus;
 import com.cybersammy.bugreport.core.source.SourceProvenance;
 import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.extension.ExtensionMetadata;
@@ -63,6 +65,7 @@ import java.util.function.Supplier;
 /** Client-command application service bound to the current immutable provider registry. */
 public final class BugReportCommandService {
     private final Supplier<ProviderRegistrySnapshot> registrySupplier;
+    private final ReportHistoryRecorder history;
     private final Map<ReportSessionId, ReportSession> sessions = new LinkedHashMap<>();
     private final Map<ReportSessionId, FormSubmission> confirmedForms = new LinkedHashMap<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
@@ -81,7 +84,13 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, LocalExportRequest> activeExports = new LinkedHashMap<>();
 
     public BugReportCommandService(Supplier<ProviderRegistrySnapshot> registrySupplier) {
+        this(registrySupplier, ReportHistoryRecorder.empty());
+    }
+
+    public BugReportCommandService(
+            Supplier<ProviderRegistrySnapshot> registrySupplier, ReportHistoryRecorder history) {
         this.registrySupplier = Objects.requireNonNull(registrySupplier, "registrySupplier");
+        this.history = Objects.requireNonNull(history, "history");
     }
 
     public List<Message> help() {
@@ -585,6 +594,7 @@ public final class BugReportCommandService {
             session.transitionTo(result.status() == ReportTransportResult.Status.SUCCESS
                     ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
             activeExports.remove(request.sessionId());
+            recordDeliveryHistory(session.snapshot(), result);
             return Optional.of(result);
         }
     }
@@ -597,6 +607,11 @@ public final class BugReportCommandService {
         }
         session.transitionTo(ReportSessionState.READY);
         return true;
+    }
+
+    /** Returns the path-free terminal summaries persisted by the product history recorder. */
+    public List<ReportHistoryEntry> reportHistory() {
+        return history.entries();
     }
 
     public synchronized List<Message> discard(String sessionValue) {
@@ -668,6 +683,30 @@ public final class BugReportCommandService {
                 && session.snapshot().state() == ReportSessionState.DELIVERING) {
             session.transitionTo(ReportSessionState.FAILED_DELIVERY);
             activeExports.remove(request.sessionId());
+            recordDeliveryHistory(session.snapshot(), null);
+        }
+    }
+
+    private void recordDeliveryHistory(ReportSessionSnapshot snapshot, ReportTransportResult result) {
+        ReportHistoryEntry entry = new ReportHistoryEntry(
+                snapshot.id(),
+                snapshot.providerSpecification().id(),
+                snapshot.providerSpecification().version(),
+                snapshot.selectedCategory().map(CategorySpecification::id),
+                result != null && result.status() == ReportTransportResult.Status.SUCCESS
+                        ? ReportHistoryStatus.COMPLETED : ReportHistoryStatus.FAILED,
+                snapshot.revision(),
+                Instant.now(),
+                result != null && result.archive().isPresent()
+                        ? java.util.Optional.of(new com.cybersammy.bugreport.core.history.ReportArchiveSummary(
+                                result.archive().orElseThrow().archiveBytes(),
+                                result.archive().orElseThrow().checksum(),
+                                result.archive().orElseThrow().entryCount()))
+                        : java.util.Optional.empty());
+        try {
+            history.record(entry);
+        } catch (RuntimeException ignored) {
+            // Delivery succeeded or failed independently; history persistence never changes its result.
         }
     }
 
@@ -1003,6 +1042,20 @@ public final class BugReportCommandService {
             if (entryCount <= 0 || totalBytes < 0) {
                 throw new IllegalArgumentException("Export summary is invalid");
             }
+        }
+    }
+
+    /** Product-side persistence boundary for safe terminal history summaries. */
+    public interface ReportHistoryRecorder {
+        void record(ReportHistoryEntry entry);
+
+        List<ReportHistoryEntry> entries();
+
+        static ReportHistoryRecorder empty() {
+            return new ReportHistoryRecorder() {
+                @Override public void record(ReportHistoryEntry entry) {}
+                @Override public List<ReportHistoryEntry> entries() { return List.of(); }
+            };
         }
     }
 
