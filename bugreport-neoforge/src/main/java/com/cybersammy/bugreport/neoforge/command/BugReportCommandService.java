@@ -28,9 +28,12 @@ import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import com.cybersammy.bugreport.core.session.ReportSessionState;
 import com.cybersammy.bugreport.core.session.UnknownReportCategoryException;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
+import com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint;
 import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionResult;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
@@ -83,7 +86,8 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, PersistedFormDraft> persistedForms = new LinkedHashMap<>();
     private final Set<ReportSessionId> persistedDraftFiles = new LinkedHashSet<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
-    private final Map<ReportSessionId, FileCollectionResult> collectionResults = new LinkedHashMap<>();
+    private final Map<ReportSessionId, CategoryCollectionResult> collectionResults =
+            new LinkedHashMap<>();
     private final Map<ReportSessionId, ReportWorkspace> collectionWorkspaces = new LinkedHashMap<>();
     private final Map<ReportSessionId, WorkspaceReviewCoordinator.SanitizationBatch>
             sanitizationBatches = new LinkedHashMap<>();
@@ -325,7 +329,8 @@ public final class BugReportCommandService {
                 || !category.id().equals(request.categoryId())
                 || !snapshot.providerSpecification().id().equals(trustedPlan.providerId())
                 || !snapshot.providerSpecification().version().equals(trustedPlan.providerVersion())
-                || !category.id().equals(trustedPlan.categoryId())) {
+                || !category.id().equals(trustedPlan.categoryId())
+                || !matchesDeclaredGenerators(snapshot, reviewedPlan)) {
             return false;
         }
         collectionPlans.put(snapshot.id(), reviewedPlan);
@@ -375,14 +380,36 @@ public final class BugReportCommandService {
                 collecting.id(),
                 collecting.revision(),
                 reviewedPlan,
-                CollectionPlanFingerprint.from(reviewedPlan.selectedFilePlan())));
+                CategoryCollectionFingerprint.from(reviewedPlan)));
     }
 
     /** Records a terminal collection result only for the exact active collection generation. */
     public synchronized boolean acceptCollectionResult(
-            CollectionExecutionRequest request, FileCollectionResult result, ReportWorkspace workspace) {
+            CollectionExecutionRequest request,
+            FileCollectionResult result,
+            ReportWorkspace workspace) {
         Objects.requireNonNull(request, "request");
-        FileCollectionResult terminal = Objects.requireNonNull(result, "result");
+        FileCollectionResult files = Objects.requireNonNull(result, "result");
+        if (!request.reviewedPlan().includedGeneratorIds().isEmpty()) {
+            return false;
+        }
+        CategoryCollectionResult combined;
+        try {
+            combined = CategoryCollectionCoordinator.fromFileOnly(
+                    request.reviewedPlan(), files);
+        } catch (IllegalArgumentException failure) {
+            return false;
+        }
+        return acceptCollectionResult(request, combined, workspace);
+    }
+
+    /** Records a terminal combined result only for the exact active collection generation. */
+    public synchronized boolean acceptCollectionResult(
+            CollectionExecutionRequest request,
+            CategoryCollectionResult result,
+            ReportWorkspace workspace) {
+        Objects.requireNonNull(request, "request");
+        CategoryCollectionResult terminal = Objects.requireNonNull(result, "result");
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         ReportSession session = sessions.get(request.sessionId());
         if (session == null) {
@@ -426,6 +453,15 @@ public final class BugReportCommandService {
     public synchronized Optional<FileCollectionResult> collectionResult(String sessionValue) {
         ReportSession session = session(sessionValue);
         return session == null ? Optional.empty()
+                : Optional.ofNullable(collectionResults.get(session.snapshot().id()))
+                        .map(CategoryCollectionResult::files);
+    }
+
+    /** Returns the exact combined terminal result accepted for this report session. */
+    public synchronized Optional<CategoryCollectionResult> categoryCollectionResult(
+            String sessionValue) {
+        ReportSession session = session(sessionValue);
+        return session == null ? Optional.empty()
                 : Optional.ofNullable(collectionResults.get(session.snapshot().id()));
     }
 
@@ -451,16 +487,16 @@ public final class BugReportCommandService {
         if (snapshot.state() != ReportSessionState.SANITIZING) {
             return Optional.empty();
         }
-        FileCollectionResult files = collectionResults.get(snapshot.id());
+        CategoryCollectionResult collection = collectionResults.get(snapshot.id());
         ReportWorkspace workspace = collectionWorkspaces.get(snapshot.id());
-        if (files == null || workspace == null
-                || (files.status() != FileCollectionResult.Status.COMPLETE
-                        && files.status() != FileCollectionResult.Status.PARTIAL)
+        if (collection == null || workspace == null
+                || (collection.status() != CategoryCollectionResult.Status.COMPLETE
+                        && collection.status() != CategoryCollectionResult.Status.PARTIAL)
                 || activeSanitizations.containsKey(snapshot.id())) {
             return Optional.empty();
         }
         SanitizationExecutionRequest request = new SanitizationExecutionRequest(
-                snapshot.id(), snapshot.revision(), snapshot, files, workspace);
+                snapshot.id(), snapshot.revision(), snapshot, collection, workspace);
         activeSanitizations.put(snapshot.id(), request);
         return Optional.of(request);
     }
@@ -483,7 +519,7 @@ public final class BugReportCommandService {
         WorkspaceReviewCoordinator.SanitizationBatch evidence =
                 WorkspaceReviewCoordinator.sanitizeProduct(
                         request.session(),
-                        request.files(),
+                        request.collection(),
                         request.workspace(),
                         System.getProperty("user.home"),
                         System.getProperty("user.name"),
@@ -499,7 +535,7 @@ public final class BugReportCommandService {
                     || session.snapshot().state() != ReportSessionState.SANITIZING
                     || session.snapshot().revision() != request.sanitizationRevision()
                     || !WorkspaceReviewCoordinator.matches(
-                            evidence, request.files(), request.workspace())) {
+                            evidence, request.collection(), request.workspace())) {
                 return Optional.empty();
             }
             session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
@@ -913,12 +949,43 @@ public final class BugReportCommandService {
     }
 
     private static boolean matchesPlan(
-            CollectionExecutionRequest request, FileCollectionResult result) {
+            CollectionExecutionRequest request, CategoryCollectionResult result) {
         CategorySourcePlan plan = request.reviewedPlan().plan();
-        return plan.providerId().equals(result.providerId())
-                && plan.providerVersion().equals(result.providerVersion())
-                && plan.categoryId().equals(result.categoryId())
-                && result.planFingerprint().filter(request.planFingerprint()::equals).isPresent();
+        FileCollectionResult files = result.files();
+        return plan.providerId().equals(files.providerId())
+                && plan.providerVersion().equals(files.providerVersion())
+                && plan.categoryId().equals(files.categoryId())
+                && files.planFingerprint()
+                        .filter(CollectionPlanFingerprint.from(
+                                request.reviewedPlan().selectedFilePlan())::equals)
+                        .isPresent()
+                && request.planFingerprint().equals(result.fingerprint())
+                && List.copyOf(request.reviewedPlan().includedGeneratorIds())
+                        .equals(result.generated().outcomes().stream()
+                                .map(com.cybersammy.bugreport.core.workspace
+                                        .GeneratedDiagnosticOutcome::generatorId)
+                                .toList());
+    }
+
+    private static boolean matchesDeclaredGenerators(
+            ReportSessionSnapshot session, ReviewedCollectionPlan plan) {
+        CategorySpecification category = session.selectedCategory().orElseThrow();
+        List<com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification> planned =
+                plan.collectionPlan().generators();
+        List<com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId> declared =
+                List.copyOf(category.generatorIds());
+        if (planned.size() != declared.size()) {
+            return false;
+        }
+        for (int index = 0; index < planned.size(); index++) {
+            var generator = planned.get(index);
+            if (!declared.get(index).equals(generator.id())
+                    || session.providerSpecification().generators().get(generator.id())
+                            != generator) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean isActiveExportPreparation(LocalExportPreparationRequest request) {
@@ -1192,7 +1259,7 @@ public final class BugReportCommandService {
             ReportSessionId sessionId,
             long collectionRevision,
             ReviewedCollectionPlan reviewedPlan,
-            CollectionPlanFingerprint planFingerprint) {
+            CategoryCollectionFingerprint planFingerprint) {
         public CollectionExecutionRequest {
             Objects.requireNonNull(sessionId, "sessionId");
             if (collectionRevision < 0) {
@@ -1456,19 +1523,19 @@ public final class BugReportCommandService {
         private final ReportSessionId sessionId;
         private final long sanitizationRevision;
         private final ReportSessionSnapshot session;
-        private final FileCollectionResult files;
+        private final CategoryCollectionResult collection;
         private final ReportWorkspace workspace;
 
         private SanitizationExecutionRequest(
                 ReportSessionId sessionId,
                 long sanitizationRevision,
                 ReportSessionSnapshot session,
-                FileCollectionResult files,
+                CategoryCollectionResult collection,
                 ReportWorkspace workspace) {
             this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
             this.sanitizationRevision = sanitizationRevision;
             this.session = Objects.requireNonNull(session, "session");
-            this.files = Objects.requireNonNull(files, "files");
+            this.collection = Objects.requireNonNull(collection, "collection");
             this.workspace = Objects.requireNonNull(workspace, "workspace");
             if (sanitizationRevision < 0 || !sessionId.equals(workspace.sessionId())) {
                 throw new IllegalArgumentException("Sanitization request identity is inconsistent");
@@ -1478,7 +1545,8 @@ public final class BugReportCommandService {
         public ReportSessionId sessionId() { return sessionId; }
         public long sanitizationRevision() { return sanitizationRevision; }
         ReportSessionSnapshot session() { return session; }
-        FileCollectionResult files() { return files; }
+        CategoryCollectionResult collection() { return collection; }
+        FileCollectionResult files() { return collection.files(); }
         ReportWorkspace workspace() { return workspace; }
     }
 

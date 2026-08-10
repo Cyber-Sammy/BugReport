@@ -22,9 +22,16 @@ final class WorkspacePreparationCoordinator {
             ReviewedWorkspaceSnapshot snapshot,
             List<WorkspaceSanitizationCoordinator.SanitizedSource> textEvidence,
             Set<String> explicitlyReviewedArtifacts) {
+        return prepare(snapshot, textEvidence, List.of(), explicitlyReviewedArtifacts);
+    }
+
+    static PreparedWorkspaceSnapshot prepare(
+            ReviewedWorkspaceSnapshot snapshot,
+            List<WorkspaceSanitizationCoordinator.SanitizedSource> textEvidence,
+            List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generatedEvidence,
+            Set<String> explicitlyReviewedArtifacts) {
         ReviewedWorkspaceSnapshot reviewed = Objects.requireNonNull(snapshot, "snapshot");
-        Map<String, WorkspaceSanitizationCoordinator.SanitizedSource> evidence = indexEvidence(
-                textEvidence);
+        Map<String, SanitizationEvidence> evidence = indexEvidence(textEvidence, generatedEvidence);
         Set<String> accepted = Set.copyOf(
                 Objects.requireNonNull(explicitlyReviewedArtifacts, "explicitlyReviewedArtifacts"));
         if (accepted.stream().anyMatch(Objects::isNull)) {
@@ -46,7 +53,7 @@ final class WorkspacePreparationCoordinator {
                 continue;
             }
 
-            WorkspaceSanitizationCoordinator.SanitizedSource sanitized = evidence.get(
+            SanitizationEvidence sanitized = evidence.get(
                     artifact.artifactName());
             if (sanitized == null || !sanitized.matches(artifact)) {
                 throw new IllegalArgumentException(
@@ -76,18 +83,46 @@ final class WorkspacePreparationCoordinator {
         return new PreparedWorkspaceSnapshot(reviewed, prepared);
     }
 
-    private static Map<String, WorkspaceSanitizationCoordinator.SanitizedSource> indexEvidence(
-            List<WorkspaceSanitizationCoordinator.SanitizedSource> values) {
+    private static Map<String, SanitizationEvidence> indexEvidence(
+            List<WorkspaceSanitizationCoordinator.SanitizedSource> values,
+            List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generatedValues) {
         List<WorkspaceSanitizationCoordinator.SanitizedSource> copy = List.copyOf(
                 Objects.requireNonNull(values, "textEvidence"));
-        Map<String, WorkspaceSanitizationCoordinator.SanitizedSource> indexed = new HashMap<>();
+        List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generated = List.copyOf(
+                Objects.requireNonNull(generatedValues, "generatedEvidence"));
+        Map<String, SanitizationEvidence> indexed = new HashMap<>();
         for (WorkspaceSanitizationCoordinator.SanitizedSource value : copy) {
             Objects.requireNonNull(value, "sanitization evidence");
-            if (indexed.put(value.source().artifactName(), value) != null) {
+            SanitizationEvidence evidence = new SanitizationEvidence(
+                    value.source().artifactName(), value.result(), value::matches);
+            if (indexed.put(evidence.artifactName(), evidence) != null) {
+                throw new IllegalArgumentException("Sanitization evidence must be unique per artifact");
+            }
+        }
+        for (WorkspaceSanitizationCoordinator.SanitizedGenerated value : generated) {
+            Objects.requireNonNull(value, "generated sanitization evidence");
+            SanitizationEvidence evidence = new SanitizationEvidence(
+                    value.artifact().artifactName(), value.result(), value::matches);
+            if (indexed.put(evidence.artifactName(), evidence) != null) {
                 throw new IllegalArgumentException("Sanitization evidence must be unique per artifact");
             }
         }
         return Map.copyOf(indexed);
+    }
+
+    private record SanitizationEvidence(
+            String artifactName,
+            SanitizationResult result,
+            java.util.function.Predicate<ReviewedWorkspaceArtifact> matcher) {
+        private SanitizationEvidence {
+            Objects.requireNonNull(artifactName, "artifactName");
+            Objects.requireNonNull(result, "result");
+            Objects.requireNonNull(matcher, "matcher");
+        }
+
+        boolean matches(ReviewedWorkspaceArtifact artifact) {
+            return matcher.test(artifact);
+        }
     }
 
     private static void requireExplicitBinaryReview(

@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -93,6 +94,41 @@ public final class CategoryGeneratedDiagnosticExecutor {
         return completion;
     }
 
+    /** Executes only the exact reviewed subset of category generators. */
+    public static CompletableFuture<CategoryGeneratedDiagnosticResult> executeAsync(
+            ProviderRegistrySnapshot registry,
+            ProviderId providerId,
+            CategoryId categoryId,
+            SupportedSide side,
+            ReportWorkspace workspace,
+            CancellationSignal cancellation,
+            long remainingCollectionBytes,
+            GameThreadDispatcher gameThreadDispatcher,
+            Set<DiagnosticGeneratorId> selectedGeneratorIds) {
+        Set<DiagnosticGeneratorId> selected = Set.copyOf(
+                Objects.requireNonNull(selectedGeneratorIds, "selectedGeneratorIds"));
+        Objects.requireNonNull(gameThreadDispatcher, "gameThreadDispatcher");
+        CompletableFuture<CategoryGeneratedDiagnosticResult> completion = new CompletableFuture<>();
+        Thread.startVirtualThread(() -> {
+            try {
+                CategoryGeneratedDiagnosticResult all = executeInternal(
+                        registry,
+                        providerId,
+                        categoryId,
+                        side,
+                        workspace,
+                        cancellation,
+                        remainingCollectionBytes,
+                        gameThreadDispatcher,
+                        selected);
+                completion.complete(all);
+            } catch (Throwable failure) {
+                completion.completeExceptionally(failure);
+            }
+        });
+        return completion;
+    }
+
     private static CategoryGeneratedDiagnosticResult executeInternal(
             ProviderRegistrySnapshot registry,
             ProviderId providerId,
@@ -102,6 +138,28 @@ public final class CategoryGeneratedDiagnosticExecutor {
             CancellationSignal cancellation,
             long remainingCollectionBytes,
             GameThreadDispatcher gameThreadDispatcher) {
+        return executeInternal(
+                registry,
+                providerId,
+                categoryId,
+                side,
+                workspace,
+                cancellation,
+                remainingCollectionBytes,
+                gameThreadDispatcher,
+                null);
+    }
+
+    private static CategoryGeneratedDiagnosticResult executeInternal(
+            ProviderRegistrySnapshot registry,
+            ProviderId providerId,
+            CategoryId categoryId,
+            SupportedSide side,
+            ReportWorkspace workspace,
+            CancellationSignal cancellation,
+            long remainingCollectionBytes,
+            GameThreadDispatcher gameThreadDispatcher,
+            Set<DiagnosticGeneratorId> selectedGeneratorIds) {
         Objects.requireNonNull(side, "side");
         Objects.requireNonNull(workspace, "workspace");
         CancellationSignal signal = Objects.requireNonNull(cancellation, "cancellation");
@@ -121,10 +179,17 @@ public final class CategoryGeneratedDiagnosticExecutor {
                     workspace,
                     "Cannot generate diagnostics for an undeclared category");
         }
+        if (selectedGeneratorIds != null
+                && !category.generatorIds().containsAll(selectedGeneratorIds)) {
+            throw new IllegalArgumentException("Selected generator IDs must be declared by the category");
+        }
 
         List<GeneratedDiagnosticOutcome> outcomes = new ArrayList<>();
         long retainedBytes = 0;
         for (DiagnosticGeneratorId generatorId : category.generatorIds()) {
+            if (selectedGeneratorIds != null && !selectedGeneratorIds.contains(generatorId)) {
+                continue;
+            }
             if (signal.isCancellationRequested()) {
                 outcomes.add(GeneratedDiagnosticOutcome.failed(
                         generatorId,

@@ -13,6 +13,7 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationPolicy;
 import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -55,9 +56,55 @@ public final class WorkspaceReviewCoordinator {
         return sanitize(
                 trustedSession,
                 result,
+                emptyGenerated(result),
                 workspace,
                 source -> ProductSanitization.textPipeline(
                         SanitizationPolicy.standard(artifactPolicy(source)),
+                        homeDirectory,
+                        username,
+                        sensitivity),
+                artifact -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.standard(SanitizationArtifactPolicy.LOG),
+                        homeDirectory,
+                        username,
+                        sensitivity),
+                cancellation);
+    }
+
+    /** Executes the fixed product policy for exact file and generated collection results. */
+    public static SanitizationBatch sanitizeProduct(
+            ReportSessionSnapshot session,
+            CategoryCollectionResult collection,
+            ReportWorkspace workspace,
+            String homeDirectory,
+            String username,
+            SanitizationCaseSensitivity caseSensitivity,
+            CancellationSignal cancellation) {
+        ReportSessionSnapshot trustedSession = Objects.requireNonNull(session, "session");
+        CategoryCollectionResult result = Objects.requireNonNull(collection, "collection");
+        FileCollectionResult files = result.files();
+        if (!trustedSession.id().equals(Objects.requireNonNull(workspace, "workspace").sessionId())
+                || !trustedSession.providerSpecification().id().equals(files.providerId())
+                || !trustedSession.providerSpecification().version().equals(files.providerVersion())
+                || trustedSession.selectedCategory().stream()
+                        .noneMatch(category -> category.id().equals(files.categoryId()))) {
+            throw new IllegalArgumentException(
+                    "Sanitization input does not belong to the trusted report session");
+        }
+        SanitizationCaseSensitivity sensitivity =
+                Objects.requireNonNull(caseSensitivity, "caseSensitivity");
+        return sanitize(
+                trustedSession,
+                files,
+                result.generated(),
+                workspace,
+                source -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.standard(artifactPolicy(source)),
+                        homeDirectory,
+                        username,
+                        sensitivity),
+                artifact -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.standard(SanitizationArtifactPolicy.LOG),
                         homeDirectory,
                         username,
                         sensitivity),
@@ -70,13 +117,43 @@ public final class WorkspaceReviewCoordinator {
             ReportWorkspace workspace,
             Function<CollectedSourceFile, SanitizationPipeline> pipelines,
             CancellationSignal cancellation) {
+        return sanitize(
+                session,
+                files,
+                emptyGenerated(files),
+                workspace,
+                pipelines,
+                ignored -> ProductSanitization.textPipeline(
+                        SanitizationPolicy.standard(SanitizationArtifactPolicy.LOG),
+                        System.getProperty("user.home"),
+                        System.getProperty("user.name"),
+                        File.separatorChar == '\\'
+                                ? SanitizationCaseSensitivity.INSENSITIVE
+                                : SanitizationCaseSensitivity.SENSITIVE),
+                cancellation);
+    }
+
+    static SanitizationBatch sanitize(
+            ReportSessionSnapshot session,
+            FileCollectionResult files,
+            CategoryGeneratedDiagnosticResult generated,
+            ReportWorkspace workspace,
+            Function<CollectedSourceFile, SanitizationPipeline> pipelines,
+            Function<CollectedGeneratedArtifact, SanitizationPipeline> generatedPipelines,
+            CancellationSignal cancellation) {
         ReportSessionSnapshot trustedSession = Objects.requireNonNull(session, "session");
         FileCollectionResult result = Objects.requireNonNull(files, "files");
+        CategoryGeneratedDiagnosticResult generatedResult =
+                Objects.requireNonNull(generated, "generated");
         ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
         Function<CollectedSourceFile, SanitizationPipeline> pipelineFactory =
                 Objects.requireNonNull(pipelines, "pipelines");
+        Function<CollectedGeneratedArtifact, SanitizationPipeline> generatedPipelineFactory =
+                Objects.requireNonNull(generatedPipelines, "generatedPipelines");
         CancellationSignal signal = Objects.requireNonNull(cancellation, "cancellation");
         List<WorkspaceSanitizationCoordinator.SanitizedSource> evidence = new ArrayList<>();
+        List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generatedEvidence =
+                new ArrayList<>();
         List<ArtifactReview> reviews = new ArrayList<>();
         for (FileCollectionResult.SourceOutcome outcome : result.outcomes()) {
             outcome.collectedFile().ifPresent(source -> {
@@ -106,10 +183,42 @@ public final class WorkspaceReviewCoordinator {
                 }
             });
         }
+        for (GeneratedDiagnosticOutcome outcome : generatedResult.outcomes()) {
+            outcome.result().ifPresent(resultValue -> resultValue.artifacts().forEach(artifact -> {
+                try {
+                    WorkspaceSanitizationCoordinator.SanitizedGenerated sanitized =
+                            WorkspaceSanitizationCoordinator.sanitize(
+                                    artifact,
+                                    trustedWorkspace,
+                                    Objects.requireNonNull(
+                                            generatedPipelineFactory.apply(artifact),
+                                            "generated sanitization pipeline"),
+                                    signal);
+                    generatedEvidence.add(sanitized);
+                    reviews.add(ArtifactReview.sanitized(
+                            sanitized.artifact(),
+                            generatorLabelKey(trustedSession, artifact),
+                            sanitized.result()));
+                } catch (RuntimeException failure) {
+                    reviews.add(ArtifactReview.failed(
+                            artifact, generatorLabelKey(trustedSession, artifact)));
+                }
+            }));
+        }
         reviews.sort(java.util.Comparator.comparing(ArtifactReview::artifactName));
         FileCollectionResult finalFiles = finalFileResult(result, evidence);
+        CategoryGeneratedDiagnosticResult finalGenerated =
+                finalGeneratedResult(generatedResult, generatedEvidence);
         return new SanitizationBatch(
-                trustedWorkspace.sessionId(), result, finalFiles, trustedWorkspace, evidence, reviews);
+                trustedWorkspace.sessionId(),
+                result,
+                finalFiles,
+                generatedResult,
+                finalGenerated,
+                trustedWorkspace,
+                evidence,
+                generatedEvidence,
+                reviews);
     }
 
     private static SanitizationArtifactPolicy artifactPolicy(CollectedSourceFile source) {
@@ -131,11 +240,34 @@ public final class WorkspaceReviewCoordinator {
         return declaration.labelKey();
     }
 
+    private static LocalizationKey generatorLabelKey(
+            ReportSessionSnapshot session, CollectedGeneratedArtifact artifact) {
+        var declaration = session.providerSpecification().generators().get(artifact.generatorId());
+        if (declaration == null) {
+            throw new IllegalArgumentException(
+                    "Generated artifact is not declared by the trusted report provider");
+        }
+        return declaration.labelKey();
+    }
+
     /** Reports whether a batch belongs to the exact accepted collection boundary. */
     public static boolean matches(
             SanitizationBatch batch, FileCollectionResult files, ReportWorkspace workspace) {
         SanitizationBatch trusted = Objects.requireNonNull(batch, "batch");
         return trusted.files == Objects.requireNonNull(files, "files")
+                && trusted.workspace == Objects.requireNonNull(workspace, "workspace")
+                && trusted.sessionId.equals(workspace.sessionId());
+    }
+
+    /** Reports whether a batch belongs to the exact combined collection boundary. */
+    public static boolean matches(
+            SanitizationBatch batch,
+            CategoryCollectionResult collection,
+            ReportWorkspace workspace) {
+        SanitizationBatch trusted = Objects.requireNonNull(batch, "batch");
+        CategoryCollectionResult result = Objects.requireNonNull(collection, "collection");
+        return trusted.files == result.files()
+                && trusted.generated == result.generated()
                 && trusted.workspace == Objects.requireNonNull(workspace, "workspace")
                 && trusted.sessionId.equals(workspace.sessionId());
     }
@@ -180,17 +312,21 @@ public final class WorkspaceReviewCoordinator {
                     "Included artifacts require exact successful and explicit review evidence");
         }
 
-        CategoryGeneratedDiagnosticResult generated = new CategoryGeneratedDiagnosticResult(
-                trusted.finalFiles.providerId(), trusted.finalFiles.categoryId(), List.of(), 0);
         ReviewedWorkspaceSnapshot reviewed = ReviewedWorkspaceSnapshotFactory.create(
-                session, trusted.workspace, trusted.finalFiles, generated, included);
+                session, trusted.workspace, trusted.finalFiles, trusted.finalGenerated, included);
         List<WorkspaceSanitizationCoordinator.SanitizedSource> selectedEvidence = trusted.evidence
                 .stream()
                 .filter(value -> included.contains(value.source().artifactName()))
                 .toList();
         return new PreparedReview(
                 trusted,
-                WorkspacePreparationCoordinator.prepare(reviewed, selectedEvidence, explicit));
+                WorkspacePreparationCoordinator.prepare(
+                        reviewed,
+                        selectedEvidence,
+                        trusted.generatedEvidence.stream()
+                                .filter(value -> included.contains(value.artifact().artifactName()))
+                                .toList(),
+                        explicit));
     }
 
     private static Set<String> intersection(Set<String> left, Set<String> right) {
@@ -229,27 +365,74 @@ public final class WorkspaceReviewCoordinator {
                 original.progress());
     }
 
+    private static CategoryGeneratedDiagnosticResult emptyGenerated(FileCollectionResult files) {
+        return new CategoryGeneratedDiagnosticResult(
+                files.providerId(), files.categoryId(), List.of(), 0);
+    }
+
+    private static CategoryGeneratedDiagnosticResult finalGeneratedResult(
+            CategoryGeneratedDiagnosticResult original,
+            List<WorkspaceSanitizationCoordinator.SanitizedGenerated> evidence) {
+        java.util.Map<String, CollectedGeneratedArtifact> sanitized = evidence.stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        value -> value.artifact().artifactName(),
+                        WorkspaceSanitizationCoordinator.SanitizedGenerated::artifact));
+        List<GeneratedDiagnosticOutcome> outcomes = original.outcomes().stream()
+                .map(outcome -> outcome.result().map(result -> {
+                    List<CollectedGeneratedArtifact> artifacts = result.artifacts().stream()
+                            .map(artifact -> sanitized.getOrDefault(
+                                    artifact.artifactName(), artifact))
+                            .toList();
+                    long bytes = artifacts.stream()
+                            .mapToLong(CollectedGeneratedArtifact::byteCount)
+                            .reduce(0L, Math::addExact);
+                    return GeneratedDiagnosticOutcome.collected(new GeneratedDiagnosticResult(
+                            result.providerId(),
+                            result.providerVersion(),
+                            result.categoryId(),
+                            result.generatorId(),
+                            artifacts,
+                            bytes));
+                }).orElse(outcome))
+                .toList();
+        long retained = outcomes.stream()
+                .flatMap(outcome -> outcome.result().stream())
+                .mapToLong(GeneratedDiagnosticResult::byteCount)
+                .reduce(0L, Math::addExact);
+        return new CategoryGeneratedDiagnosticResult(
+                original.providerId(), original.categoryId(), outcomes, retained);
+    }
+
     /** Opaque, non-constructible evidence for one exact sanitization pass. */
     public static final class SanitizationBatch {
         private final ReportSessionId sessionId;
         private final FileCollectionResult files;
         private final FileCollectionResult finalFiles;
+        private final CategoryGeneratedDiagnosticResult generated;
+        private final CategoryGeneratedDiagnosticResult finalGenerated;
         private final ReportWorkspace workspace;
         private final List<WorkspaceSanitizationCoordinator.SanitizedSource> evidence;
+        private final List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generatedEvidence;
         private final List<ArtifactReview> reviews;
 
         private SanitizationBatch(
                 ReportSessionId sessionId,
                 FileCollectionResult files,
                 FileCollectionResult finalFiles,
+                CategoryGeneratedDiagnosticResult generated,
+                CategoryGeneratedDiagnosticResult finalGenerated,
                 ReportWorkspace workspace,
                 List<WorkspaceSanitizationCoordinator.SanitizedSource> evidence,
+                List<WorkspaceSanitizationCoordinator.SanitizedGenerated> generatedEvidence,
                 List<ArtifactReview> reviews) {
             this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
             this.files = Objects.requireNonNull(files, "files");
             this.finalFiles = Objects.requireNonNull(finalFiles, "finalFiles");
+            this.generated = Objects.requireNonNull(generated, "generated");
+            this.finalGenerated = Objects.requireNonNull(finalGenerated, "finalGenerated");
             this.workspace = Objects.requireNonNull(workspace, "workspace");
             this.evidence = List.copyOf(evidence);
+            this.generatedEvidence = List.copyOf(generatedEvidence);
             this.reviews = List.copyOf(reviews);
         }
 
@@ -332,6 +515,25 @@ public final class WorkspaceReviewCoordinator {
             return new ArtifactReview(
                     source.artifactName(), labelKey, source.contentType(), source.privacy(),
                     source.qualityRole(), InclusionDefault.EXCLUDED, source.byteCount(),
+                    ArtifactReviewStatus.FAILED, 0, false);
+        }
+
+        private static ArtifactReview sanitized(
+                CollectedGeneratedArtifact artifact,
+                LocalizationKey labelKey,
+                SanitizationResult result) {
+            return new ArtifactReview(
+                    artifact.artifactName(), labelKey, artifact.contentType(), artifact.privacy(),
+                    artifact.qualityRole(), artifact.inclusionDefault(), artifact.byteCount(),
+                    ArtifactReviewStatus.SANITIZED, result.findings().size(),
+                    result.hasUnresolvedWarnings());
+        }
+
+        private static ArtifactReview failed(
+                CollectedGeneratedArtifact artifact, LocalizationKey labelKey) {
+            return new ArtifactReview(
+                    artifact.artifactName(), labelKey, artifact.contentType(), artifact.privacy(),
+                    artifact.qualityRole(), InclusionDefault.EXCLUDED, artifact.byteCount(),
                     ArtifactReviewStatus.FAILED, 0, false);
         }
     }

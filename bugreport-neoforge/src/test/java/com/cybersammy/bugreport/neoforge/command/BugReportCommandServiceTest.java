@@ -294,14 +294,14 @@ final class BugReportCommandServiceTest {
                         com.cybersammy.bugreport.core.session.ReportSessionId.class,
                         long.class,
                         com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
-                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.class,
                         com.cybersammy.bugreport.core.workspace.ReportWorkspace.class);
         sanitizationConstructor.setAccessible(true);
         var syntheticSanitization = sanitizationConstructor.newInstance(
                 sanitization.sessionId(),
                 sanitization.sanitizationRevision(),
                 sanitization.session(),
-                sanitization.files(),
+                sanitization.collection(),
                 sanitization.workspace());
         assertTrue(service.executeSanitization(
                 syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
@@ -421,6 +421,121 @@ final class BugReportCommandServiceTest {
                         .create(execution.sessionId())));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
                 service.form(sessionId).orElseThrow().state());
+    }
+
+    @Test
+    void acceptsOnlyCombinedResultForExactReviewedGeneratorSelection(@TempDir Path gameDirectory)
+            throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        java.util.concurrent.atomic.AtomicBoolean invoked =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        ProviderRegistrySnapshot registry = generatedRegistry(invoked);
+        BugReportCommandService service = new BugReportCommandService(() -> registry);
+        String sessionId = (String) service.create("generated_mod", "general")
+                .getFirst().arguments()[0];
+        var request = service.confirmForm(sessionId, FormSubmission.empty())
+                .planRequest().orElseThrow();
+        var roots = ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath());
+        var plan = new com.cybersammy.bugreport.core.source.CategoryCollectionPlanner(
+                        registry, roots, SupportedSide.PHYSICAL_CLIENT)
+                .plan(ProviderId.parse("generated_mod"), CategoryId.of("general"));
+        var reviewed = ReviewedCollectionPlan.of(
+                plan,
+                Set.of(),
+                Set.of(com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("runtime")));
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        var execution = service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(execution.sessionId());
+        var otherReviewed = ReviewedCollectionPlan.of(
+                plan,
+                Set.of(),
+                Set.of(com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("other")));
+        var otherWorkspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("other-workspaces").toAbsolutePath())
+                .create(execution.sessionId());
+        var otherResult =
+                com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator.collect(
+                        registry,
+                        otherReviewed,
+                        roots,
+                        SupportedSide.PHYSICAL_CLIENT,
+                        otherWorkspace,
+                        new com.cybersammy.bugreport.core.workspace.CategoryCollectionRunControl(),
+                        command -> false);
+        var resultConstructor = com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.class
+                .getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.Status.class,
+                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.CategoryGeneratedDiagnosticResult.class,
+                        com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint.class);
+        resultConstructor.setAccessible(true);
+        var syntheticOtherResult = resultConstructor.newInstance(
+                otherResult.status(),
+                otherResult.files(),
+                otherResult.generated(),
+                execution.planFingerprint());
+        assertFalse(service.acceptCollectionResult(execution, syntheticOtherResult, workspace));
+        assertEquals(
+                com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
+                service.form(sessionId).orElseThrow().state());
+        var result = com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator.collect(
+                registry,
+                reviewed,
+                roots,
+                SupportedSide.PHYSICAL_CLIENT,
+                workspace,
+                new com.cybersammy.bugreport.core.workspace.CategoryCollectionRunControl(),
+                command -> false);
+
+        assertTrue(service.acceptCollectionResult(execution, result, workspace));
+        assertTrue(invoked.get());
+        assertSame(result, service.categoryCollectionResult(sessionId).orElseThrow());
+        assertEquals(1, result.generated().outcomes().size());
+
+        var sanitization = service.beginSanitization(sessionId).orElseThrow();
+        var review = service.executeSanitization(
+                        sanitization, CancellationSignal.neverCancelled())
+                .orElseThrow();
+        String artifactName = review.batch().artifacts().getFirst().artifactName();
+        service.confirmReview(
+                        review,
+                        new BugReportCommandService.ReviewDecision(
+                                Set.of(artifactName), Set.of()))
+                .orElseThrow();
+        var export = service.prepareLocalExport(
+                        service.beginLocalExport(sessionId).orElseThrow())
+                .orElseThrow();
+        assertEquals(
+                com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.SUCCESS,
+                service.executeLocalExport(
+                                export,
+                                gameDirectory,
+                                "generated.bugreport.zip",
+                                new com.cybersammy.bugreport.core.transport.TransportRunControl())
+                        .orElseThrow()
+                        .status());
+        Path archive = gameDirectory.resolve("bugreport-exports/generated.bugreport.zip");
+        try (var zip = new java.util.zip.ZipFile(archive.toFile())) {
+            byte[] manifestBytes;
+            try (var input = zip.getInputStream(zip.getEntry("manifest.json"))) {
+                manifestBytes = input.readAllBytes();
+            }
+            var manifest = com.cybersammy.bugreport.core.manifest.ReportManifestJsonCodec
+                    .decode(manifestBytes)
+                    .manifest();
+            var generatedEntry = manifest.entries().stream()
+                    .filter(entry -> entry.archivePath().equals("content/" + artifactName))
+                    .findFirst()
+                    .orElseThrow();
+            assertEquals(
+                    com.cybersammy.bugreport.core.manifest.ManifestDeclarationKind.GENERATOR,
+                    generatedEntry.provenances().getFirst().declarationKind());
+            assertEquals("runtime", generatedEntry.provenances().getFirst().declarationId());
+        }
     }
 
     @Test
@@ -609,6 +724,77 @@ final class BugReportCommandServiceTest {
     private static ProviderRegistrySnapshot registry() {
         return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
                 NamespaceId.of("example_mod"), TestProvider.class.getName(), new TestProvider())));
+    }
+
+    private static ProviderRegistrySnapshot generatedRegistry(
+            java.util.concurrent.atomic.AtomicBoolean invoked) {
+        var generatorId =
+                com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("runtime");
+        var generator = com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification
+                .builder(generatorId, (request, sink) -> {
+                    invoked.set(true);
+                    sink.emitText(
+                            com.cybersammy.bugreport.api.identifier.GeneratedArtifactId.of("state"),
+                            "runtime state");
+                })
+                .labelKey(LocalizationKey.of("generated_mod.generator.runtime"))
+                .privacy(PrivacyClassification.PERSONAL)
+                .contentType(DiagnosticContentType.TEXT)
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .executionContext(com.cybersammy.bugreport.api.specification.GeneratorExecutionContext.WORKER)
+                .constraints(com.cybersammy.bugreport.api.constraint.CollectionConstraints.builder()
+                        .maxGeneratedArtifacts(1)
+                        .maxBytesPerFile(4096)
+                        .maxTotalBytes(4096)
+                        .callbackTimeout(java.time.Duration.ofSeconds(1))
+                        .build())
+                .build();
+        var otherGenerator =
+                com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification
+                        .builder(
+                                com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("other"),
+                                (request, sink) -> sink.emitText(
+                                        com.cybersammy.bugreport.api.identifier.GeneratedArtifactId
+                                                .of("other"),
+                                        "other runtime state"))
+                        .labelKey(LocalizationKey.of("generated_mod.generator.other"))
+                        .privacy(PrivacyClassification.PERSONAL)
+                        .contentType(DiagnosticContentType.TEXT)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .executionContext(com.cybersammy.bugreport.api.specification
+                                .GeneratorExecutionContext.WORKER)
+                        .constraints(com.cybersammy.bugreport.api.constraint.CollectionConstraints
+                                .builder()
+                                .maxGeneratedArtifacts(1)
+                                .maxBytesPerFile(4096)
+                                .maxTotalBytes(4096)
+                                .callbackTimeout(java.time.Duration.ofSeconds(1))
+                                .build())
+                        .build();
+        var category = CategorySpecification.builder(
+                        CategoryId.of("general"),
+                        LocalizationKey.of("generated_mod.category.general"))
+                .useGenerator(generatorId)
+                .useGenerator(otherGenerator.id())
+                .build();
+        var specification = ProviderSpecification.builder(
+                        ProviderId.parse("generated_mod"),
+                        ProviderVersion.parse("1.0.0"),
+                        LocalizationKey.of("generated_mod.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addGenerator(generator)
+                .addGenerator(otherGenerator)
+                .addCategory(category)
+                .build();
+        BugReportProvider provider = new BugReportProvider() {
+            @Override public String providerId() { return "generated_mod"; }
+            @Override public String providerVersion() { return "1.0.0"; }
+            @Override public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+        return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
+                NamespaceId.of("generated_mod"), "GeneratedProvider", provider)));
     }
 
     private static CategorySourcePlan emptyCategoryPlan(Path gameDirectory) {

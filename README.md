@@ -13,8 +13,8 @@ The M0 architecture and risk-closure milestone, the M1 contracts, registry,
 and build-foundation milestone, and the M2 secure headless reporting engine are
 complete. M3 client workflow work is in progress, with its command, provider,
 category, declarative form, and collection-plan boundaries available for
-gameplay testing, including collection progress plus sanitization and artifact
-review.
+gameplay testing, including combined file/generated collection progress,
+cancellation, sanitization, artifact review, and local ZIP export.
 
 Implemented and executable:
 
@@ -589,9 +589,25 @@ outcome itself remains to cancel.
 The file run rejects a planning-time total above 128 MiB before writing and
 enforces the same ceiling again against actual streamed bytes. Progress counts
 processed bytes, including work later discarded after a failed file, and is not
-a retained-workspace-size guarantee. Generated and deferred outputs must join
-this aggregate budget before complete category collection may advance the
-session to sanitization.
+a retained-workspace-size guarantee.
+
+`CategoryCollectionCoordinator` closes the aggregate boundary for generated
+diagnostics. The reviewed plan records exact file-source and generator choices;
+its opaque fingerprint includes both canonical file observations and selected
+generator IDs. File copying runs first, then only reviewed generators execute
+in canonical ID order through the bounded worker or game-thread snapshot
+executor. Generated output receives only the remainder of the same 128 MiB
+report budget. One cancellation signal remains valid across both phases, and
+the session service accepts a terminal result only while revision, provider,
+category, and exact plan fingerprint still match. The combined terminal result
+is coordinator-issued rather than publicly constructible; its status is
+validated against child outcomes and its generator outcome IDs must exactly
+match the reviewed selection.
+
+Generated TEXT and JSON artifacts enter the same product-owned sanitization and
+explicit review boundary as copied files. Evidence is tied to exact final byte
+count and SHA-256, generator provenance is retained in the reviewed snapshot
+and manifest, and excluded or failed generators cannot be reintroduced later.
 
 `ReviewedWorkspaceSnapshotFactory` accepts only a `REVIEW_REQUIRED` session,
 its matching file/generated collection results, and the exact artifact names
