@@ -599,7 +599,10 @@ in canonical ID order through the bounded worker or game-thread snapshot
 executor. Generated output receives only the remainder of the same 128 MiB
 report budget. One cancellation signal remains valid across both phases, and
 the session service accepts a terminal result only while revision, provider,
-category, and exact plan fingerprint still match.
+category, and exact plan fingerprint still match. The combined terminal result
+is coordinator-issued rather than publicly constructible; its status is
+validated against child outcomes and its generator outcome IDs must exactly
+match the reviewed selection.
 
 Generated TEXT and JSON artifacts enter the same product-owned sanitization and
 explicit review boundary as copied files. Evidence is tied to exact final byte

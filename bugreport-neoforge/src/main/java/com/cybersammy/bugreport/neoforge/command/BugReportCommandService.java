@@ -33,6 +33,7 @@ import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.CategoryCollectionResult;
+import com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.ReportWorkspace;
 import com.cybersammy.bugreport.core.workspace.PreparedWorkspaceSnapshot;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
@@ -392,25 +393,14 @@ public final class BugReportCommandService {
         if (!request.reviewedPlan().includedGeneratorIds().isEmpty()) {
             return false;
         }
-        if (files.planFingerprint()
-                .filter(CollectionPlanFingerprint.from(request.reviewedPlan().selectedFilePlan())::equals)
-                .isEmpty()) {
+        CategoryCollectionResult combined;
+        try {
+            combined = CategoryCollectionCoordinator.fromFileOnly(
+                    request.reviewedPlan(), files);
+        } catch (IllegalArgumentException failure) {
             return false;
         }
-        return acceptCollectionResult(
-                request,
-                new CategoryCollectionResult(
-                        switch (files.status()) {
-                            case COMPLETE -> CategoryCollectionResult.Status.COMPLETE;
-                            case PARTIAL -> CategoryCollectionResult.Status.PARTIAL;
-                            case FAILED -> CategoryCollectionResult.Status.FAILED;
-                            case CANCELLED -> CategoryCollectionResult.Status.CANCELLED;
-                        },
-                        files,
-                        new com.cybersammy.bugreport.core.workspace.CategoryGeneratedDiagnosticResult(
-                                files.providerId(), files.categoryId(), List.of(), 0),
-                        request.planFingerprint()),
-                workspace);
+        return acceptCollectionResult(request, combined, workspace);
     }
 
     /** Records a terminal combined result only for the exact active collection generation. */
@@ -965,7 +955,16 @@ public final class BugReportCommandService {
         return plan.providerId().equals(files.providerId())
                 && plan.providerVersion().equals(files.providerVersion())
                 && plan.categoryId().equals(files.categoryId())
-                && request.planFingerprint().equals(result.fingerprint());
+                && files.planFingerprint()
+                        .filter(CollectionPlanFingerprint.from(
+                                request.reviewedPlan().selectedFilePlan())::equals)
+                        .isPresent()
+                && request.planFingerprint().equals(result.fingerprint())
+                && List.copyOf(request.reviewedPlan().includedGeneratorIds())
+                        .equals(result.generated().outcomes().stream()
+                                .map(com.cybersammy.bugreport.core.workspace
+                                        .GeneratedDiagnosticOutcome::generatorId)
+                                .toList());
     }
 
     private static boolean matchesDeclaredGenerators(
@@ -1541,31 +1540,6 @@ public final class BugReportCommandService {
             if (sanitizationRevision < 0 || !sessionId.equals(workspace.sessionId())) {
                 throw new IllegalArgumentException("Sanitization request identity is inconsistent");
             }
-        }
-
-        private SanitizationExecutionRequest(
-                ReportSessionId sessionId,
-                long sanitizationRevision,
-                ReportSessionSnapshot session,
-                FileCollectionResult files,
-                ReportWorkspace workspace) {
-            this(
-                    sessionId,
-                    sanitizationRevision,
-                    session,
-                    new CategoryCollectionResult(
-                            switch (files.status()) {
-                                case COMPLETE -> CategoryCollectionResult.Status.COMPLETE;
-                                case PARTIAL -> CategoryCollectionResult.Status.PARTIAL;
-                                case FAILED -> CategoryCollectionResult.Status.FAILED;
-                                case CANCELLED -> CategoryCollectionResult.Status.CANCELLED;
-                            },
-                            files,
-                            new com.cybersammy.bugreport.core.workspace.CategoryGeneratedDiagnosticResult(
-                                    files.providerId(), files.categoryId(), List.of(), 0),
-                            CategoryCollectionFingerprint.filesOnly(
-                                    files.planFingerprint().orElseThrow())),
-                    workspace);
         }
 
         public ReportSessionId sessionId() { return sessionId; }

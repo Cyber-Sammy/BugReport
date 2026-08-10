@@ -66,6 +66,40 @@ public final class CategoryCollectionCoordinator {
                 CategoryCollectionFingerprint.from(reviewed));
     }
 
+    /**
+     * Adapts a genuine file-only coordinator result for compatibility callers.
+     *
+     * <p>The reviewed plan must select no generators and the file result must carry the exact
+     * selected file fingerprint. No caller-provided category status or fingerprint is accepted.
+     */
+    public static CategoryCollectionResult fromFileOnly(
+            ReviewedCollectionPlan plan, FileCollectionResult files) {
+        ReviewedCollectionPlan reviewed = Objects.requireNonNull(plan, "plan");
+        FileCollectionResult result = Objects.requireNonNull(files, "files");
+        if (!reviewed.plan().providerId().equals(result.providerId())
+                || !reviewed.plan().providerVersion().equals(result.providerVersion())
+                || !reviewed.plan().categoryId().equals(result.categoryId())
+                || !reviewed.includedGeneratorIds().isEmpty()
+                || result.planFingerprint()
+                        .filter(com.cybersammy.bugreport.core.source.CollectionPlanFingerprint
+                                .from(reviewed.selectedFilePlan())::equals)
+                        .isEmpty()) {
+            throw new IllegalArgumentException(
+                    "File-only result must match an exact plan without generators");
+        }
+        return new CategoryCollectionResult(
+                switch (result.status()) {
+                    case COMPLETE -> CategoryCollectionResult.Status.COMPLETE;
+                    case PARTIAL -> CategoryCollectionResult.Status.PARTIAL;
+                    case FAILED -> CategoryCollectionResult.Status.FAILED;
+                    case CANCELLED -> CategoryCollectionResult.Status.CANCELLED;
+                },
+                result,
+                new CategoryGeneratedDiagnosticResult(
+                        result.providerId(), result.categoryId(), java.util.List.of(), 0),
+                CategoryCollectionFingerprint.from(reviewed));
+    }
+
     private static long retainedFileBytes(FileCollectionResult files) {
         return files.outcomes().stream()
                 .flatMap(outcome -> outcome.collectedFile().stream())

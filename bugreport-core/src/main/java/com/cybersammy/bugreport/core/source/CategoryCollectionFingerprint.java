@@ -23,12 +23,6 @@ public final class CategoryCollectionFingerprint {
                 List.copyOf(reviewed.includedGeneratorIds()));
     }
 
-    /** Creates the compatibility identity for a file-only coordinator result. */
-    public static CategoryCollectionFingerprint filesOnly(CollectionPlanFingerprint files) {
-        return new CategoryCollectionFingerprint(
-                Objects.requireNonNull(files, "files"), List.of());
-    }
-
     @Override
     public boolean equals(Object other) {
         return other instanceof CategoryCollectionFingerprint fingerprint

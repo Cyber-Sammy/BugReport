@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.core.workspace;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.cybersammy.bugreport.api.BugReportProvider;
 import com.cybersammy.bugreport.api.classification.PrivacyClassification;
@@ -18,6 +19,7 @@ import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification;
 import com.cybersammy.bugreport.api.specification.GeneratorExecutionContext;
+import com.cybersammy.bugreport.api.specification.GeneratedDiagnosticProducer;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
@@ -180,7 +182,48 @@ final class CategoryCollectionCoordinatorTest {
                 cancelled.progress().phase());
     }
 
+    @Test
+    void resultCannotClaimCompleteWhenChildOutcomesFailed() throws Exception {
+        AtomicBoolean invoked = new AtomicBoolean();
+        Fixture fixture = fixture(invoked, (request, sink) -> {
+            invoked.set(true);
+            throw new java.io.IOException("provider failure");
+        });
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                fixture.plan(), Set.of(), Set.of(GENERATOR));
+        CategoryCollectionResult failed = CategoryCollectionCoordinator.collect(
+                fixture.registry(),
+                reviewed,
+                fixture.roots(),
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                new CategoryCollectionRunControl(),
+                command -> false);
+
+        assertEquals(CategoryCollectionResult.Status.FAILED, failed.status());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new CategoryCollectionResult(
+                        CategoryCollectionResult.Status.COMPLETE,
+                        failed.files(),
+                        failed.generated(),
+                        failed.fingerprint()));
+        assertTrue(java.util.Arrays.stream(CategoryCollectionResult.class.getDeclaredConstructors())
+                .noneMatch(constructor -> java.lang.reflect.Modifier.isPublic(
+                        constructor.getModifiers())));
+    }
+
     private Fixture fixture(AtomicBoolean invoked) throws Exception {
+        return fixture(invoked, (request, sink) -> {
+            invoked.set(true);
+            sink.emitText(
+                    GeneratedArtifactId.of("state"),
+                    "Authorization: Bearer secret_token_123456");
+        });
+    }
+
+    private Fixture fixture(AtomicBoolean invoked, GeneratedDiagnosticProducer producer)
+            throws Exception {
         Path game = temporaryDirectory.resolve("game-" + System.nanoTime());
         Files.createDirectories(game.resolve("logs"));
         Files.createDirectories(game.resolve("crash-reports"));
@@ -188,12 +231,7 @@ final class CategoryCollectionCoordinatorTest {
         ApprovedSourceRoots roots = ApprovedSourceRoots.forGameDirectory(game.toAbsolutePath());
         DiagnosticGeneratorSpecification generator = DiagnosticGeneratorSpecification.builder(
                         GENERATOR,
-                        (request, sink) -> {
-                            invoked.set(true);
-                            sink.emitText(
-                                    GeneratedArtifactId.of("state"),
-                                    "Authorization: Bearer secret_token_123456");
-                        })
+                        producer)
                 .labelKey(LocalizationKey.of("example.generator.runtime"))
                 .privacy(PrivacyClassification.PERSONAL)
                 .contentType(DiagnosticContentType.TEXT)

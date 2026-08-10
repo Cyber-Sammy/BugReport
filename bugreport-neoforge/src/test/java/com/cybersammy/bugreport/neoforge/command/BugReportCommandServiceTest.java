@@ -294,14 +294,14 @@ final class BugReportCommandServiceTest {
                         com.cybersammy.bugreport.core.session.ReportSessionId.class,
                         long.class,
                         com.cybersammy.bugreport.core.session.ReportSessionSnapshot.class,
-                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.class,
                         com.cybersammy.bugreport.core.workspace.ReportWorkspace.class);
         sanitizationConstructor.setAccessible(true);
         var syntheticSanitization = sanitizationConstructor.newInstance(
                 sanitization.sessionId(),
                 sanitization.sanitizationRevision(),
                 sanitization.session(),
-                sanitization.files(),
+                sanitization.collection(),
                 sanitization.workspace());
         assertTrue(service.executeSanitization(
                 syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
@@ -450,6 +450,38 @@ final class BugReportCommandServiceTest {
         var workspace = new FileReportWorkspaceStore(
                         gameDirectory.resolve("workspaces").toAbsolutePath())
                 .create(execution.sessionId());
+        var otherReviewed = ReviewedCollectionPlan.of(
+                plan,
+                Set.of(),
+                Set.of(com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("other")));
+        var otherWorkspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("other-workspaces").toAbsolutePath())
+                .create(execution.sessionId());
+        var otherResult =
+                com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator.collect(
+                        registry,
+                        otherReviewed,
+                        roots,
+                        SupportedSide.PHYSICAL_CLIENT,
+                        otherWorkspace,
+                        new com.cybersammy.bugreport.core.workspace.CategoryCollectionRunControl(),
+                        command -> false);
+        var resultConstructor = com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.class
+                .getDeclaredConstructor(
+                        com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.Status.class,
+                        FileCollectionResult.class,
+                        com.cybersammy.bugreport.core.workspace.CategoryGeneratedDiagnosticResult.class,
+                        com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint.class);
+        resultConstructor.setAccessible(true);
+        var syntheticOtherResult = resultConstructor.newInstance(
+                otherResult.status(),
+                otherResult.files(),
+                otherResult.generated(),
+                execution.planFingerprint());
+        assertFalse(service.acceptCollectionResult(execution, syntheticOtherResult, workspace));
+        assertEquals(
+                com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
+                service.form(sessionId).orElseThrow().state());
         var result = com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator.collect(
                 registry,
                 reviewed,
@@ -717,10 +749,33 @@ final class BugReportCommandServiceTest {
                         .callbackTimeout(java.time.Duration.ofSeconds(1))
                         .build())
                 .build();
+        var otherGenerator =
+                com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification
+                        .builder(
+                                com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("other"),
+                                (request, sink) -> sink.emitText(
+                                        com.cybersammy.bugreport.api.identifier.GeneratedArtifactId
+                                                .of("other"),
+                                        "other runtime state"))
+                        .labelKey(LocalizationKey.of("generated_mod.generator.other"))
+                        .privacy(PrivacyClassification.PERSONAL)
+                        .contentType(DiagnosticContentType.TEXT)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .executionContext(com.cybersammy.bugreport.api.specification
+                                .GeneratorExecutionContext.WORKER)
+                        .constraints(com.cybersammy.bugreport.api.constraint.CollectionConstraints
+                                .builder()
+                                .maxGeneratedArtifacts(1)
+                                .maxBytesPerFile(4096)
+                                .maxTotalBytes(4096)
+                                .callbackTimeout(java.time.Duration.ofSeconds(1))
+                                .build())
+                        .build();
         var category = CategorySpecification.builder(
                         CategoryId.of("general"),
                         LocalizationKey.of("generated_mod.category.general"))
                 .useGenerator(generatorId)
+                .useGenerator(otherGenerator.id())
                 .build();
         var specification = ProviderSpecification.builder(
                         ProviderId.parse("generated_mod"),
@@ -728,6 +783,7 @@ final class BugReportCommandServiceTest {
                         LocalizationKey.of("generated_mod.provider"))
                 .supportSide(SupportedSide.PHYSICAL_CLIENT)
                 .addGenerator(generator)
+                .addGenerator(otherGenerator)
                 .addCategory(category)
                 .build();
         BugReportProvider provider = new BugReportProvider() {
