@@ -611,23 +611,24 @@ public final class BugReportCommandService {
 
         synchronized (this) {
             ReportSession session = sessions.get(request.sessionId());
-            if (session == null
-                    || activeSanitizations.get(request.sessionId()) != request
-                    || session.snapshot().state() != ReportSessionState.SANITIZING
-                    || session.snapshot().revision() != request.sanitizationRevision()
-                    || !WorkspaceReviewCoordinator.matches(
+            if (session != null
+                    && activeSanitizations.get(request.sessionId()) == request
+                    && session.snapshot().state() == ReportSessionState.SANITIZING
+                    && session.snapshot().revision() == request.sanitizationRevision()
+                    && WorkspaceReviewCoordinator.matches(
                             evidence, request.collection(), request.workspace())) {
-                return Optional.empty();
+                session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
+                ReportSessionSnapshot review = session.snapshot();
+                activeSanitizations.remove(review.id());
+                sanitizationBatches.put(review.id(), evidence);
+                WorkspaceReviewRequest reviewRequest = new WorkspaceReviewRequest(
+                        review.id(), review.revision(), review, evidence);
+                activeReviews.put(review.id(), reviewRequest);
+                return Optional.of(reviewRequest);
             }
-            session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
-            ReportSessionSnapshot review = session.snapshot();
-            activeSanitizations.remove(review.id());
-            sanitizationBatches.put(review.id(), evidence);
-            WorkspaceReviewRequest reviewRequest = new WorkspaceReviewRequest(
-                    review.id(), review.revision(), review, evidence);
-            activeReviews.put(review.id(), reviewRequest);
-            return Optional.of(reviewRequest);
         }
+        WorkspaceReviewCoordinator.discardReviewCopies(evidence);
+        return Optional.empty();
     }
 
     /** Marks the exact active sanitization generation failed without exposing internal causes. */
@@ -645,6 +646,37 @@ public final class BugReportCommandService {
         session.transitionTo(ReportSessionState.FAILED_SANITIZATION);
         activeSanitizations.remove(snapshot.id());
         return true;
+    }
+
+    /** Resolves one exact review file only for the active service-issued review authority. */
+    public Optional<WorkspaceReviewCoordinator.ReviewArtifactFile> reviewArtifactFile(
+            WorkspaceReviewRequest request,
+            String artifactName,
+            WorkspaceReviewCoordinator.ReviewArtifactVersion version) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(artifactName, "artifactName");
+        Objects.requireNonNull(version, "version");
+        synchronized (this) {
+            ReportSession session = sessions.get(request.sessionId());
+            if (session == null
+                    || activeReviews.get(request.sessionId()) != request
+                    || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                    || session.snapshot().revision() != request.reviewRevision()) {
+                return Optional.empty();
+            }
+        }
+        var resolved = WorkspaceReviewCoordinator.reviewArtifactFile(
+                request.batch(), artifactName, version);
+        synchronized (this) {
+            ReportSession session = sessions.get(request.sessionId());
+            if (session == null
+                    || activeReviews.get(request.sessionId()) != request
+                    || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                    || session.snapshot().revision() != request.reviewRevision()) {
+                return Optional.empty();
+            }
+            return resolved;
+        }
     }
 
     /** Converts UI decision data into package authority for the exact service-issued review. */
@@ -863,6 +895,14 @@ public final class BugReportCommandService {
             return List.of(new Message("bugreport.command.error.unknown_session"));
         }
         ReportSession session = sessions.get(id);
+        WorkspaceReviewCoordinator.SanitizationBatch reviewBatch = sanitizationBatches.get(id);
+        if (reviewBatch != null) {
+            try {
+                WorkspaceReviewCoordinator.discardReviewCopies(reviewBatch);
+            } catch (RuntimeException failure) {
+                return List.of(new Message("bugreport.command.error.review_cleanup_failed"));
+            }
+        }
         if (persistedDraftFiles.contains(id)) {
             try {
                 drafts.delete(id);
@@ -1692,8 +1732,11 @@ public final class BugReportCommandService {
 
         public ReportSessionId sessionId() { return sessionId; }
         public long reviewRevision() { return reviewRevision; }
+        public List<WorkspaceReviewCoordinator.ArtifactReview> artifacts() {
+            return batch.artifacts();
+        }
         ReportSessionSnapshot session() { return session; }
-        public WorkspaceReviewCoordinator.SanitizationBatch batch() { return batch; }
+        WorkspaceReviewCoordinator.SanitizationBatch batch() { return batch; }
     }
 
     /** Untrusted UI decision data; only the service can convert it into package authority. */

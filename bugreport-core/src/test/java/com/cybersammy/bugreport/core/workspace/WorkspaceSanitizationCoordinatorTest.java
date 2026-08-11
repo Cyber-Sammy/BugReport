@@ -135,6 +135,11 @@ final class WorkspaceSanitizationCoordinatorTest {
         String output = Files.readString(workspace.directory().resolve(copied.artifactName()));
         assertEquals("Authorization: <bearer-token>\n", output);
         assertFalse(output.contains("secret_token_123456"));
+        assertEquals(
+                "Authorization: Bearer secret_token_123456\n",
+                Files.readString(sanitized.reviewOriginal().path()));
+        assertEquals(copied.byteCount(), sanitized.reviewOriginal().digest().byteCount());
+        assertEquals(copied.checksum(), sanitized.reviewOriginal().digest().checksum());
         assertTrue(sanitized.result().findings().stream().anyMatch(finding ->
                 finding.action() == com.cybersammy.bugreport.core.sanitization.SanitizationAction.AUTOMATIC_REDACTION));
         assertEquals(output.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, sanitized.source().byteCount());

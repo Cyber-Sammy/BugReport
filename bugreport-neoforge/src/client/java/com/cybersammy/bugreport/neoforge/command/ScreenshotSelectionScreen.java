@@ -46,7 +46,8 @@ public final class ScreenshotSelectionScreen extends Screen {
     private static final int MAX_DIRECTORY_ENTRIES = 128;
     private static final int MAX_INPUT_BYTES = 32 * 1024 * 1024;
     private static final int COPY_BUFFER_BYTES = 64 * 1024;
-    private static final int PAGE_SIZE = 5;
+    private static final int MAX_SCREENSHOTS_PER_PAGE = 5;
+    private static final int SCREENSHOT_ROW_HEIGHT = 40;
     private static final long PREVIEW_TIMEOUT_SECONDS = 5;
     private static final DateTimeFormatter CAPTURE_NAME = DateTimeFormatter
             .ofPattern("uuuu-MM-dd_HH.mm.ss.SSS", Locale.ROOT)
@@ -101,20 +102,23 @@ public final class ScreenshotSelectionScreen extends Screen {
     @Override
     protected void rebuildWidgets() {
         clearWidgets();
-        int first = page * PAGE_SIZE;
-        int last = Math.min(first + PAGE_SIZE, candidates.size());
+        int pageSize = screenshotsPerPage();
+        int first = page * pageSize;
+        int last = Math.min(first + pageSize, candidates.size());
         for (int index = first; index < last; index++) {
             Candidate candidate = candidates.get(index);
             boolean included = selected.containsKey(candidate.path());
             Button button = Button.builder(
-                            Component.literal((included ? "[x] " : "[ ] ")
-                                    + candidate.path().value()
-                                    + "  "
-                                    + candidate.width()
-                                    + "x"
-                                    + candidate.height()),
+                            Component.translatable(
+                                    included
+                                            ? "bugreport.screen.screenshot.selected_state"
+                                            : "bugreport.screen.screenshot.excluded_state"),
                             ignored -> toggle(candidate))
-                    .bounds(width / 2 - 196, 72 + (index - first) * 24, 210, 20)
+                    .bounds(
+                            width / 2 - 196,
+                            86 + (index - first) * SCREENSHOT_ROW_HEIGHT,
+                            210,
+                            20)
                     .build();
             button.active = !completing && !candidate.path().equals(previewingPath);
             addRenderableWidget(button);
@@ -130,7 +134,7 @@ public final class ScreenshotSelectionScreen extends Screen {
                         Component.translatable("bugreport.screen.form.next"), ignored -> changePage(1))
                 .bounds(width / 2 + 80, height - 82, 70, 20)
                 .build();
-        next.active = (page + 1) * PAGE_SIZE < candidates.size() && !completing;
+        next.active = (page + 1) * pageSize < candidates.size() && !completing;
         addRenderableWidget(next);
 
         Button capture = Button.builder(
@@ -174,7 +178,8 @@ public final class ScreenshotSelectionScreen extends Screen {
                         ? Component.translatable("bugreport.screen.screenshot.empty")
                         : Component.translatable(
                                 "bugreport.screen.screenshot.available", result.size());
-                page = Math.min(page, Math.max(0, (result.size() - 1) / PAGE_SIZE));
+                int pageSize = screenshotsPerPage();
+                page = Math.min(page, Math.max(0, (result.size() - 1) / pageSize));
                 rebuildWidgets();
             });
         });
@@ -439,6 +444,11 @@ public final class ScreenshotSelectionScreen extends Screen {
         rebuildWidgets();
     }
 
+    private int screenshotsPerPage() {
+        int rowsAboveNavigation = Math.floorDiv(height - 200, SCREENSHOT_ROW_HEIGHT) + 1;
+        return Math.max(1, Math.min(MAX_SCREENSHOTS_PER_PAGE, rowsAboveNavigation));
+    }
+
     private void capture() {
         commands.beginScreenshotCapture(sessionId.toString(), reviewed).ifPresentOrElse(
                 this::capture,
@@ -524,6 +534,22 @@ public final class ScreenshotSelectionScreen extends Screen {
                 width / 2,
                 56,
                 0xFFCC66);
+        int pageSize = screenshotsPerPage();
+        int first = page * pageSize;
+        int last = Math.min(first + pageSize, candidates.size());
+        for (int index = first; index < last; index++) {
+            Candidate candidate = candidates.get(index);
+            graphics.drawString(
+                    font,
+                    Component.literal(candidate.path().value()
+                            + "  "
+                            + candidate.width()
+                            + "x"
+                            + candidate.height()),
+                    width / 2 - 196,
+                    72 + (index - first) * SCREENSHOT_ROW_HEIGHT,
+                    0xE0E0E0);
+        }
         if (previewTexture != null && previewWidth > 0 && previewHeight > 0) {
             int maximumWidth = 170;
             int maximumHeight = 118;

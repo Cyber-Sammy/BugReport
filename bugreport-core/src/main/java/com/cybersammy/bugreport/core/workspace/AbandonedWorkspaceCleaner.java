@@ -24,6 +24,9 @@ final class AbandonedWorkspaceCleaner {
     private static final Pattern OWNED_TEMPORARY = Pattern.compile(
             "\\.(?:source-[0-9a-f]{64}\\.(?:data|png)|generated-[0-9a-f]{64}\\.(?:txt|json))"
                     + "\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.part");
+    private static final Pattern OWNED_REVIEW_COPY = Pattern.compile(
+            "\\.review-original-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-"
+                    + "(?:source-[0-9a-f]{64}\\.(?:data|png)|generated-[0-9a-f]{64}\\.(?:txt|json))");
 
     private final Path root;
     private final WorkspaceFileOperations files;
@@ -108,7 +111,8 @@ final class AbandonedWorkspaceCleaner {
                     continue;
                 }
                 if (!OWNED_ARTIFACT.matcher(name).matches()
-                        && !OWNED_TEMPORARY.matcher(name).matches()) {
+                        && !OWNED_TEMPORARY.matcher(name).matches()
+                        && !OWNED_REVIEW_COPY.matcher(name).matches()) {
                     return outcome(session, AbandonedWorkspaceCleanupCode.UNEXPECTED_ENTRY);
                 }
                 artifacts.add(inspectFile(entry, rootObservation.store()));

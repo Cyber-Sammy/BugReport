@@ -26,6 +26,9 @@ import net.minecraft.network.chat.Component;
 
 /** Displays a bounded source plan after a trusted form submission is accepted. */
 final class CollectionPlanScreen extends Screen {
+    private static final int MAX_CHOICES_PER_PAGE = 5;
+    private static final int CHOICE_ROW_HEIGHT = 40;
+
     private final BugReportCommandService commands;
     private final BugReportCommandService.CollectionPlanRequest request;
     private final CategoryFormScreen formScreen;
@@ -125,7 +128,7 @@ final class CollectionPlanScreen extends Screen {
     private void addSourceControls() {
         List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
         var generators = collectionPlan.generators();
-        int pageSize = 5;
+        int pageSize = choicesPerPage();
         int choiceCount = sources.size() + generators.size();
         int pageCount = Math.max(1, (choiceCount + pageSize - 1) / pageSize);
         sourcePage = Math.min(sourcePage, pageCount - 1);
@@ -140,10 +143,13 @@ final class CollectionPlanScreen extends Screen {
                                 Component.translatable(
                                         included
                                                 ? "bugreport.screen.plan.selected"
-                                                : "bugreport.screen.plan.not_selected",
-                                        Component.translatable(generator.labelKey().value())),
+                                                : "bugreport.screen.plan.not_selected"),
                                 ignored -> toggleGenerator(generatorId))
-                        .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20)
+                        .bounds(
+                                width / 2 - 140,
+                                76 + (index - first) * CHOICE_ROW_HEIGHT,
+                                280,
+                                20)
                         .build();
                 toggle.active = collectionPlan.isAvailable(generator) && !selectionAccepted;
                 addRenderableWidget(toggle);
@@ -157,10 +163,14 @@ final class CollectionPlanScreen extends Screen {
                             Component.translatable(
                                     included
                                             ? "bugreport.screen.plan.selected"
-                                            : "bugreport.screen.plan.not_selected",
-                                    Component.translatable(source.selection().source().labelKey().value())),
+                                            : "bugreport.screen.plan.not_selected"),
                             ignored -> toggleSource(sourceId))
-                    .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20).build();
+                    .bounds(
+                            width / 2 - 140,
+                            76 + (index - first) * CHOICE_ROW_HEIGHT,
+                            280,
+                            20)
+                    .build();
             toggle.active = selectable && !selectionAccepted;
             addRenderableWidget(toggle);
         }
@@ -176,6 +186,11 @@ final class CollectionPlanScreen extends Screen {
             next.active = sourcePage + 1 < pageCount;
             addRenderableWidget(next);
         }
+    }
+
+    private int choicesPerPage() {
+        int rowsAboveNavigation = Math.floorDiv(height - 190, CHOICE_ROW_HEIGHT) + 1;
+        return Math.max(1, Math.min(MAX_CHOICES_PER_PAGE, rowsAboveNavigation));
     }
 
     private void toggleSource(com.cybersammy.bugreport.api.identifier.DiagnosticSourceId sourceId) {
@@ -304,8 +319,8 @@ final class CollectionPlanScreen extends Screen {
     private void renderPlan(GuiGraphics graphics) {
         List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
         var generators = collectionPlan.generators();
-        int y = 84;
-        int pageSize = 5;
+        int y = 62;
+        int pageSize = choicesPerPage();
         int first = sourcePage * pageSize;
         int last = Math.min(first + pageSize, sources.size() + generators.size());
         for (int index = first; index < last; index++) {
@@ -318,7 +333,7 @@ final class CollectionPlanScreen extends Screen {
                                 ? Component.translatable("bugreport.screen.plan.status.generated_later")
                                 : Component.translatable("bugreport.screen.plan.status.unavailable", "SIDE"));
                 graphics.drawString(font, row, width / 2 - 140, y, 0xE0E0E0);
-                y += 32;
+                y += CHOICE_ROW_HEIGHT;
                 continue;
             }
             SourceSelectionPlan selection = sources.get(index).selection();
@@ -329,7 +344,7 @@ final class CollectionPlanScreen extends Screen {
                     selection.estimate().selectedFileCount(),
                     selection.estimate().knownBytes());
             graphics.drawString(font, row, width / 2 - 140, y, 0xE0E0E0);
-            y += 32;
+            y += CHOICE_ROW_HEIGHT;
         }
         if (!plan.conflicts().isEmpty()) {
             graphics.drawString(font,

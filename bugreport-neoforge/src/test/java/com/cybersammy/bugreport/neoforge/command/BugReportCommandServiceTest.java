@@ -391,6 +391,31 @@ final class BugReportCommandServiceTest {
                 review.reviewRevision(),
                 review.session(),
                 review.batch());
+        String reviewArtifact = review.batch().artifacts().getFirst().artifactName();
+        var originalReviewFile = service.reviewArtifactFile(
+                        review,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.ORIGINAL)
+                .orElseThrow();
+        var sanitizedReviewFile = service.reviewArtifactFile(
+                        review,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.SANITIZED)
+                .orElseThrow();
+        assertEquals(
+                "Authorization: Bearer secret_token_123456\n",
+                Files.readString(originalReviewFile.path()));
+        assertEquals(
+                "Authorization: <bearer-token>\n",
+                Files.readString(sanitizedReviewFile.path()));
+        assertTrue(service.reviewArtifactFile(
+                        syntheticReview,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.ORIGINAL)
+                .isEmpty());
         assertTrue(service.confirmReview(
                 syntheticReview,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
@@ -398,6 +423,7 @@ final class BugReportCommandServiceTest {
                 review,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of()))
                 .orElseThrow();
+        assertFalse(Files.exists(originalReviewFile.path()));
 
         assertSame(prepared, service.preparedSnapshot(sessionId).orElseThrow());
         String artifactName = prepared.artifacts().getFirst()
