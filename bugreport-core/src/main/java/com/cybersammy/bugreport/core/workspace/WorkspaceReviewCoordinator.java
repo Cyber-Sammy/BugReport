@@ -14,10 +14,13 @@ import com.cybersammy.bugreport.core.sanitization.SanitizationResult;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.core.session.ReportSessionSnapshot;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -259,6 +262,122 @@ public final class WorkspaceReviewCoordinator {
                 && trusted.sessionId.equals(workspace.sessionId());
     }
 
+    /**
+     * Resolves one exact private review file after revalidating its checksum and workspace
+     * ownership. The path is intended only for an explicit first-party user open action.
+     */
+    public static Optional<ReviewArtifactFile> reviewArtifactFile(
+            SanitizationBatch batch, String artifactName, ReviewArtifactVersion version) {
+        SanitizationBatch trusted = Objects.requireNonNull(batch, "batch");
+        String name = Objects.requireNonNull(artifactName, "artifactName");
+        ReviewArtifactVersion requested = Objects.requireNonNull(version, "version");
+        ArtifactReview review = trusted.reviews.stream()
+                .filter(value -> value.artifactName().equals(name))
+                .findFirst()
+                .orElse(null);
+        if (review == null
+                || (requested == ReviewArtifactVersion.SANITIZED
+                        && review.status() != ArtifactReviewStatus.SANITIZED)) {
+            return Optional.empty();
+        }
+
+        WorkspaceSanitizationCoordinator.ReviewOriginal retained = reviewOriginal(trusted, name);
+        Path path;
+        WorkspaceSanitizationCoordinator.ArtifactDigest expected;
+        if (requested == ReviewArtifactVersion.ORIGINAL && retained != null) {
+            path = retained.path();
+            expected = retained.digest();
+        } else {
+            path = trusted.workspace.directory().resolve(name).normalize();
+            expected = requested == ReviewArtifactVersion.ORIGINAL
+                    ? originalDigest(trusted, name)
+                    : finalDigest(trusted, name);
+        }
+        if (expected == null || !trusted.workspace.directory().equals(path.getParent())) {
+            return Optional.empty();
+        }
+        try {
+            trusted.workspace.requireCurrentOwnership();
+            trusted.workspace.files().verifyPrivateFile(path);
+            var observed = WorkspaceSanitizationCoordinator.digest(
+                    trusted.workspace,
+                    path,
+                    Math.max(1L, expected.byteCount()));
+            if (!expected.equals(observed)) {
+                return Optional.empty();
+            }
+            return Optional.of(new ReviewArtifactFile(path, review.contentType()));
+        } catch (IOException | RuntimeException failure) {
+            return Optional.empty();
+        }
+    }
+
+    /** Deletes sensitive retained originals before sealing or abandoning active review authority. */
+    public static void discardReviewCopies(SanitizationBatch batch) {
+        SanitizationBatch trusted = Objects.requireNonNull(batch, "batch");
+        List<WorkspaceSanitizationCoordinator.ReviewOriginal> originals = new ArrayList<>();
+        trusted.evidence.forEach(value -> originals.add(value.reviewOriginal()));
+        trusted.generatedEvidence.forEach(value -> originals.add(value.reviewOriginal()));
+        WorkspaceSanitizationCoordinator.discardReviewOriginals(
+                trusted.workspace, originals);
+    }
+
+    private static WorkspaceSanitizationCoordinator.ReviewOriginal reviewOriginal(
+            SanitizationBatch batch, String artifactName) {
+        for (var value : batch.evidence) {
+            if (value.source().artifactName().equals(artifactName)) {
+                return value.reviewOriginal();
+            }
+        }
+        for (var value : batch.generatedEvidence) {
+            if (value.artifact().artifactName().equals(artifactName)) {
+                return value.reviewOriginal();
+            }
+        }
+        return null;
+    }
+
+    private static WorkspaceSanitizationCoordinator.ArtifactDigest originalDigest(
+            SanitizationBatch batch, String artifactName) {
+        for (var outcome : batch.files.outcomes()) {
+            var source = outcome.collectedFile().orElse(null);
+            if (source != null && source.artifactName().equals(artifactName)) {
+                return new WorkspaceSanitizationCoordinator.ArtifactDigest(
+                        source.byteCount(), source.checksum());
+            }
+        }
+        for (var outcome : batch.generated.outcomes()) {
+            var result = outcome.result().orElse(null);
+            if (result == null) {
+                continue;
+            }
+            for (var artifact : result.artifacts()) {
+                if (artifact.artifactName().equals(artifactName)) {
+                    return new WorkspaceSanitizationCoordinator.ArtifactDigest(
+                            artifact.byteCount(), artifact.checksum());
+                }
+            }
+        }
+        return null;
+    }
+
+    private static WorkspaceSanitizationCoordinator.ArtifactDigest finalDigest(
+            SanitizationBatch batch, String artifactName) {
+        for (var value : batch.evidence) {
+            if (value.source().artifactName().equals(artifactName)) {
+                return new WorkspaceSanitizationCoordinator.ArtifactDigest(
+                        value.source().byteCount(), value.source().checksum());
+            }
+        }
+        for (var value : batch.generatedEvidence) {
+            if (value.artifact().artifactName().equals(artifactName)) {
+                return new WorkspaceSanitizationCoordinator.ArtifactDigest(
+                        value.artifact().byteCount(), value.artifact().checksum());
+            }
+        }
+        return originalDigest(batch, artifactName);
+    }
+
     /** Reports whether a batch belongs to the exact combined collection boundary. */
     public static boolean matches(
             SanitizationBatch batch,
@@ -312,6 +431,7 @@ public final class WorkspaceReviewCoordinator {
                     "Included artifacts require exact successful and explicit review evidence");
         }
 
+        discardReviewCopies(trusted);
         ReviewedWorkspaceSnapshot reviewed = ReviewedWorkspaceSnapshotFactory.create(
                 session, trusted.workspace, trusted.finalFiles, trusted.finalGenerated, included);
         List<WorkspaceSanitizationCoordinator.SanitizedSource> selectedEvidence = trusted.evidence
@@ -542,5 +662,17 @@ public final class WorkspaceReviewCoordinator {
         SANITIZED,
         BINARY_REVIEW_REQUIRED,
         FAILED
+    }
+
+    public enum ReviewArtifactVersion {
+        ORIGINAL,
+        SANITIZED
+    }
+
+    public record ReviewArtifactFile(Path path, DiagnosticContentType contentType) {
+        public ReviewArtifactFile {
+            path = Objects.requireNonNull(path, "path").toAbsolutePath().normalize();
+            Objects.requireNonNull(contentType, "contentType");
+        }
     }
 }

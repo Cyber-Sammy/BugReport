@@ -11,6 +11,7 @@ import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.SourceSelectionPlan;
 import com.cybersammy.bugreport.core.source.UnavailableSourcePlan;
 import com.cybersammy.bugreport.core.source.UserSelectionSourcePlan;
+import com.cybersammy.bugreport.neoforge.command.ScreenshotSelectionScreen;
 import com.cybersammy.bugreport.neoforge.BugReportMod;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.nio.file.Path;
@@ -25,6 +26,9 @@ import net.minecraft.network.chat.Component;
 
 /** Displays a bounded source plan after a trusted form submission is accepted. */
 final class CollectionPlanScreen extends Screen {
+    private static final int MAX_CHOICES_PER_PAGE = 5;
+    private static final int CHOICE_ROW_HEIGHT = 40;
+
     private final BugReportCommandService commands;
     private final BugReportCommandService.CollectionPlanRequest request;
     private final CategoryFormScreen formScreen;
@@ -35,7 +39,9 @@ final class CollectionPlanScreen extends Screen {
     private Set<com.cybersammy.bugreport.api.identifier.DiagnosticSourceId> includedSourceIds = Set.of();
     private Set<com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId> includedGeneratorIds = Set.of();
     private boolean planning = true;
+    private boolean planningAuthorityReleased;
     private boolean selectionAccepted;
+    private boolean emptySelectionConfirmationPending;
     private int sourcePage;
     private Component status = Component.translatable("bugreport.screen.plan.planning");
 
@@ -69,9 +75,13 @@ final class CollectionPlanScreen extends Screen {
             return;
         }
         addSourceControls();
-        Button accept = Button.builder(Component.translatable("bugreport.screen.plan.accept"),
+        Component acceptLabel = emptySelectionConfirmationPending
+                ? Component.translatable("bugreport.screen.plan.continue_without")
+                : Component.translatable(
+                        "bugreport.screen.plan.accept", selectedChoiceCount());
+        Button accept = Button.builder(acceptLabel,
                         ignored -> acceptSelection())
-                .bounds(width / 2 - 58, height - 56, 116, 20).build();
+                .bounds(width / 2 - 90, height - 56, 180, 20).build();
         accept.active = !selectionAccepted;
         addRenderableWidget(accept);
     }
@@ -85,8 +95,8 @@ final class CollectionPlanScreen extends Screen {
                         SupportedSide.PHYSICAL_CLIENT).plan(request.providerId(), request.categoryId());
                 Minecraft.getInstance().execute(() -> presentPlan(planned));
             } catch (RuntimeException exception) {
-                commands.returnToForm(request.sessionId().toString());
-                Minecraft.getInstance().execute(this::presentPlanningFailure);
+                boolean rolledBack = commands.returnToForm(request);
+                Minecraft.getInstance().execute(() -> presentPlanningFailure(rolledBack));
             }
         });
     }
@@ -103,15 +113,16 @@ final class CollectionPlanScreen extends Screen {
         planning = false;
         status = Component.translatable(
                 "bugreport.screen.plan.ready",
-                planned.sources().files().size(),
+                availableChoiceCount(planned),
                 knownBytes(planned.sources()));
         rebuildPlanWidgets();
     }
 
-    private void presentPlanningFailure() {
+    private void presentPlanningFailure(boolean rolledBack) {
         if (!visible) {
             return;
         }
+        planningAuthorityReleased = rolledBack;
         planning = false;
         status = Component.translatable("bugreport.screen.plan.failed");
     }
@@ -119,7 +130,7 @@ final class CollectionPlanScreen extends Screen {
     private void addSourceControls() {
         List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
         var generators = collectionPlan.generators();
-        int pageSize = 5;
+        int pageSize = choicesPerPage();
         int choiceCount = sources.size() + generators.size();
         int pageCount = Math.max(1, (choiceCount + pageSize - 1) / pageSize);
         sourcePage = Math.min(sourcePage, pageCount - 1);
@@ -133,11 +144,14 @@ final class CollectionPlanScreen extends Screen {
                 Button toggle = Button.builder(
                                 Component.translatable(
                                         included
-                                                ? "bugreport.screen.plan.exclude"
-                                                : "bugreport.screen.plan.include",
-                                        Component.translatable(generator.labelKey().value())),
+                                                ? "bugreport.screen.plan.selected"
+                                                : "bugreport.screen.plan.not_selected"),
                                 ignored -> toggleGenerator(generatorId))
-                        .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20)
+                        .bounds(
+                                width / 2 - 140,
+                                76 + (index - first) * CHOICE_ROW_HEIGHT,
+                                280,
+                                20)
                         .build();
                 toggle.active = collectionPlan.isAvailable(generator) && !selectionAccepted;
                 addRenderableWidget(toggle);
@@ -150,11 +164,15 @@ final class CollectionPlanScreen extends Screen {
             Button toggle = Button.builder(
                             Component.translatable(
                                     included
-                                            ? "bugreport.screen.plan.exclude"
-                                            : "bugreport.screen.plan.include",
-                                    Component.translatable(source.selection().source().labelKey().value())),
+                                            ? "bugreport.screen.plan.selected"
+                                            : "bugreport.screen.plan.not_selected"),
                             ignored -> toggleSource(sourceId))
-                    .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20).build();
+                    .bounds(
+                            width / 2 - 140,
+                            76 + (index - first) * CHOICE_ROW_HEIGHT,
+                            280,
+                            20)
+                    .build();
             toggle.active = selectable && !selectionAccepted;
             addRenderableWidget(toggle);
         }
@@ -172,6 +190,11 @@ final class CollectionPlanScreen extends Screen {
         }
     }
 
+    private int choicesPerPage() {
+        int rowsAboveNavigation = Math.floorDiv(height - 190, CHOICE_ROW_HEIGHT) + 1;
+        return Math.max(1, Math.min(MAX_CHOICES_PER_PAGE, rowsAboveNavigation));
+    }
+
     private void toggleSource(com.cybersammy.bugreport.api.identifier.DiagnosticSourceId sourceId) {
         LinkedHashSet<com.cybersammy.bugreport.api.identifier.DiagnosticSourceId> updated =
                 new LinkedHashSet<>(includedSourceIds);
@@ -179,6 +202,7 @@ final class CollectionPlanScreen extends Screen {
             updated.remove(sourceId);
         }
         includedSourceIds = updated;
+        selectionChanged();
         rebuildPlanWidgets();
     }
 
@@ -190,6 +214,7 @@ final class CollectionPlanScreen extends Screen {
             updated.remove(generatorId);
         }
         includedGeneratorIds = updated;
+        selectionChanged();
         rebuildPlanWidgets();
     }
 
@@ -199,10 +224,58 @@ final class CollectionPlanScreen extends Screen {
     }
 
     private void acceptSelection() {
+        if (selectedChoiceCount() == 0 && !emptySelectionConfirmationPending) {
+            emptySelectionConfirmationPending = true;
+            status = Component.translatable("bugreport.screen.plan.empty_warning");
+            rebuildPlanWidgets();
+            return;
+        }
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
                 collectionPlan, includedSourceIds, includedGeneratorIds);
+        if (reviewed.includedSources().stream()
+                .anyMatch(source -> source.selection() instanceof UserSelectionSourcePlan)) {
+            if (!commands.acceptCollectionPlan(request, reviewed)) {
+                status = Component.translatable("bugreport.screen.plan.failed");
+                return;
+            }
+            minecraft.setScreen(new ScreenshotSelectionScreen(
+                    commands,
+                    this,
+                    request.sessionId(),
+                    reviewed,
+                    execution -> {
+                        selectionAccepted = true;
+                        minecraft.setScreen(new CollectionProgressScreen(commands, execution));
+                    }));
+            return;
+        }
+        completeSelection(reviewed);
+    }
+
+    private void selectionChanged() {
+        emptySelectionConfirmationPending = false;
+        status = Component.translatable(
+                "bugreport.screen.plan.selection", selectedChoiceCount());
+    }
+
+    private int selectedChoiceCount() {
+        return Math.addExact(includedSourceIds.size(), includedGeneratorIds.size());
+    }
+
+    private static int availableChoiceCount(CategoryCollectionPlan planned) {
+        int sources = (int) planned.sources().sources().stream()
+                .filter(source -> !(source.selection() instanceof UnavailableSourcePlan))
+                .count();
+        int generators = (int) planned.generators().stream()
+                .filter(planned::isAvailable)
+                .count();
+        return Math.addExact(sources, generators);
+    }
+
+    private void completeSelection(ReviewedCollectionPlan reviewed) {
         if (!commands.acceptCollectionPlan(request, reviewed)) {
             status = Component.translatable("bugreport.screen.plan.failed");
+            minecraft.setScreen(this);
             return;
         }
         selectionAccepted = true;
@@ -210,13 +283,19 @@ final class CollectionPlanScreen extends Screen {
                 execution -> minecraft.setScreen(new CollectionProgressScreen(commands, execution)),
                 () -> {
                     status = Component.translatable("bugreport.screen.plan.failed");
+                    minecraft.setScreen(this);
                     rebuildPlanWidgets();
                 });
     }
 
+
     private void returnToForm() {
+        if (!planningAuthorityReleased && !commands.returnToForm(request)) {
+            status = Component.translatable("bugreport.screen.plan.failed");
+            rebuildPlanWidgets();
+            return;
+        }
         visible = false;
-        commands.returnToForm(request.sessionId().toString());
         formScreen.requireFreshDraftPersistence();
         minecraft.setScreen(formScreen);
     }
@@ -234,21 +313,20 @@ final class CollectionPlanScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 44,
                 plan == null ? 0xFFCC66 : 0x60FF60);
         if (plan != null) {
             renderPlan(graphics);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     private void renderPlan(GuiGraphics graphics) {
         List<com.cybersammy.bugreport.core.source.CoordinatedSourcePlan> sources = plan.sources();
         var generators = collectionPlan.generators();
-        int y = 84;
-        int pageSize = 5;
+        int y = 62;
+        int pageSize = choicesPerPage();
         int first = sourcePage * pageSize;
         int last = Math.min(first + pageSize, sources.size() + generators.size());
         for (int index = first; index < last; index++) {
@@ -261,7 +339,7 @@ final class CollectionPlanScreen extends Screen {
                                 ? Component.translatable("bugreport.screen.plan.status.generated_later")
                                 : Component.translatable("bugreport.screen.plan.status.unavailable", "SIDE"));
                 graphics.drawString(font, row, width / 2 - 140, y, 0xE0E0E0);
-                y += 32;
+                y += CHOICE_ROW_HEIGHT;
                 continue;
             }
             SourceSelectionPlan selection = sources.get(index).selection();
@@ -272,7 +350,7 @@ final class CollectionPlanScreen extends Screen {
                     selection.estimate().selectedFileCount(),
                     selection.estimate().knownBytes());
             graphics.drawString(font, row, width / 2 - 140, y, 0xE0E0E0);
-            y += 32;
+            y += CHOICE_ROW_HEIGHT;
         }
         if (!plan.conflicts().isEmpty()) {
             graphics.drawString(font,

@@ -11,6 +11,7 @@ import com.cybersammy.bugreport.api.classification.SupportedSide;
 import com.cybersammy.bugreport.api.constraint.CollectionConstraints;
 import com.cybersammy.bugreport.api.identifier.CategoryId;
 import com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId;
+import com.cybersammy.bugreport.api.identifier.DiagnosticSourceId;
 import com.cybersammy.bugreport.api.identifier.GeneratedArtifactId;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
@@ -18,9 +19,12 @@ import com.cybersammy.bugreport.api.specification.CancellationSignal;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.DiagnosticGeneratorSpecification;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceSpecification;
 import com.cybersammy.bugreport.api.specification.GeneratorExecutionContext;
 import com.cybersammy.bugreport.api.specification.GeneratedDiagnosticProducer;
 import com.cybersammy.bugreport.api.specification.ProviderSpecification;
+import com.cybersammy.bugreport.api.specification.RelativePath;
+import com.cybersammy.bugreport.api.specification.ReportQualityRole;
 import com.cybersammy.bugreport.api.version.ProviderVersion;
 import com.cybersammy.bugreport.core.registry.DiscoveredProvider;
 import com.cybersammy.bugreport.core.registry.ProviderRegistry;
@@ -34,13 +38,20 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategoryCollectionPlanner;
 import com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,6 +60,7 @@ final class CategoryCollectionCoordinatorTest {
     private static final ProviderVersion VERSION = ProviderVersion.parse("1.0.0");
     private static final CategoryId CATEGORY = CategoryId.of("general");
     private static final DiagnosticGeneratorId GENERATOR = DiagnosticGeneratorId.of("runtime");
+    private static final DiagnosticSourceId SCREENSHOT = DiagnosticSourceId.of("screenshot");
 
     @TempDir Path temporaryDirectory;
 
@@ -213,6 +225,155 @@ final class CategoryCollectionCoordinatorTest {
                         constructor.getModifiers())));
     }
 
+    @Test
+    void selectedJpegIsMetadataStrippedPublishedAsPngAndBoundToFingerprint() throws Exception {
+        ScreenshotFixture fixture = screenshotFixture();
+        Path selected = fixture.screenshots().resolve("external-image.jpg");
+        BufferedImage original = new BufferedImage(24, 12, BufferedImage.TYPE_INT_RGB);
+        original.setRGB(3, 4, 0x00AA44);
+        assertTrue(ImageIO.write(original, "jpeg", selected.toFile()));
+
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                fixture.plan(), Set.of(SCREENSHOT), Set.of());
+        ScreenshotCollectionRequest screenshots = ScreenshotCollectionRequest.from(
+                reviewed, List.of(observe(selected)));
+        CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
+                fixture.registry(),
+                reviewed,
+                screenshots,
+                fixture.roots(),
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                new CategoryCollectionRunControl(),
+                command -> false,
+                fixture.screenshots());
+
+        assertEquals(CategoryCollectionResult.Status.COMPLETE, result.status());
+        CollectedSourceFile collected = result.files().outcomes().getFirst()
+                .collectedFile().orElseThrow();
+        assertTrue(collected.artifactName().endsWith(".png"));
+        byte[] bytes = Files.readAllBytes(fixture.workspace().directory().resolve(collected.artifactName()));
+        assertEquals((byte) 0x89, bytes[0]);
+        assertEquals("PNG", new String(bytes, 1, 3, java.nio.charset.StandardCharsets.US_ASCII));
+        assertEquals(24, ImageIO.read(new java.io.ByteArrayInputStream(bytes)).getWidth());
+        assertEquals(CategoryCollectionFingerprint.from(reviewed, screenshots), result.fingerprint());
+
+        ReportSession session = new ReportSessionFactory(fixture.registry())
+                .create(fixture.workspace().sessionId(), PROVIDER);
+        session.selectCategory(CATEGORY);
+        session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
+        session.transitionTo(ReportSessionState.COLLECTING);
+        session.transitionTo(ReportSessionState.SANITIZING);
+        var batch = WorkspaceReviewCoordinator.sanitizeProduct(
+                session.snapshot(),
+                result,
+                fixture.workspace(),
+                "C:/Users/example",
+                "example",
+                SanitizationCaseSensitivity.INSENSITIVE,
+                CancellationSignal.neverCancelled());
+        assertEquals(1, batch.artifacts().size());
+        assertTrue(batch.artifacts().getFirst().explicitReviewRequired());
+        session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
+        var prepared = WorkspaceReviewCoordinator.prepare(
+                session.snapshot(),
+                batch,
+                Set.of(collected.artifactName()),
+                Set.of(collected.artifactName()));
+        assertEquals(
+                collected.checksum(),
+                prepared.snapshot().artifacts().getFirst().artifact().checksum());
+    }
+
+    @Test
+    void unsupportedSelectedImageFailsWithoutPublishingArtifact() throws Exception {
+        ScreenshotFixture fixture = screenshotFixture();
+        Files.writeString(fixture.screenshots().resolve("fake.png"), "not an image");
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                fixture.plan(), Set.of(SCREENSHOT), Set.of());
+        ScreenshotCollectionRequest screenshots = ScreenshotCollectionRequest.from(
+                reviewed, List.of(observe(fixture.screenshots().resolve("fake.png"))));
+
+        CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
+                fixture.registry(),
+                reviewed,
+                screenshots,
+                fixture.roots(),
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                new CategoryCollectionRunControl(),
+                command -> false,
+                fixture.screenshots());
+
+        assertEquals(CategoryCollectionResult.Status.FAILED, result.status());
+        assertEquals(
+                SourceCopyCode.UNSUPPORTED_IMAGE,
+                result.files().outcomes().getFirst().failureCode().orElseThrow());
+        try (var children = Files.list(fixture.workspace().directory())) {
+            assertEquals(1, children.count());
+        }
+    }
+
+    @Test
+    void replacementAfterSelectionIsRejectedBeforeWorkspacePublication() throws Exception {
+        ScreenshotFixture fixture = screenshotFixture();
+        Path selected = fixture.screenshots().resolve("selected.png");
+        BufferedImage first = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        first.setRGB(1, 1, 0xFF00AA44);
+        assertTrue(ImageIO.write(first, "png", selected.toFile()));
+        ScreenshotCollectionRequest.SelectedImage observation = observe(selected);
+
+        byte[] original = Files.readAllBytes(selected);
+        FileTime selectedTime = Files.getLastModifiedTime(selected);
+        byte[] replaced = null;
+        for (int color = 1; color <= 4096 && replaced == null; color++) {
+            BufferedImage replacement = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            replacement.setRGB(1, 1, 0xFF000000 | color);
+            ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+            assertTrue(ImageIO.write(replacement, "png", encoded));
+            byte[] candidate = encoded.toByteArray();
+            if (candidate.length == original.length
+                    && !java.util.Arrays.equals(candidate, original)) {
+                replaced = candidate;
+            }
+        }
+        assertTrue(replaced != null);
+        Files.write(selected, replaced);
+        Files.setLastModifiedTime(selected, selectedTime);
+
+        ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
+                fixture.plan(), Set.of(SCREENSHOT), Set.of());
+        ScreenshotCollectionRequest screenshots =
+                ScreenshotCollectionRequest.from(reviewed, List.of(observation));
+        CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
+                fixture.registry(),
+                reviewed,
+                screenshots,
+                fixture.roots(),
+                SupportedSide.PHYSICAL_CLIENT,
+                fixture.workspace(),
+                new CategoryCollectionRunControl(),
+                command -> false,
+                fixture.screenshots());
+
+        assertEquals(CategoryCollectionResult.Status.FAILED, result.status());
+        assertEquals(
+                SourceCopyCode.SOURCE_CHANGED,
+                result.files().outcomes().getFirst().failureCode().orElseThrow());
+        try (var children = Files.list(fixture.workspace().directory())) {
+            assertEquals(1, children.count());
+        }
+    }
+
+    private static ScreenshotCollectionRequest.SelectedImage observe(Path path) throws Exception {
+        byte[] bytes = Files.readAllBytes(path);
+        return new ScreenshotCollectionRequest.SelectedImage(
+                RelativePath.of(path.getFileName().toString()),
+                bytes.length,
+                Files.getLastModifiedTime(path).toInstant(),
+                HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+    }
+
     private Fixture fixture(AtomicBoolean invoked) throws Exception {
         return fixture(invoked, (request, sink) -> {
             invoked.set(true);
@@ -220,6 +381,50 @@ final class CategoryCollectionCoordinatorTest {
                     GeneratedArtifactId.of("state"),
                     "Authorization: Bearer secret_token_123456");
         });
+    }
+
+    private ScreenshotFixture screenshotFixture() throws Exception {
+        Path game = temporaryDirectory.resolve("screenshot-game-" + System.nanoTime());
+        Files.createDirectories(game.resolve("logs"));
+        Files.createDirectories(game.resolve("crash-reports"));
+        Files.createDirectories(game.resolve("config"));
+        Path screenshots = Files.createDirectories(game.resolve("screenshots"));
+        ApprovedSourceRoots roots = ApprovedSourceRoots.forGameDirectory(game.toAbsolutePath());
+        DiagnosticSourceSpecification screenshot =
+                DiagnosticSourceSpecification.userSelectedScreenshot(SCREENSHOT)
+                        .labelKey(LocalizationKey.of("example.source.screenshot"))
+                        .privacy(PrivacyClassification.SENSITIVE)
+                        .contentType(DiagnosticContentType.BINARY)
+                        .qualityRole(ReportQualityRole.OPTIONAL)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .build();
+        CategorySpecification category = CategorySpecification.builder(
+                        CATEGORY, LocalizationKey.of("example.category.general"))
+                .useSource(SCREENSHOT)
+                .build();
+        ProviderSpecification specification = ProviderSpecification.builder(
+                        PROVIDER, VERSION, LocalizationKey.of("example.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addSource(screenshot)
+                .addCategory(category)
+                .build();
+        BugReportProvider bridge = new BugReportProvider() {
+            @Override public String providerId() { return PROVIDER.value(); }
+            @Override public String providerVersion() { return VERSION.value(); }
+            @Override public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+        ProviderRegistrySnapshot registry = ProviderRegistry.createSnapshot(List.of(
+                new DiscoveredProvider(PROVIDER.namespace(), "ScreenshotFixture", bridge)));
+        var plan = new CategoryCollectionPlanner(
+                        registry, roots, SupportedSide.PHYSICAL_CLIENT)
+                .plan(PROVIDER, CATEGORY);
+        ReportWorkspace workspace = new FileReportWorkspaceStore(
+                        temporaryDirectory.resolve("screenshot-workspaces-" + System.nanoTime())
+                                .toAbsolutePath())
+                .create(ReportSessionId.random());
+        return new ScreenshotFixture(registry, roots, plan, workspace, screenshots);
     }
 
     private Fixture fixture(AtomicBoolean invoked, GeneratedDiagnosticProducer producer)
@@ -277,4 +482,11 @@ final class CategoryCollectionCoordinatorTest {
             ApprovedSourceRoots roots,
             com.cybersammy.bugreport.core.source.CategoryCollectionPlan plan,
             ReportWorkspace workspace) {}
+
+    private record ScreenshotFixture(
+            ProviderRegistrySnapshot registry,
+            ApprovedSourceRoots roots,
+            com.cybersammy.bugreport.core.source.CategoryCollectionPlan plan,
+            ReportWorkspace workspace,
+            Path screenshots) {}
 }

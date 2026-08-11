@@ -118,7 +118,7 @@ final class DraftRecoveryScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         List<BugReportCommandService.DraftRecoveryChoice> choices = overview.choices();
         if (choices.isEmpty()) {
@@ -182,6 +182,5 @@ final class DraftRecoveryScreen extends Screen {
         if (status != null) {
             graphics.drawCenteredString(font, status, width / 2, 166, 0xFFFFFF);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

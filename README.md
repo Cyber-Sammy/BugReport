@@ -68,10 +68,16 @@ Implemented and executable:
   collection into a private product-owned workspace, followed by off-thread
   text sanitization, binary/warning confirmation, exact-byte sealing, and a
   trusted `READY` session transition;
+- a bounded screenshot-attachment screen that can capture the current game view through a
+  single-use session/revision authority or select up to eight recent PNG/JPEG files from the local
+  `screenshots/` directory; selection binds the exact previewed bytes by size, modification time,
+  and SHA-256 so replacement before collection is rejected, while accepted images are metadata-
+  stripped through PNG re-encoding and retained as separately reviewable sensitive artifacts;
 - a final package-summary screen that derives a deterministic ZIP plan from the
   exact sealed workspace, requires a separate explicit local-save click, and
   writes a private ZIP off the render thread into the product-owned
-  `bugreport-exports` game-directory child;
+  `bugreport-exports` game-directory child, with an explicit button to open that
+  validated folder in the platform file browser;
 - a compact persisted report-history screen for completed and failed local
   deliveries, backed by the corruption-tolerant path-free Core history index;
 - off-thread typed form autosave into a bounded product-owned draft directory,
@@ -155,7 +161,7 @@ The first client command boundary is available after the client has loaded:
 /bugreport
 /bugreport list
 /bugreport create <mod-id> [category-id]
-/bugreport open <report-id>
+/bugreport open [report-id]
 /bugreport discard <report-id>
 ```
 
@@ -165,6 +171,15 @@ the provider and category creates the session directly. Category selection
 opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
+`/bugreport open` reopens the most recently created unfinished in-memory report;
+an optional exact report ID selects another active report. Active report IDs are
+offered as command suggestions. The command reopens the current safe UI checkpoint,
+including the form, collection planning, artifact review, and local export confirmation.
+A still-running collection, sanitization, or delivery is reported as busy and can
+be opened after it reaches its next checkpoint.
+Persisted form drafts can also be reopened by ID after restart; no later
+collection, workspace, review, or delivery authority is reconstructed from
+disk.
 Form edits are periodically saved off the render thread. Back waits for the
 latest typed draft to be persisted, while Cancel discards both the session and
 its canonical persisted draft and reports failure without cancelling when that
@@ -186,8 +201,12 @@ in the background, displays polling progress, and allows cooperative cancellatio
 Complete and partial results can then enter the sanitization/review screen.
 Supported text is sanitized in the private workspace off the render thread;
 failed artifacts remain unselectable, and binary artifacts or unresolved
-findings require a separate explicit confirmation before inclusion. Accepting
-the review seals and revalidates the exact selected bytes and advances the
+findings require a separate explicit confirmation before inclusion. The review
+shows metadata before its state controls and can explicitly open checksum-verified
+original and sanitized text versions in the platform application; binary artifacts
+have one exact reviewed version. Private retained originals are deleted before
+the review can seal or when the report is cancelled. Accepting the review seals
+and revalidates the exact selected bytes and advances the
 session to `READY` with package authority retained by the application service.
 The UI supplies only cancellation and typed inclusion/confirmation decisions:
 it cannot select a sanitization pipeline, construct an execution/review token,
@@ -656,11 +675,15 @@ No ordinary `SanitizationResult` can represent an incompletely checked output.
 
 The pipeline reads from and writes to caller-owned streams.
 `WorkspaceSanitizationCoordinator` is the trusted Core boundary that reads an
-exact reviewed text artifact, writes through a private temporary workspace
-file, atomically publishes accepted output, recalculates its SHA-256 checksum,
-and revalidates workspace ownership. It fails closed on sanitizer errors and
-never treats binary artifacts as text. The resulting `SanitizationResult` and
-new artifact evidence are then issued into a prepared snapshot.
+exact reviewed text artifact, first retains a private checksum-verified original
+for explicit comparison, writes through a private temporary workspace file,
+atomically publishes accepted output, recalculates its SHA-256 checksum, and
+revalidates workspace ownership. Opening either version requires the exact active
+application review authority and another checksum verification. Retained originals
+are recognized by abandoned-workspace cleanup but are removed before terminal
+sealing. The coordinator fails closed on sanitizer errors and never treats binary
+artifacts as text. The resulting `SanitizationResult` and new artifact evidence are
+then issued into a prepared snapshot.
 
 `HomeDirectoryMaskingStage` and `UsernameMaskingStage` provide the first
 product identity rules. Core never reads `user.home`, `user.name`, environment

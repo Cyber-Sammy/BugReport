@@ -1,6 +1,8 @@
 package com.cybersammy.bugreport.neoforge.client;
 
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
+import com.cybersammy.bugreport.core.form.FormSubmission;
+import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
 import net.minecraft.client.Minecraft;
@@ -140,6 +142,16 @@ final class ProviderCategoryScreen extends Screen {
         minecraft.setScreen(activeForm);
     }
 
+    CategoryFormScreen attachLiveForm(
+            ReportSessionId sessionId,
+            BugReportCommandService.ProviderChoice provider,
+            FormSubmission submission) {
+        selectedProvider = provider;
+        activeForm = new CategoryFormScreen(
+                commands, sessionId.toString(), this, submission);
+        return activeForm;
+    }
+
     void updateRecoveryOverview(BugReportCommandService.DraftRecoveryOverview overview) {
         recoveryOverview = overview;
     }
@@ -169,13 +181,12 @@ final class ProviderCategoryScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, selectedProvider == null ? title
                 : Component.translatable("bugreport.screen.select_category.title",
                         Component.translatable(selectedProvider.labelKey().value())), width / 2, 20, 0xFFFFFF);
         if (status != null) {
             graphics.drawCenteredString(font, status, width / 2, height - 56, 0xFFFFFF);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

@@ -202,6 +202,12 @@ final class FileReportWorkspaceStoreTest {
         try (FileChannel output = abandoned.files().openNewPrivateFile(artifact)) {
             output.write(ByteBuffer.wrap(new byte[] {1, 2, 3}));
         }
+        Path reviewCopy = abandoned.directory().resolve(
+                ".review-original-00000000-0000-4000-8000-000000000099-"
+                        + "source-" + "a".repeat(64) + ".data");
+        try (FileChannel output = abandoned.files().openNewPrivateFile(reviewCopy)) {
+            output.write(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
 
         AbandonedWorkspaceCleanupResult result =
                 new FileReportWorkspaceStore(root).cleanupAbandoned(Set.of(FIRST));

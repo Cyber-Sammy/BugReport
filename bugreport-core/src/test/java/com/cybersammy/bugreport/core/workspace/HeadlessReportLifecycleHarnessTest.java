@@ -102,6 +102,8 @@ final class HeadlessReportLifecycleHarnessTest {
         FileCollectionResult sanitizedCollection = sanitizedCollection(sanitized, collected);
 
         session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
+        WorkspaceSanitizationCoordinator.discardReviewOriginals(
+                workspace, List.of(sanitized.reviewOriginal()));
         PreparedWorkspaceSnapshot prepared = WorkspacePreparationCoordinator.prepare(
                 ReviewedWorkspaceSnapshotFactory.create(
                         session.snapshot(),

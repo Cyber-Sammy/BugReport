@@ -46,7 +46,7 @@ final class ReportHistoryScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         if (entries.isEmpty()) {
             graphics.drawCenteredString(font, Component.translatable("bugreport.screen.history.empty"),
@@ -60,6 +60,5 @@ final class ReportHistoryScreen extends Screen {
                     entry.status().name(), entry.revision());
             graphics.drawString(font, row, width / 2 - 145, 48 + (index - first) * 22, 0xE0E0E0);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

@@ -5,6 +5,7 @@ import com.cybersammy.bugreport.api.identifier.ProviderId;
 import com.cybersammy.bugreport.api.localization.LocalizationKey;
 import com.cybersammy.bugreport.api.specification.CategorySpecification;
 import com.cybersammy.bugreport.api.specification.CancellationSignal;
+import com.cybersammy.bugreport.api.specification.DiagnosticSourceKind;
 import com.cybersammy.bugreport.api.validation.ValidationResult;
 import com.cybersammy.bugreport.core.form.FieldValidator;
 import com.cybersammy.bugreport.core.form.FormSubmission;
@@ -31,6 +32,7 @@ import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategoryCollectionFingerprint;
 import com.cybersammy.bugreport.core.source.CollectionPlanFingerprint;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
 import com.cybersammy.bugreport.core.workspace.CategoryCollectionResult;
 import com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator;
@@ -100,6 +102,8 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, LocalExportPreparationRequest> activeExportPreparations =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, LocalExportRequest> activeExports = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ScreenshotCaptureRequest> activeScreenshotCaptures =
+            new LinkedHashMap<>();
     private final Map<ReportSessionId, RecoveredReportSession> recoverableDrafts =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, DraftRecoveryChoice> rejectedDrafts =
@@ -214,6 +218,118 @@ public final class BugReportCommandService {
                 snapshot.state().name()));
     }
 
+    /** Returns active in-memory report IDs newest-first for first-party command suggestions. */
+    public synchronized List<String> activeSessionIds() {
+        List<ReportSessionId> ids = List.copyOf(sessions.keySet());
+        java.util.ArrayList<String> active = new java.util.ArrayList<>(ids.size());
+        for (int index = ids.size() - 1; index >= 0; index--) {
+            ReportSession session = sessions.get(ids.get(index));
+            if (session != null && isActiveSessionState(session.snapshot().state())) {
+                active.add(ids.get(index).toString());
+            }
+        }
+        return List.copyOf(active);
+    }
+
+    /** Returns the most recently created unfinished in-memory report, if one exists. */
+    public synchronized Optional<String> latestActiveSessionId() {
+        return activeSessionIds().stream().findFirst();
+    }
+
+    /** Describes the latest active report for command adapters without a resumable UI. */
+    public synchronized List<Message> openLatest() {
+        return latestActiveSessionId()
+                .map(this::open)
+                .orElseGet(() -> List.of(new Message("bugreport.command.error.unknown_session")));
+    }
+
+    /** Resolves one live in-memory report to the next safe first-party UI checkpoint. */
+    public synchronized SessionResumeResult resumeSession(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            ReportSessionId id = parseSessionId(sessionValue);
+            if (id == null) {
+                return SessionResumeResult.withoutTarget(SessionResumeStatus.UNKNOWN_SESSION);
+            }
+            Optional<DraftResume> recovered = resumeDraft(id);
+            if (recovered.isEmpty()) {
+                return SessionResumeResult.withoutTarget(SessionResumeStatus.UNKNOWN_SESSION);
+            }
+            DraftResume draft = recovered.orElseThrow();
+            return SessionResumeResult.ready(
+                    new FormResumeTarget(draft.sessionId(), draft.formSubmission()));
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        return switch (snapshot.state()) {
+            case FORM_IN_PROGRESS -> SessionResumeResult.ready(new FormResumeTarget(
+                    snapshot.id(), currentFormSubmission(snapshot.id())));
+            case COLLECTION_PLANNED -> collectionPlanResume(snapshot);
+            case PARTIALLY_COLLECTED -> sanitizationResume(snapshot.id());
+            case SANITIZING -> activeSanitizations.containsKey(snapshot.id())
+                    ? SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY)
+                    : sanitizationResume(snapshot.id());
+            case REVIEW_REQUIRED -> Optional.ofNullable(activeReviews.get(snapshot.id()))
+                    .<SessionResumeResult>map(request ->
+                            SessionResumeResult.ready(new ReviewResumeTarget(request)))
+                    .orElseGet(() ->
+                            SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+            case READY -> exportResume(snapshot.id());
+            case FAILED_DELIVERY -> {
+                session.transitionTo(ReportSessionState.READY);
+                yield exportResume(snapshot.id());
+            }
+            case COLLECTING, DELIVERING ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY);
+            case COMPLETED, CANCELLED ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.TERMINAL);
+            case CREATED, FAILED_VALIDATION, FAILED_COLLECTION, FAILED_SANITIZATION ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE);
+        };
+    }
+
+    private SessionResumeResult collectionPlanResume(ReportSessionSnapshot snapshot) {
+        FormSubmission submission = confirmedForms.get(snapshot.id());
+        CategorySpecification category = snapshot.selectedCategory().orElse(null);
+        if (submission == null || category == null) {
+            return SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE);
+        }
+        CollectionPlanRequest request = new CollectionPlanRequest(
+                snapshot.id(),
+                snapshot.revision(),
+                snapshot.providerSpecification().id(),
+                snapshot.providerSpecification().version(),
+                category.id());
+        return SessionResumeResult.ready(new CollectionPlanResumeTarget(request, submission));
+    }
+
+    private SessionResumeResult sanitizationResume(ReportSessionId sessionId) {
+        return beginSanitization(sessionId.toString())
+                .<SessionResumeResult>map(request ->
+                        SessionResumeResult.ready(new SanitizationResumeTarget(request)))
+                .orElseGet(() ->
+                        SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+    }
+
+    private SessionResumeResult exportResume(ReportSessionId sessionId) {
+        LocalExportRequest activeExport = activeExports.get(sessionId);
+        if (activeExport != null) {
+            return SessionResumeResult.ready(new ExportResumeTarget(activeExport));
+        }
+        if (activeExportPreparations.containsKey(sessionId)) {
+            return SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY);
+        }
+        return beginLocalExport(sessionId.toString())
+                .<SessionResumeResult>map(request ->
+                        SessionResumeResult.ready(new ExportPreparationResumeTarget(request)))
+                .orElseGet(() ->
+                        SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+    }
+
+    private FormSubmission currentFormSubmission(ReportSessionId sessionId) {
+        PersistedFormDraft persisted = persistedForms.get(sessionId);
+        return persisted == null ? FormSubmission.empty() : persisted.submission();
+    }
+
     /** Returns the trusted immutable identity and declaration for one selected session form. */
     public synchronized Optional<FormView> form(String sessionValue) {
         ReportSession session = session(sessionValue);
@@ -317,17 +433,12 @@ public final class BugReportCommandService {
             return false;
         }
         ReportSessionSnapshot snapshot = session.snapshot();
-        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
-                || snapshot.revision() != request.collectionPlanRevision()) {
+        if (!matchesCollectionPlanRequest(snapshot, request)) {
             return false;
         }
         CategorySpecification category = snapshot.selectedCategory().orElseThrow();
         CategorySourcePlan trustedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan").plan();
-        if (!snapshot.id().equals(request.sessionId())
-                || !snapshot.providerSpecification().id().equals(request.providerId())
-                || !snapshot.providerSpecification().version().equals(request.providerVersion())
-                || !category.id().equals(request.categoryId())
-                || !snapshot.providerSpecification().id().equals(trustedPlan.providerId())
+        if (!snapshot.providerSpecification().id().equals(trustedPlan.providerId())
                 || !snapshot.providerSpecification().version().equals(trustedPlan.providerVersion())
                 || !category.id().equals(trustedPlan.categoryId())
                 || !matchesDeclaredGenerators(snapshot, reviewedPlan)) {
@@ -337,15 +448,21 @@ public final class BugReportCommandService {
         return true;
     }
 
-    /** Returns to form editing and revokes every authority issued for the previous confirmation. */
-    public synchronized boolean returnToForm(String sessionValue) {
-        ReportSession session = session(sessionValue);
-        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+    /**
+     * Returns to form editing only for the exact current planning generation and revokes its
+     * issued authority.
+     */
+    public synchronized boolean returnToForm(CollectionPlanRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null || !matchesCollectionPlanRequest(session.snapshot(), request)) {
             return false;
         }
+        ReportSessionId sessionId = request.sessionId();
         session.transitionTo(ReportSessionState.FORM_IN_PROGRESS);
-        collectionPlans.remove(session.snapshot().id());
-        confirmedForms.remove(session.snapshot().id());
+        collectionPlans.remove(sessionId);
+        confirmedForms.remove(sessionId);
+        activeScreenshotCaptures.remove(sessionId);
         return true;
     }
 
@@ -366,21 +483,98 @@ public final class BugReportCommandService {
     /** Begins collection only from a currently accepted user-reviewed source selection. */
     public synchronized Optional<CollectionExecutionRequest> beginCollection(String sessionValue) {
         ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReviewedCollectionPlan reviewed = collectionPlans.get(session.snapshot().id());
+        if (reviewed == null) {
+            return Optional.empty();
+        }
+        ScreenshotCollectionRequest screenshots;
+        try {
+            screenshots = ScreenshotCollectionRequest.from(reviewed, List.of());
+        } catch (IllegalArgumentException requiresScreenshotSelection) {
+            return Optional.empty();
+        }
+        return beginCollectionWithScreenshots(sessionValue, screenshots);
+    }
+
+    /** Begins collection from the client screenshot UI with exact user-selected inputs. */
+    synchronized Optional<CollectionExecutionRequest> beginCollectionWithScreenshots(
+            String sessionValue, ScreenshotCollectionRequest screenshots) {
+        ReportSession session = session(sessionValue);
         if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
             return Optional.empty();
         }
         ReportSessionSnapshot planned = session.snapshot();
         ReviewedCollectionPlan reviewedPlan = collectionPlans.get(planned.id());
-        if (reviewedPlan == null) {
+        ScreenshotCollectionRequest selectedScreenshots =
+                Objects.requireNonNull(screenshots, "screenshots");
+        if (reviewedPlan == null
+                || !planned.providerSpecification().id().equals(selectedScreenshots.providerId())
+                || !planned.providerSpecification().version().equals(selectedScreenshots.providerVersion())
+                || planned.selectedCategory().stream()
+                        .noneMatch(category -> category.id().equals(selectedScreenshots.categoryId()))) {
             return Optional.empty();
         }
+        try {
+            ScreenshotCollectionRequest expected = ScreenshotCollectionRequest.from(
+                    reviewedPlan,
+                    selectedScreenshots.entries().stream()
+                            .map(ScreenshotCollectionRequest.Entry::selectedImage)
+                            .distinct()
+                            .toList());
+            if (!expected.fingerprint().equals(selectedScreenshots.fingerprint())) {
+                return Optional.empty();
+            }
+        } catch (IllegalArgumentException invalidSelection) {
+            return Optional.empty();
+        }
+        activeScreenshotCaptures.remove(planned.id());
         session.transitionTo(ReportSessionState.COLLECTING);
         ReportSessionSnapshot collecting = session.snapshot();
         return Optional.of(new CollectionExecutionRequest(
                 collecting.id(),
                 collecting.revision(),
                 reviewedPlan,
-                CategoryCollectionFingerprint.from(reviewedPlan)));
+                selectedScreenshots,
+                CategoryCollectionFingerprint.from(reviewedPlan, selectedScreenshots)));
+    }
+
+    /** Issues one opaque permission to capture a framebuffer for the exact planning generation. */
+    synchronized Optional<ScreenshotCaptureRequest> beginScreenshotCapture(
+            String sessionValue, ReviewedCollectionPlan reviewedPlan) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            return Optional.empty();
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        ReviewedCollectionPlan current = collectionPlans.get(snapshot.id());
+        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
+                || current != Objects.requireNonNull(reviewedPlan, "reviewedPlan")
+                || current.includedSources().stream().noneMatch(source ->
+                        source.provenance().kind() == DiagnosticSourceKind.USER_SELECTED_SCREENSHOT)) {
+            return Optional.empty();
+        }
+        ScreenshotCaptureRequest request =
+                new ScreenshotCaptureRequest(snapshot.id(), snapshot.revision(), current);
+        activeScreenshotCaptures.put(snapshot.id(), request);
+        return Optional.of(request);
+    }
+
+    /** Consumes a capture permission only while its exact session generation remains current. */
+    synchronized boolean acceptScreenshotCapture(ScreenshotCaptureRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId);
+        if (session == null || activeScreenshotCaptures.get(request.sessionId) != request) {
+            return false;
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        boolean accepted = snapshot.state() == ReportSessionState.COLLECTION_PLANNED
+                && snapshot.revision() == request.collectionPlanRevision
+                && collectionPlans.get(request.sessionId) == request.reviewedPlan;
+        activeScreenshotCaptures.remove(request.sessionId, request);
+        return accepted;
     }
 
     /** Records a terminal collection result only for the exact active collection generation. */
@@ -530,23 +724,24 @@ public final class BugReportCommandService {
 
         synchronized (this) {
             ReportSession session = sessions.get(request.sessionId());
-            if (session == null
-                    || activeSanitizations.get(request.sessionId()) != request
-                    || session.snapshot().state() != ReportSessionState.SANITIZING
-                    || session.snapshot().revision() != request.sanitizationRevision()
-                    || !WorkspaceReviewCoordinator.matches(
+            if (session != null
+                    && activeSanitizations.get(request.sessionId()) == request
+                    && session.snapshot().state() == ReportSessionState.SANITIZING
+                    && session.snapshot().revision() == request.sanitizationRevision()
+                    && WorkspaceReviewCoordinator.matches(
                             evidence, request.collection(), request.workspace())) {
-                return Optional.empty();
+                session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
+                ReportSessionSnapshot review = session.snapshot();
+                activeSanitizations.remove(review.id());
+                sanitizationBatches.put(review.id(), evidence);
+                WorkspaceReviewRequest reviewRequest = new WorkspaceReviewRequest(
+                        review.id(), review.revision(), review, evidence);
+                activeReviews.put(review.id(), reviewRequest);
+                return Optional.of(reviewRequest);
             }
-            session.transitionTo(ReportSessionState.REVIEW_REQUIRED);
-            ReportSessionSnapshot review = session.snapshot();
-            activeSanitizations.remove(review.id());
-            sanitizationBatches.put(review.id(), evidence);
-            WorkspaceReviewRequest reviewRequest = new WorkspaceReviewRequest(
-                    review.id(), review.revision(), review, evidence);
-            activeReviews.put(review.id(), reviewRequest);
-            return Optional.of(reviewRequest);
         }
+        WorkspaceReviewCoordinator.discardReviewCopies(evidence);
+        return Optional.empty();
     }
 
     /** Marks the exact active sanitization generation failed without exposing internal causes. */
@@ -564,6 +759,37 @@ public final class BugReportCommandService {
         session.transitionTo(ReportSessionState.FAILED_SANITIZATION);
         activeSanitizations.remove(snapshot.id());
         return true;
+    }
+
+    /** Resolves one exact review file only for the active service-issued review authority. */
+    public Optional<WorkspaceReviewCoordinator.ReviewArtifactFile> reviewArtifactFile(
+            WorkspaceReviewRequest request,
+            String artifactName,
+            WorkspaceReviewCoordinator.ReviewArtifactVersion version) {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(artifactName, "artifactName");
+        Objects.requireNonNull(version, "version");
+        synchronized (this) {
+            ReportSession session = sessions.get(request.sessionId());
+            if (session == null
+                    || activeReviews.get(request.sessionId()) != request
+                    || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                    || session.snapshot().revision() != request.reviewRevision()) {
+                return Optional.empty();
+            }
+        }
+        var resolved = WorkspaceReviewCoordinator.reviewArtifactFile(
+                request.batch(), artifactName, version);
+        synchronized (this) {
+            ReportSession session = sessions.get(request.sessionId());
+            if (session == null
+                    || activeReviews.get(request.sessionId()) != request
+                    || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                    || session.snapshot().revision() != request.reviewRevision()) {
+                return Optional.empty();
+            }
+            return resolved;
+        }
     }
 
     /** Converts UI decision data into package authority for the exact service-issued review. */
@@ -702,6 +928,21 @@ public final class BugReportCommandService {
         }
     }
 
+    /**
+     * Resolves the product-owned local export directory for first-party UI navigation.
+     *
+     * <p>The returned path is confined to the validated direct {@code bugreport-exports} child of
+     * the supplied game directory. Redirected or otherwise ambiguous filesystem paths are rejected.
+     */
+    public Optional<Path> localExportDirectory(Path gameDirectory) {
+        Objects.requireNonNull(gameDirectory, "gameDirectory");
+        try {
+            return Optional.of(safeExportDirectory(gameDirectory));
+        } catch (IOException failure) {
+            return Optional.empty();
+        }
+    }
+
     /** Returns a failed local delivery to READY so the user can prepare a fresh export attempt. */
     public synchronized boolean retryLocalExport(String sessionValue) {
         ReportSession session = session(sessionValue);
@@ -748,6 +989,8 @@ public final class BugReportCommandService {
         }
         sessions.put(id, session);
         persistedDraftFiles.add(id);
+        persistedForms.put(
+                id, new PersistedFormDraft(snapshot.revision(), recovered.formSubmission()));
         return Optional.of(
                 new DraftResume(
                         id,
@@ -782,6 +1025,14 @@ public final class BugReportCommandService {
             return List.of(new Message("bugreport.command.error.unknown_session"));
         }
         ReportSession session = sessions.get(id);
+        WorkspaceReviewCoordinator.SanitizationBatch reviewBatch = sanitizationBatches.get(id);
+        if (reviewBatch != null) {
+            try {
+                WorkspaceReviewCoordinator.discardReviewCopies(reviewBatch);
+            } catch (RuntimeException failure) {
+                return List.of(new Message("bugreport.command.error.review_cleanup_failed"));
+            }
+        }
         if (persistedDraftFiles.contains(id)) {
             try {
                 drafts.delete(id);
@@ -803,6 +1054,7 @@ public final class BugReportCommandService {
         activeReviews.remove(id);
         activeExportPreparations.remove(id);
         activeExports.remove(id);
+        activeScreenshotCaptures.remove(id);
         return List.of(new Message("bugreport.command.discard.success", id.toString()));
     }
 
@@ -948,6 +1200,21 @@ public final class BugReportCommandService {
         }
     }
 
+    private static boolean isActiveSessionState(ReportSessionState state) {
+        return state != ReportSessionState.COMPLETED && state != ReportSessionState.CANCELLED;
+    }
+
+    private static boolean matchesCollectionPlanRequest(
+            ReportSessionSnapshot snapshot, CollectionPlanRequest request) {
+        return snapshot.state() == ReportSessionState.COLLECTION_PLANNED
+                && snapshot.revision() == request.collectionPlanRevision()
+                && snapshot.id().equals(request.sessionId())
+                && snapshot.providerSpecification().id().equals(request.providerId())
+                && snapshot.providerSpecification().version().equals(request.providerVersion())
+                && snapshot.selectedCategory().stream()
+                        .anyMatch(category -> category.id().equals(request.categoryId()));
+    }
+
     private static boolean matchesPlan(
             CollectionExecutionRequest request, CategoryCollectionResult result) {
         CategorySourcePlan plan = request.reviewedPlan().plan();
@@ -1042,6 +1309,15 @@ public final class BugReportCommandService {
         if (!name.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}\\.bugreport\\.zip")) {
             throw new IllegalArgumentException("Archive file name is invalid");
         }
+        Path root = safeExportDirectory(gameDirectory);
+        Path target = root.resolve(name).normalize();
+        if (!target.getParent().equals(root)) {
+            throw new IllegalArgumentException("Archive destination escapes the export directory");
+        }
+        return target;
+    }
+
+    private static Path safeExportDirectory(Path gameDirectory) throws IOException {
         Path gameRoot = gameDirectory.toAbsolutePath().normalize();
         if (!Files.isDirectory(gameRoot, LinkOption.NOFOLLOW_LINKS)
                 || !gameRoot.equals(gameRoot.toRealPath(LinkOption.NOFOLLOW_LINKS))
@@ -1059,11 +1335,7 @@ public final class BugReportCommandService {
                 || !root.equals(root.toRealPath())) {
             throw new IOException("Bug Report export directory is not safe");
         }
-        Path target = root.resolve(name).normalize();
-        if (!target.getParent().equals(root)) {
-            throw new IllegalArgumentException("Archive destination escapes the export directory");
-        }
-        return target;
+        return root;
     }
 
     private static ReportManifest manifest(LocalExportPreparationRequest request) {
@@ -1236,6 +1508,90 @@ public final class BugReportCommandService {
         FAILED
     }
 
+    /** Stable result for reopening one live in-memory report without restoring new authority. */
+    public record SessionResumeResult(
+            SessionResumeStatus status, Optional<SessionResumeTarget> target) {
+        public SessionResumeResult {
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(target, "target");
+            if ((status == SessionResumeStatus.READY) != target.isPresent()) {
+                throw new IllegalArgumentException(
+                        "Only a ready session resume result carries a target");
+            }
+        }
+
+        private static SessionResumeResult ready(SessionResumeTarget target) {
+            return new SessionResumeResult(SessionResumeStatus.READY, Optional.of(target));
+        }
+
+        private static SessionResumeResult withoutTarget(SessionResumeStatus status) {
+            return new SessionResumeResult(status, Optional.empty());
+        }
+    }
+
+    public enum SessionResumeStatus {
+        READY,
+        UNKNOWN_SESSION,
+        BUSY,
+        UNAVAILABLE,
+        TERMINAL
+    }
+
+    /** Closed set of service-issued inputs accepted by the first-party screen router. */
+    public sealed interface SessionResumeTarget permits
+            FormResumeTarget,
+            CollectionPlanResumeTarget,
+            SanitizationResumeTarget,
+            ReviewResumeTarget,
+            ExportPreparationResumeTarget,
+            ExportResumeTarget {}
+
+    public record FormResumeTarget(
+            ReportSessionId sessionId, FormSubmission submission)
+            implements SessionResumeTarget {
+        public FormResumeTarget {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(submission, "submission");
+        }
+    }
+
+    public record CollectionPlanResumeTarget(
+            CollectionPlanRequest request, FormSubmission submission)
+            implements SessionResumeTarget {
+        public CollectionPlanResumeTarget {
+            Objects.requireNonNull(request, "request");
+            Objects.requireNonNull(submission, "submission");
+        }
+    }
+
+    public record SanitizationResumeTarget(SanitizationExecutionRequest request)
+            implements SessionResumeTarget {
+        public SanitizationResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ReviewResumeTarget(WorkspaceReviewRequest request)
+            implements SessionResumeTarget {
+        public ReviewResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ExportPreparationResumeTarget(LocalExportPreparationRequest request)
+            implements SessionResumeTarget {
+        public ExportPreparationResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ExportResumeTarget(LocalExportRequest request)
+            implements SessionResumeTarget {
+        public ExportResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
     /** Identity-only request for client-side source planning. */
     public record CollectionPlanRequest(
             ReportSessionId sessionId,
@@ -1254,18 +1610,53 @@ public final class BugReportCommandService {
         }
     }
 
+    /** Opaque, single-use authority for one user-initiated framebuffer capture. */
+    static final class ScreenshotCaptureRequest {
+        private final ReportSessionId sessionId;
+        private final long collectionPlanRevision;
+        private final ReviewedCollectionPlan reviewedPlan;
+
+        private ScreenshotCaptureRequest(
+                ReportSessionId sessionId,
+                long collectionPlanRevision,
+                ReviewedCollectionPlan reviewedPlan) {
+            this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
+            if (collectionPlanRevision < 0) {
+                throw new IllegalArgumentException(
+                        "collectionPlanRevision must be non-negative");
+            }
+            this.collectionPlanRevision = collectionPlanRevision;
+            this.reviewedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan");
+        }
+    }
+
     /** Exact immutable authority for one asynchronous collection execution. */
     public record CollectionExecutionRequest(
             ReportSessionId sessionId,
             long collectionRevision,
             ReviewedCollectionPlan reviewedPlan,
+            ScreenshotCollectionRequest screenshots,
             CategoryCollectionFingerprint planFingerprint) {
+        public CollectionExecutionRequest(
+                ReportSessionId sessionId,
+                long collectionRevision,
+                ReviewedCollectionPlan reviewedPlan,
+                CategoryCollectionFingerprint planFingerprint) {
+            this(
+                    sessionId,
+                    collectionRevision,
+                    reviewedPlan,
+                    ScreenshotCollectionRequest.from(reviewedPlan, List.of()),
+                    planFingerprint);
+        }
+
         public CollectionExecutionRequest {
             Objects.requireNonNull(sessionId, "sessionId");
             if (collectionRevision < 0) {
                 throw new IllegalArgumentException("collectionRevision must be non-negative");
             }
             Objects.requireNonNull(reviewedPlan, "reviewedPlan");
+            Objects.requireNonNull(screenshots, "screenshots");
             Objects.requireNonNull(planFingerprint, "planFingerprint");
         }
     }
@@ -1575,8 +1966,11 @@ public final class BugReportCommandService {
 
         public ReportSessionId sessionId() { return sessionId; }
         public long reviewRevision() { return reviewRevision; }
+        public List<WorkspaceReviewCoordinator.ArtifactReview> artifacts() {
+            return batch.artifacts();
+        }
         ReportSessionSnapshot session() { return session; }
-        public WorkspaceReviewCoordinator.SanitizationBatch batch() { return batch; }
+        WorkspaceReviewCoordinator.SanitizationBatch batch() { return batch; }
     }
 
     /** Untrusted UI decision data; only the service can convert it into package authority. */

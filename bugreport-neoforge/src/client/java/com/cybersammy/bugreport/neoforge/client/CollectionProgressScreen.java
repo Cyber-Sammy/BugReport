@@ -69,12 +69,14 @@ final class CollectionProgressScreen extends Screen {
                 CategoryCollectionResult result = CategoryCollectionCoordinator.collect(
                         BugReportMod.providerRegistry(),
                         request.reviewedPlan(),
+                        request.screenshots(),
                         roots,
                         SupportedSide.PHYSICAL_CLIENT,
                         workspace,
                         control,
                         NeoForgeGameThreadDispatchers.shared()
-                                .dispatcher(SupportedSide.PHYSICAL_CLIENT));
+                                .dispatcher(SupportedSide.PHYSICAL_CLIENT),
+                        absoluteGameDirectory.resolve("screenshots"));
                 boolean accepted = commands.acceptCollectionResult(request, result, workspace);
                 Minecraft.getInstance().execute(() -> presentResult(result, accepted));
             } catch (RuntimeException exception) {
@@ -128,16 +130,13 @@ final class CollectionProgressScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (!terminal) {
-            control.requestCancellation();
-        }
         visible = false;
         super.onClose();
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         var combined = control.progress();
         CollectionProgressSnapshot progress = combined.fileProgress();
@@ -150,6 +149,5 @@ final class CollectionProgressScreen extends Screen {
         graphics.drawCenteredString(font, detail, width / 2, 48, 0xE0E0E0);
         graphics.drawCenteredString(font, status, width / 2, 70,
                 terminal ? 0x60FF60 : 0xFFCC66);
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

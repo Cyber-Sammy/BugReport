@@ -20,9 +20,9 @@ import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Publishes one sanitized text artifact through a private temporary workspace file. */
+/** Publishes sanitized text and retains a private exact original only for bounded user review. */
 final class WorkspaceSanitizationCoordinator {
-    private static final int MAX_SANITIZED_BYTES = 128 * 1024 * 1024;
+    static final int MAX_SANITIZED_BYTES = 128 * 1024 * 1024;
     private WorkspaceSanitizationCoordinator() {}
 
     static SanitizedSource sanitize(
@@ -43,6 +43,7 @@ final class WorkspaceSanitizationCoordinator {
         SanitizedBytes sanitized = sanitizeArtifact(
                 collected.artifactName(),
                 collected.contentType(),
+                new ArtifactDigest(collected.byteCount(), collected.checksum()),
                 workspace,
                 pipeline,
                 cancellation,
@@ -56,7 +57,7 @@ final class WorkspaceSanitizationCoordinator {
                 collected.privacy(),
                 collected.qualityRole(),
                 collected.inclusionDefault());
-        return new SanitizedSource(value, sanitized.result());
+        return new SanitizedSource(value, sanitized.result(), sanitized.reviewOriginal());
     }
 
     static SanitizedGenerated sanitize(
@@ -68,6 +69,7 @@ final class WorkspaceSanitizationCoordinator {
         SanitizedBytes sanitized = sanitizeArtifact(
                 collected.artifactName(),
                 collected.contentType(),
+                new ArtifactDigest(collected.byteCount(), collected.checksum()),
                 workspace,
                 pipeline,
                 cancellation,
@@ -85,12 +87,13 @@ final class WorkspaceSanitizationCoordinator {
                 collected.privacy(),
                 collected.qualityRole(),
                 collected.inclusionDefault());
-        return new SanitizedGenerated(value, sanitized.result());
+        return new SanitizedGenerated(value, sanitized.result(), sanitized.reviewOriginal());
     }
 
     private static SanitizedBytes sanitizeArtifact(
             String artifactName,
             DiagnosticContentType contentType,
+            ArtifactDigest expectedOriginal,
             ReportWorkspace workspace,
             SanitizationPipeline pipeline,
             CancellationSignal cancellation,
@@ -110,11 +113,20 @@ final class WorkspaceSanitizationCoordinator {
         }
         Path temporary = trustedWorkspace.directory()
                 .resolve(".sanitize-" + UUID.randomUUID() + ".tmp");
+        Path reviewOriginal = trustedWorkspace.directory()
+                .resolve(".review-original-" + UUID.randomUUID() + "-" + artifactName);
         WorkspaceMutationGate.Lease lease = trustedWorkspace.beginMutation();
+        boolean retainReviewOriginal = false;
         try {
             trustedWorkspace.requireCurrentOwnership();
+            ArtifactDigest originalDigest = copyOriginal(
+                    trustedWorkspace, target, reviewOriginal, MAX_SANITIZED_BYTES);
+            if (!originalDigest.equals(expectedOriginal)) {
+                throw new IOException("Collected artifact changed before sanitization");
+            }
+            trustedWorkspace.files().verifyPrivateFile(reviewOriginal);
             SanitizationResult result;
-            try (var inputChannel = trustedWorkspace.files().openExistingPrivateFile(target);
+            try (var inputChannel = trustedWorkspace.files().openExistingPrivateFile(reviewOriginal);
                     var outputChannel = trustedWorkspace.files().openNewPrivateFile(temporary);
                     var input = new BufferedReader(Channels.newReader(inputChannel, StandardCharsets.UTF_8));
                     var output = new BufferedWriter(new OutputStreamWriter(
@@ -130,7 +142,9 @@ final class WorkspaceSanitizationCoordinator {
             trustedWorkspace.requireCurrentOwnership();
             trustedWorkspace.files().replaceAtomically(temporary, target);
             trustedWorkspace.files().verifyPrivateFile(target);
-            return new SanitizedBytes(digest, result);
+            retainReviewOriginal = true;
+            return new SanitizedBytes(
+                    digest, result, new ReviewOriginal(reviewOriginal, originalDigest));
         } catch (SanitizationException exception) {
             throw exception;
         } catch (IOException | ArithmeticException exception) {
@@ -141,12 +155,53 @@ final class WorkspaceSanitizationCoordinator {
             } catch (IOException ignored) {
                 // A later workspace cleanup treats unrecognized leftovers as unsafe.
             } finally {
-                lease.close();
+                try {
+                    if (!retainReviewOriginal) {
+                        trustedWorkspace.files().deleteIfExists(reviewOriginal);
+                    }
+                } catch (IOException ignored) {
+                    // Abandoned-workspace cleanup recognizes product-owned review copies.
+                } finally {
+                    lease.close();
+                }
             }
         }
     }
 
-    private static ArtifactDigest digest(
+    private static ArtifactDigest copyOriginal(
+            ReportWorkspace workspace, Path source, Path destination, long maximumBytes)
+            throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            long byteCount = 0;
+            ByteBuffer buffer = ByteBuffer.allocate(16 * 1024);
+            try (var input = workspace.files().openExistingPrivateFile(source);
+                    var output = workspace.files().openNewPrivateFile(destination)) {
+                while (input.read(buffer) != -1) {
+                    buffer.flip();
+                    byteCount = Math.addExact(byteCount, buffer.remaining());
+                    if (byteCount > maximumBytes) {
+                        throw new IOException("Original workspace artifact exceeds the product byte limit");
+                    }
+                    digest.update(buffer.asReadOnlyBuffer());
+                    while (buffer.hasRemaining()) {
+                        output.write(buffer);
+                    }
+                    buffer.clear();
+                }
+                output.force(true);
+            }
+            return new ArtifactDigest(
+                    byteCount,
+                    new Sha256Checksum(HexFormat.of().formatHex(digest.digest())));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Required SHA-256 implementation is unavailable", exception);
+        } catch (ArithmeticException exception) {
+            throw new IOException("Original workspace artifact exceeds the product byte limit", exception);
+        }
+    }
+
+    static ArtifactDigest digest(
             ReportWorkspace workspace,
             Path path,
             long maximumBytes) throws IOException {
@@ -173,13 +228,43 @@ final class WorkspaceSanitizationCoordinator {
         }
     }
 
+    static void discardReviewOriginals(
+            ReportWorkspace workspace, java.util.List<ReviewOriginal> originals) {
+        ReportWorkspace trustedWorkspace = Objects.requireNonNull(workspace, "workspace");
+        java.util.List<ReviewOriginal> retained = java.util.List.copyOf(
+                Objects.requireNonNull(originals, "originals"));
+        if (retained.isEmpty()) {
+            return;
+        }
+        WorkspaceMutationGate.Lease lease = trustedWorkspace.beginMutation();
+        try {
+            trustedWorkspace.requireCurrentOwnership();
+            for (ReviewOriginal original : retained) {
+                Path path = Objects.requireNonNull(original, "review original").path();
+                if (!trustedWorkspace.directory().equals(path.normalize().getParent())) {
+                    throw new IOException("Review copy escaped its workspace");
+                }
+                trustedWorkspace.files().deleteIfExists(path);
+            }
+        } catch (IOException | RuntimeException failure) {
+            throw new IllegalStateException("Could not remove private review copies", failure);
+        } finally {
+            lease.close();
+        }
+    }
+
     static final class SanitizedSource {
         private final CollectedSourceFile source;
         private final SanitizationResult result;
+        private final ReviewOriginal reviewOriginal;
 
-        private SanitizedSource(CollectedSourceFile source, SanitizationResult result) {
+        private SanitizedSource(
+                CollectedSourceFile source,
+                SanitizationResult result,
+                ReviewOriginal reviewOriginal) {
             this.source = Objects.requireNonNull(source, "source");
             this.result = Objects.requireNonNull(result, "result");
+            this.reviewOriginal = Objects.requireNonNull(reviewOriginal, "reviewOriginal");
             if (!source.artifactName().equals(result.artifactName())) {
                 throw new IllegalArgumentException("Sanitization evidence artifact identity is inconsistent");
             }
@@ -193,6 +278,10 @@ final class WorkspaceSanitizationCoordinator {
             return result;
         }
 
+        ReviewOriginal reviewOriginal() {
+            return reviewOriginal;
+        }
+
         boolean matches(ReviewedWorkspaceArtifact artifact) {
             return source.artifactName().equals(artifact.artifactName())
                     && source.byteCount() == artifact.byteCount()
@@ -203,11 +292,15 @@ final class WorkspaceSanitizationCoordinator {
     static final class SanitizedGenerated {
         private final CollectedGeneratedArtifact artifact;
         private final SanitizationResult result;
+        private final ReviewOriginal reviewOriginal;
 
         private SanitizedGenerated(
-                CollectedGeneratedArtifact artifact, SanitizationResult result) {
+                CollectedGeneratedArtifact artifact,
+                SanitizationResult result,
+                ReviewOriginal reviewOriginal) {
             this.artifact = Objects.requireNonNull(artifact, "artifact");
             this.result = Objects.requireNonNull(result, "result");
+            this.reviewOriginal = Objects.requireNonNull(reviewOriginal, "reviewOriginal");
             if (!artifact.artifactName().equals(result.artifactName())) {
                 throw new IllegalArgumentException(
                         "Sanitization evidence artifact identity is inconsistent");
@@ -222,6 +315,10 @@ final class WorkspaceSanitizationCoordinator {
             return result;
         }
 
+        ReviewOriginal reviewOriginal() {
+            return reviewOriginal;
+        }
+
         boolean matches(ReviewedWorkspaceArtifact value) {
             return artifact.artifactName().equals(value.artifactName())
                     && artifact.byteCount() == value.byteCount()
@@ -229,9 +326,24 @@ final class WorkspaceSanitizationCoordinator {
         }
     }
 
-    private record ArtifactDigest(long byteCount, Sha256Checksum checksum) {}
+    record ArtifactDigest(long byteCount, Sha256Checksum checksum) {
+        ArtifactDigest {
+            Objects.requireNonNull(checksum, "checksum");
+            if (byteCount < 0) {
+                throw new IllegalArgumentException("Artifact digest byte count must not be negative");
+            }
+        }
+    }
 
-    private record SanitizedBytes(ArtifactDigest digest, SanitizationResult result) {}
+    record ReviewOriginal(Path path, ArtifactDigest digest) {
+        ReviewOriginal {
+            path = Objects.requireNonNull(path, "path").toAbsolutePath().normalize();
+            Objects.requireNonNull(digest, "digest");
+        }
+    }
+
+    private record SanitizedBytes(
+            ArtifactDigest digest, SanitizationResult result, ReviewOriginal reviewOriginal) {}
 
     private static final class BoundedOutputStream extends OutputStream {
         private final OutputStream delegate;

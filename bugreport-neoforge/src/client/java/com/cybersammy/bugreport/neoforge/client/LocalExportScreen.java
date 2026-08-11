@@ -5,6 +5,7 @@ import com.cybersammy.bugreport.core.transport.TransportProgressSnapshot;
 import com.cybersammy.bugreport.core.transport.TransportRunControl;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.nio.file.Path;
+import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -16,7 +17,7 @@ import net.minecraft.network.chat.Component;
 final class LocalExportScreen extends Screen {
     private final BugReportCommandService commands;
     private final BugReportCommandService.LocalExportPreparationRequest preparation;
-    private final Path exportDirectory;
+    private final Path gameDirectory;
     private volatile boolean visible;
     private BugReportCommandService.LocalExportRequest export;
     private TransportRunControl control;
@@ -26,13 +27,28 @@ final class LocalExportScreen extends Screen {
     private boolean running;
     private boolean finished;
     private boolean successful;
+    private boolean openingFolder;
+    private String archiveFileName;
 
     LocalExportScreen(BugReportCommandService commands,
             BugReportCommandService.LocalExportPreparationRequest preparation, Path gameDirectory) {
         super(Component.translatable("bugreport.screen.export.title"));
         this.commands = commands;
         this.preparation = preparation;
-        exportDirectory = gameDirectory.toAbsolutePath().normalize();
+        this.gameDirectory = gameDirectory.toAbsolutePath().normalize();
+    }
+
+    LocalExportScreen(
+            BugReportCommandService commands,
+            BugReportCommandService.LocalExportRequest export,
+            Path gameDirectory) {
+        super(Component.translatable("bugreport.screen.export.title"));
+        this.commands = commands;
+        preparation = null;
+        this.export = export;
+        this.gameDirectory = gameDirectory.toAbsolutePath().normalize();
+        status = Component.translatable("bugreport.screen.export.ready");
+        started = true;
     }
 
     @Override
@@ -62,12 +78,18 @@ final class LocalExportScreen extends Screen {
     }
 
     private void rebuildExportWidgets() {
+        if (fileName != null) {
+            archiveFileName = fileName.getValue();
+        }
         clearWidgets();
         if (export != null && !finished) {
+            if (archiveFileName == null) {
+                archiveFileName = "report-" + export.sessionId() + ".bugreport.zip";
+            }
             fileName = new EditBox(font, width / 2 - 140, 102, 280, 20,
                     Component.translatable("bugreport.screen.export.filename"));
             fileName.setMaxLength(140);
-            fileName.setValue("report-" + export.sessionId() + ".bugreport.zip");
+            fileName.setValue(archiveFileName);
             fileName.setEditable(!running);
             addRenderableWidget(fileName);
             Button confirm = Button.builder(Component.translatable("bugreport.screen.export.confirm"),
@@ -81,20 +103,56 @@ final class LocalExportScreen extends Screen {
                         .bounds(width / 2 - 58, 158, 116, 20).build());
             }
         }
+        Button openFolder = Button.builder(Component.translatable("bugreport.screen.export.open_folder"),
+                        ignored -> openExportFolder())
+                .bounds(width / 2 - 100, 184, 200, 20).build();
+        openFolder.active = !openingFolder;
+        addRenderableWidget(openFolder);
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), ignored -> onClose())
                 .bounds(width / 2 - 58, height - 32, 116, 20).build());
     }
 
     private void startExport() {
         if (running || export == null) return;
+        String requestedName = fileName.getValue();
+        archiveFileName = requestedName;
         running = true;
         control = new TransportRunControl();
         status = Component.translatable("bugreport.screen.export.writing");
         rebuildExportWidgets();
-        String requestedName = fileName.getValue();
         Thread.ofVirtual().name("bugreport-local-zip-export").start(() -> {
-            var result = commands.executeLocalExport(export, exportDirectory, requestedName, control);
+            var result = commands.executeLocalExport(export, gameDirectory, requestedName, control);
             Minecraft.getInstance().execute(() -> complete(result.orElse(null)));
+        });
+    }
+
+    private void openExportFolder() {
+        if (openingFolder) return;
+        openingFolder = true;
+        status = Component.translatable("bugreport.screen.export.opening_folder");
+        rebuildExportWidgets();
+        Thread.ofVirtual().name("bugreport-open-export-folder").start(() -> {
+            var directory = commands.localExportDirectory(gameDirectory);
+            boolean opened = false;
+            if (directory.isPresent()) {
+                try {
+                    Util.getPlatform().openPath(directory.orElseThrow());
+                    opened = true;
+                } catch (RuntimeException ignored) {
+                    // The localized UI status reports platform-launch failures without exposing paths.
+                }
+            }
+            boolean folderOpened = opened;
+            Minecraft.getInstance().execute(() -> {
+                if (!visible) return;
+                openingFolder = false;
+                if (!folderOpened) {
+                    status = Component.translatable("bugreport.screen.export.open_folder_failed");
+                } else {
+                    status = Component.translatable("bugreport.screen.export.folder_opened");
+                }
+                rebuildExportWidgets();
+            });
         });
     }
 
@@ -121,13 +179,12 @@ final class LocalExportScreen extends Screen {
     @Override
     public void onClose() {
         visible = false;
-        if (running && control != null) control.requestCancellation();
         super.onClose();
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 24, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 50, successful ? 0x60FF60 : 0xFFCC66);
         if (export != null) {
@@ -136,8 +193,7 @@ final class LocalExportScreen extends Screen {
                     summary.providerId(), summary.categoryId(), summary.entryCount(), summary.totalBytes()),
                     width / 2, 78, 0xE0E0E0);
             graphics.drawCenteredString(font, Component.translatable("bugreport.screen.export.destination"),
-                    width / 2, 182, 0xA0A0A0);
+                    width / 2, 210, 0xA0A0A0);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

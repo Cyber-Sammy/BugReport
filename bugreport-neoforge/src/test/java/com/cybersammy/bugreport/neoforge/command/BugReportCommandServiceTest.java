@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.neoforge.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -37,6 +38,7 @@ import com.cybersammy.bugreport.core.source.ApprovedSourceRoots;
 import com.cybersammy.bugreport.core.source.CategorySourcePlan;
 import com.cybersammy.bugreport.core.source.CategorySourcePlanner;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
+import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.workspace.CollectionRunControl;
 import com.cybersammy.bugreport.core.workspace.FileCollectionCoordinator;
 import com.cybersammy.bugreport.core.workspace.FileCollectionResult;
@@ -53,6 +55,7 @@ import com.cybersammy.bugreport.core.session.ReportSessionState;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.file.Path;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
@@ -61,6 +64,89 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class BugReportCommandServiceTest {
+
+    @Test
+    void localExportDirectoryIsCreatedOnlyAsTheValidatedGameDirectoryChild(
+            @TempDir Path directory) throws Exception {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        Path gameDirectory = Files.createDirectory(directory.resolve("game"));
+
+        Path exportDirectory = service.localExportDirectory(gameDirectory).orElseThrow();
+
+        assertEquals(gameDirectory.resolve("bugreport-exports"), exportDirectory);
+        assertTrue(Files.isDirectory(exportDirectory));
+
+        Path blockedGameDirectory = Files.createDirectory(directory.resolve("blocked-game"));
+        Files.writeString(blockedGameDirectory.resolve("bugreport-exports"), "not a directory");
+        assertTrue(service.localExportDirectory(blockedGameDirectory).isEmpty());
+    }
+
+    @Test
+    void screenshotAwareCollectionIssuanceIsNotPublicApplicationApi() throws Exception {
+        var method = BugReportCommandService.class.getDeclaredMethod(
+                "beginCollectionWithScreenshots", String.class, ScreenshotCollectionRequest.class);
+        assertFalse(Modifier.isPublic(method.getModifiers()));
+        assertFalse(Modifier.isPublic(BugReportCommandService.class
+                .getDeclaredMethod(
+                        "beginScreenshotCapture", String.class, ReviewedCollectionPlan.class)
+                .getModifiers()));
+        assertFalse(Modifier.isPublic(
+                BugReportCommandService.ScreenshotCaptureRequest.class.getModifiers()));
+        assertFalse(Modifier.isPublic(BugReportCommandService.class
+                .getDeclaredMethod(
+                        "acceptScreenshotCapture",
+                        BugReportCommandService.ScreenshotCaptureRequest.class)
+                .getModifiers()));
+        assertTrue(java.util.Arrays.stream(
+                        BugReportCommandService.ScreenshotCaptureRequest.class
+                                .getDeclaredConstructors())
+                .allMatch(constructor -> Modifier.isPrivate(constructor.getModifiers())));
+        assertTrue(Modifier.isPublic(
+                BugReportCommandService.class
+                        .getDeclaredMethod("beginCollection", String.class)
+                        .getModifiers()));
+    }
+
+    @Test
+    void screenshotCaptureAuthorityIsExactSingleUseAndRevokedWithSession(
+            @TempDir Path gameDirectory) throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        ProviderRegistrySnapshot registry = screenshotRegistry();
+        BugReportCommandService service = new BugReportCommandService(() -> registry);
+        String sessionId = (String) service.create("screenshot_mod", "general")
+                .getFirst()
+                .arguments()[0];
+        var planRequest = service.confirmForm(sessionId, FormSubmission.empty())
+                .planRequest()
+                .orElseThrow();
+        var plan = new com.cybersammy.bugreport.core.source.CategoryCollectionPlanner(
+                        registry,
+                        ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                        SupportedSide.PHYSICAL_CLIENT)
+                .plan(ProviderId.parse("screenshot_mod"), CategoryId.of("general"));
+        var reviewed = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("screenshot")), Set.of());
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+
+        var issued = service.beginScreenshotCapture(sessionId, reviewed).orElseThrow();
+        var constructor = BugReportCommandService.ScreenshotCaptureRequest.class
+                .getDeclaredConstructor(
+                        ReportSessionId.class, long.class, ReviewedCollectionPlan.class);
+        constructor.setAccessible(true);
+        var synthetic = constructor.newInstance(
+                ReportSessionId.parse(sessionId), service.form(sessionId).orElseThrow().revision(), reviewed);
+        assertFalse(service.acceptScreenshotCapture(synthetic));
+        assertTrue(service.acceptScreenshotCapture(issued));
+        assertFalse(service.acceptScreenshotCapture(issued));
+
+        var revoked = service.beginScreenshotCapture(sessionId, reviewed).orElseThrow();
+        assertEquals("bugreport.command.discard.success", service.discard(sessionId)
+                .getFirst()
+                .translationKey());
+        assertFalse(service.acceptScreenshotCapture(revoked));
+    }
     private final BugReportCommandService commands =
             new BugReportCommandService(ProviderRegistrySnapshot::empty);
 
@@ -89,6 +175,9 @@ final class BugReportCommandServiceTest {
                 "bugreport.command.error.unknown_session",
                 commands.open("not-a-session").getFirst().translationKey());
         assertEquals(
+                BugReportCommandService.SessionResumeStatus.UNKNOWN_SESSION,
+                commands.resumeSession("not-a-session").status());
+        assertEquals(
                 "bugreport.command.error.unknown_session",
                 commands.discard("not-a-session").getFirst().translationKey());
     }
@@ -103,6 +192,52 @@ final class BugReportCommandServiceTest {
         assertEquals("bugreport.command.open.summary", service.open(sessionId).getFirst().translationKey());
         assertEquals("bugreport.command.discard.success", service.discard(sessionId).getFirst().translationKey());
         assertEquals("bugreport.command.error.unknown_session", service.open(sessionId).getFirst().translationKey());
+    }
+
+    @Test
+    void latestActiveSessionIsSuggestedAndOpenedNewestFirst() {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String first = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        String second = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        assertEquals(List.of(second, first), service.activeSessionIds());
+        assertEquals(Optional.of(second), service.latestActiveSessionId());
+        assertEquals(second, service.openLatest().getFirst().arguments()[0]);
+
+        service.discard(second);
+        assertEquals(Optional.of(first), service.latestActiveSessionId());
+        service.discard(first);
+        assertTrue(service.latestActiveSessionId().isEmpty());
+        assertEquals(
+                "bugreport.command.error.unknown_session",
+                service.openLatest().getFirst().translationKey());
+    }
+
+    @Test
+    void liveFormAndConfirmedPlanningCanBeReopenedWithTypedState() {
+        BugReportCommandService service =
+                new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        var formResume = service.resumeSession(sessionId);
+        assertEquals(BugReportCommandService.SessionResumeStatus.READY, formResume.status());
+        var form = assertInstanceOf(
+                BugReportCommandService.FormResumeTarget.class,
+                formResume.target().orElseThrow());
+        assertEquals(FormSubmission.empty(), form.submission());
+
+        var confirmation = service.confirmForm(sessionId, validSubmission());
+        assertEquals(BugReportCommandService.FormConfirmationStatus.ACCEPTED,
+                confirmation.status());
+        var planResume = service.resumeSession(sessionId);
+        var planning = assertInstanceOf(
+                BugReportCommandService.CollectionPlanResumeTarget.class,
+                planResume.target().orElseThrow());
+        assertEquals(validSubmission(), planning.submission());
+        assertEquals(confirmation.planRequest().orElseThrow(), planning.request());
     }
 
     @Test
@@ -161,7 +296,7 @@ final class BugReportCommandServiceTest {
         assertEquals(after.revision() + 1, planned.revision());
         assertEquals(submission, service.confirmedForm(sessionId).orElseThrow());
 
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(confirmation.planRequest().orElseThrow()));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.FORM_IN_PROGRESS,
                 service.form(sessionId).orElseThrow().state());
         assertTrue(service.confirmedForm(sessionId).isEmpty());
@@ -189,7 +324,7 @@ final class BugReportCommandServiceTest {
         assertTrue(service.acceptCollectionPlan(request, reviewed));
         assertSame(reviewed, service.collectionPlan(sessionId).orElseThrow());
 
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(request));
         assertTrue(service.collectionPlan(sessionId).isEmpty());
     }
 
@@ -202,12 +337,35 @@ final class BugReportCommandServiceTest {
 
         BugReportCommandService.CollectionPlanRequest first = service
                 .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(first));
         BugReportCommandService.CollectionPlanRequest second = service
                 .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
 
         assertFalse(service.acceptCollectionPlan(first, ReviewedCollectionPlan.defaults(plan)));
         assertTrue(service.acceptCollectionPlan(second, ReviewedCollectionPlan.defaults(plan)));
+    }
+
+    @Test
+    void stalePlanningFailureCannotRollbackANewerFormGeneration() {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        BugReportCommandService.CollectionPlanRequest first = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        assertTrue(service.returnToForm(first));
+        BugReportCommandService.CollectionPlanRequest second = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+
+        assertFalse(service.returnToForm(first));
+        BugReportCommandService.FormView current = service.form(sessionId).orElseThrow();
+        assertEquals(ReportSessionState.COLLECTION_PLANNED, current.state());
+        assertEquals(second.collectionPlanRevision(), current.revision());
+        assertTrue(service.confirmedForm(sessionId).isPresent());
+
+        assertTrue(service.returnToForm(second));
+        assertEquals(ReportSessionState.FORM_IN_PROGRESS,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.confirmedForm(sessionId).isEmpty());
     }
 
     @Test
@@ -228,7 +386,7 @@ final class BugReportCommandServiceTest {
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
                 service.form(sessionId).orElseThrow().state());
         assertTrue(service.beginCollection(sessionId).isEmpty());
-        assertFalse(service.returnToForm(sessionId));
+        assertFalse(service.returnToForm(request));
     }
 
     @Test
@@ -289,6 +447,9 @@ final class BugReportCommandServiceTest {
 
         var sanitization = service.beginSanitization(sessionId).orElseThrow();
         assertTrue(service.beginSanitization(sessionId).isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.BUSY,
+                service.resumeSession(sessionId).status());
         var sanitizationConstructor =
                 BugReportCommandService.SanitizationExecutionRequest.class.getDeclaredConstructor(
                         com.cybersammy.bugreport.core.session.ReportSessionId.class,
@@ -307,6 +468,10 @@ final class BugReportCommandServiceTest {
                 syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
         var review = service.executeSanitization(
                 sanitization, CancellationSignal.neverCancelled()).orElseThrow();
+        var reviewResume = assertInstanceOf(
+                BugReportCommandService.ReviewResumeTarget.class,
+                service.resumeSession(sessionId).target().orElseThrow());
+        assertSame(review, reviewResume.request());
         Set<String> includedArtifacts = Set.of(
                 review.batch().artifacts().getFirst().artifactName());
         var reviewConstructor = BugReportCommandService.WorkspaceReviewRequest.class
@@ -322,6 +487,31 @@ final class BugReportCommandServiceTest {
                 review.reviewRevision(),
                 review.session(),
                 review.batch());
+        String reviewArtifact = review.batch().artifacts().getFirst().artifactName();
+        var originalReviewFile = service.reviewArtifactFile(
+                        review,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.ORIGINAL)
+                .orElseThrow();
+        var sanitizedReviewFile = service.reviewArtifactFile(
+                        review,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.SANITIZED)
+                .orElseThrow();
+        assertEquals(
+                "Authorization: Bearer secret_token_123456\n",
+                Files.readString(originalReviewFile.path()));
+        assertEquals(
+                "Authorization: <bearer-token>\n",
+                Files.readString(sanitizedReviewFile.path()));
+        assertTrue(service.reviewArtifactFile(
+                        syntheticReview,
+                        reviewArtifact,
+                        com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator
+                                .ReviewArtifactVersion.ORIGINAL)
+                .isEmpty());
         assertTrue(service.confirmReview(
                 syntheticReview,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of())).isEmpty());
@@ -329,6 +519,7 @@ final class BugReportCommandServiceTest {
                 review,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of()))
                 .orElseThrow();
+        assertFalse(Files.exists(originalReviewFile.path()));
 
         assertSame(prepared, service.preparedSnapshot(sessionId).orElseThrow());
         String artifactName = prepared.artifacts().getFirst()
@@ -344,7 +535,14 @@ final class BugReportCommandServiceTest {
 
         var exportPreparation = service.beginLocalExport(sessionId).orElseThrow();
         assertTrue(service.beginLocalExport(sessionId).isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.BUSY,
+                service.resumeSession(sessionId).status());
         var export = service.prepareLocalExport(exportPreparation).orElseThrow();
+        var exportResume = assertInstanceOf(
+                BugReportCommandService.ExportResumeTarget.class,
+                service.resumeSession(sessionId).target().orElseThrow());
+        assertSame(export, exportResume.request());
         assertEquals(3, export.summary().entryCount());
         assertFalse(service.executeLocalExport(
                 export, gameDirectory, "../unsafe.bugreport.zip",
@@ -359,6 +557,9 @@ final class BugReportCommandServiceTest {
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COMPLETED,
                 service.form(sessionId).orElseThrow().state());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.TERMINAL,
+                service.resumeSession(sessionId).status());
     }
 
     @Test
@@ -600,21 +801,15 @@ final class BugReportCommandServiceTest {
                 BugReportCommandService.DraftRecoveryStatus.READY,
                 recovery.choices().getFirst().status());
 
-        BugReportCommandService.DraftResume resumed = restarted
-                .resumeDraft(ReportSessionId.parse(sessionId))
-                .orElseThrow();
-        assertEquals(submission, resumed.formSubmission());
+        var resumed = assertInstanceOf(
+                BugReportCommandService.FormResumeTarget.class,
+                restarted.resumeSession(sessionId).target().orElseThrow());
+        assertEquals(submission, resumed.submission());
         assertEquals(ReportSessionState.FORM_IN_PROGRESS,
                 restarted.form(sessionId).orElseThrow().state());
         assertTrue(restarted.beginCollection(sessionId).isEmpty());
         assertTrue(restarted.beginLocalExport(sessionId).isEmpty());
-        assertTrue(restarted.submitForm(sessionId, resumed.formSubmission()).validation().isValid());
-        assertEquals(
-                BugReportCommandService.FormConfirmationStatus.PERSISTENCE_FAILED,
-                restarted.confirmForm(sessionId, submission).status());
-        assertEquals(
-                BugReportCommandService.DraftSaveStatus.SAVED,
-                restarted.saveFormDraft(sessionId, submission));
+        assertTrue(restarted.submitForm(sessionId, resumed.submission()).validation().isValid());
         assertEquals(
                 BugReportCommandService.FormConfirmationStatus.ACCEPTED,
                 restarted.confirmForm(sessionId, submission).status());
@@ -795,6 +990,48 @@ final class BugReportCommandServiceTest {
         };
         return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
                 NamespaceId.of("generated_mod"), "GeneratedProvider", provider)));
+    }
+
+    private static ProviderRegistrySnapshot screenshotRegistry() {
+        DiagnosticSourceId sourceId = DiagnosticSourceId.of("screenshot");
+        DiagnosticSourceSpecification source =
+                DiagnosticSourceSpecification.userSelectedScreenshot(sourceId)
+                        .labelKey(LocalizationKey.of("screenshot_mod.source.screenshot"))
+                        .privacy(PrivacyClassification.SENSITIVE)
+                        .contentType(DiagnosticContentType.BINARY)
+                        .qualityRole(ReportQualityRole.OPTIONAL)
+                        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                        .build();
+        ProviderSpecification specification = ProviderSpecification.builder(
+                        ProviderId.parse("screenshot_mod"),
+                        ProviderVersion.parse("1.0.0"),
+                        LocalizationKey.of("screenshot_mod.provider"))
+                .supportSide(SupportedSide.PHYSICAL_CLIENT)
+                .addSource(source)
+                .addCategory(CategorySpecification.builder(
+                                CategoryId.of("general"),
+                                LocalizationKey.of("screenshot_mod.category.general"))
+                        .useSource(sourceId)
+                        .build())
+                .build();
+        BugReportProvider provider = new BugReportProvider() {
+            @Override
+            public String providerId() {
+                return "screenshot_mod";
+            }
+
+            @Override
+            public String providerVersion() {
+                return "1.0.0";
+            }
+
+            @Override
+            public Optional<ProviderSpecification> specification() {
+                return Optional.of(specification);
+            }
+        };
+        return ProviderRegistry.createSnapshot(List.of(new DiscoveredProvider(
+                NamespaceId.of("screenshot_mod"), "ScreenshotProvider", provider)));
     }
 
     private static CategorySourcePlan emptyCategoryPlan(Path gameDirectory) {

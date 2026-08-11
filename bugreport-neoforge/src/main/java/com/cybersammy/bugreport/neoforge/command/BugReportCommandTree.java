@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 
 /** Builds the client-independent Minecraft command tree used by the NeoForge client adapter. */
@@ -13,12 +14,20 @@ public final class BugReportCommandTree {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands) {
-        register(dispatcher, commands, ProviderSelector.none());
+        register(dispatcher, commands, ProviderSelector.none(), SessionOpener.forService(commands));
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands, ProviderSelector selector) {
-        dispatcher.register(commandRoot(commands, selector));
+        register(dispatcher, commands, selector, SessionOpener.forService(commands));
+    }
+
+    public static void register(
+            CommandDispatcher<CommandSourceStack> dispatcher,
+            BugReportCommandService commands,
+            ProviderSelector selector,
+            SessionOpener sessionOpener) {
+        dispatcher.register(commandRoot(commands, selector, sessionOpener));
     }
 
     public static boolean registrationReadyForSmoke(BugReportCommandService commands) {
@@ -28,11 +37,15 @@ public final class BugReportCommandTree {
                 && dispatcher.getRoot().getChild("bugreport").getChild("list") != null
                 && dispatcher.getRoot().getChild("bugreport").getChild("create") != null
                 && dispatcher.parse("bugreport list", (CommandSourceStack) null)
+                        .getReader().getRemainingLength() == 0
+                && dispatcher.parse("bugreport open", (CommandSourceStack) null)
                         .getReader().getRemainingLength() == 0;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> commandRoot(
-            BugReportCommandService commands, ProviderSelector selector) {
+            BugReportCommandService commands,
+            ProviderSelector selector,
+            SessionOpener sessionOpener) {
         LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("bugreport")
                 .executes(context -> {
                     selector.open();
@@ -47,9 +60,13 @@ public final class BugReportCommandTree {
                         .executes(context -> respond(context.getSource(), commands.create(
                                 StringArgumentType.getString(context, "mod-id"),
                                 StringArgumentType.getString(context, "category-id")))))));
-        root.then(Commands.literal("open").then(Commands.argument("report-id", StringArgumentType.word())
-                .executes(context -> respond(context.getSource(), commands.open(
-                        StringArgumentType.getString(context, "report-id"))))));
+        root.then(Commands.literal("open")
+                .executes(context -> respond(context.getSource(), sessionOpener.openLatest()))
+                .then(Commands.argument("report-id", StringArgumentType.word())
+                        .suggests((context, builder) ->
+                                SharedSuggestionProvider.suggest(commands.activeSessionIds(), builder))
+                        .executes(context -> respond(context.getSource(), sessionOpener.open(
+                                StringArgumentType.getString(context, "report-id"))))));
         root.then(Commands.literal("discard").then(Commands.argument("report-id", StringArgumentType.word())
                 .executes(context -> respond(context.getSource(), commands.discard(
                         StringArgumentType.getString(context, "report-id"))))));
@@ -90,6 +107,26 @@ public final class BugReportCommandTree {
             return new ProviderSelector() {
                 @Override public void open() {}
                 @Override public SelectionResult open(ProviderId providerId) { return SelectionResult.UNKNOWN; }
+            };
+        }
+    }
+
+    public interface SessionOpener {
+        java.util.List<BugReportCommandService.Message> openLatest();
+
+        java.util.List<BugReportCommandService.Message> open(String sessionId);
+
+        static SessionOpener forService(BugReportCommandService commands) {
+            return new SessionOpener() {
+                @Override
+                public java.util.List<BugReportCommandService.Message> openLatest() {
+                    return commands.openLatest();
+                }
+
+                @Override
+                public java.util.List<BugReportCommandService.Message> open(String sessionId) {
+                    return commands.open(sessionId);
+                }
             };
         }
     }
