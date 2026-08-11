@@ -39,6 +39,7 @@ final class CollectionPlanScreen extends Screen {
     private Set<com.cybersammy.bugreport.api.identifier.DiagnosticSourceId> includedSourceIds = Set.of();
     private Set<com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId> includedGeneratorIds = Set.of();
     private boolean planning = true;
+    private boolean planningAuthorityReleased;
     private boolean selectionAccepted;
     private boolean emptySelectionConfirmationPending;
     private int sourcePage;
@@ -94,8 +95,8 @@ final class CollectionPlanScreen extends Screen {
                         SupportedSide.PHYSICAL_CLIENT).plan(request.providerId(), request.categoryId());
                 Minecraft.getInstance().execute(() -> presentPlan(planned));
             } catch (RuntimeException exception) {
-                commands.returnToForm(request.sessionId().toString());
-                Minecraft.getInstance().execute(this::presentPlanningFailure);
+                boolean rolledBack = commands.returnToForm(request);
+                Minecraft.getInstance().execute(() -> presentPlanningFailure(rolledBack));
             }
         });
     }
@@ -117,10 +118,11 @@ final class CollectionPlanScreen extends Screen {
         rebuildPlanWidgets();
     }
 
-    private void presentPlanningFailure() {
+    private void presentPlanningFailure(boolean rolledBack) {
         if (!visible) {
             return;
         }
+        planningAuthorityReleased = rolledBack;
         planning = false;
         status = Component.translatable("bugreport.screen.plan.failed");
     }
@@ -288,8 +290,12 @@ final class CollectionPlanScreen extends Screen {
 
 
     private void returnToForm() {
+        if (!planningAuthorityReleased && !commands.returnToForm(request)) {
+            status = Component.translatable("bugreport.screen.plan.failed");
+            rebuildPlanWidgets();
+            return;
+        }
         visible = false;
-        commands.returnToForm(request.sessionId().toString());
         formScreen.requireFreshDraftPersistence();
         minecraft.setScreen(formScreen);
     }

@@ -433,17 +433,12 @@ public final class BugReportCommandService {
             return false;
         }
         ReportSessionSnapshot snapshot = session.snapshot();
-        if (snapshot.state() != ReportSessionState.COLLECTION_PLANNED
-                || snapshot.revision() != request.collectionPlanRevision()) {
+        if (!matchesCollectionPlanRequest(snapshot, request)) {
             return false;
         }
         CategorySpecification category = snapshot.selectedCategory().orElseThrow();
         CategorySourcePlan trustedPlan = Objects.requireNonNull(reviewedPlan, "reviewedPlan").plan();
-        if (!snapshot.id().equals(request.sessionId())
-                || !snapshot.providerSpecification().id().equals(request.providerId())
-                || !snapshot.providerSpecification().version().equals(request.providerVersion())
-                || !category.id().equals(request.categoryId())
-                || !snapshot.providerSpecification().id().equals(trustedPlan.providerId())
+        if (!snapshot.providerSpecification().id().equals(trustedPlan.providerId())
                 || !snapshot.providerSpecification().version().equals(trustedPlan.providerVersion())
                 || !category.id().equals(trustedPlan.categoryId())
                 || !matchesDeclaredGenerators(snapshot, reviewedPlan)) {
@@ -453,15 +448,21 @@ public final class BugReportCommandService {
         return true;
     }
 
-    /** Returns to form editing and revokes every authority issued for the previous confirmation. */
-    public synchronized boolean returnToForm(String sessionValue) {
-        ReportSession session = session(sessionValue);
-        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+    /**
+     * Returns to form editing only for the exact current planning generation and revokes its
+     * issued authority.
+     */
+    public synchronized boolean returnToForm(CollectionPlanRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null || !matchesCollectionPlanRequest(session.snapshot(), request)) {
             return false;
         }
+        ReportSessionId sessionId = request.sessionId();
         session.transitionTo(ReportSessionState.FORM_IN_PROGRESS);
-        collectionPlans.remove(session.snapshot().id());
-        confirmedForms.remove(session.snapshot().id());
+        collectionPlans.remove(sessionId);
+        confirmedForms.remove(sessionId);
+        activeScreenshotCaptures.remove(sessionId);
         return true;
     }
 
@@ -1201,6 +1202,17 @@ public final class BugReportCommandService {
 
     private static boolean isActiveSessionState(ReportSessionState state) {
         return state != ReportSessionState.COMPLETED && state != ReportSessionState.CANCELLED;
+    }
+
+    private static boolean matchesCollectionPlanRequest(
+            ReportSessionSnapshot snapshot, CollectionPlanRequest request) {
+        return snapshot.state() == ReportSessionState.COLLECTION_PLANNED
+                && snapshot.revision() == request.collectionPlanRevision()
+                && snapshot.id().equals(request.sessionId())
+                && snapshot.providerSpecification().id().equals(request.providerId())
+                && snapshot.providerSpecification().version().equals(request.providerVersion())
+                && snapshot.selectedCategory().stream()
+                        .anyMatch(category -> category.id().equals(request.categoryId()));
     }
 
     private static boolean matchesPlan(

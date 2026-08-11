@@ -331,7 +331,7 @@ final class CategoryFormScreen extends Screen {
         }
         if (result.status() == BugReportCommandService.FormConfirmationStatus.ACCEPTED
                 && generation != editGeneration) {
-            commands.returnToForm(sessionId);
+            commands.returnToForm(result.planRequest().orElseThrow());
             requireFreshDraftPersistence();
             status = Component.translatable("bugreport.screen.form.changed_during_confirmation");
             rebuildWidgets();

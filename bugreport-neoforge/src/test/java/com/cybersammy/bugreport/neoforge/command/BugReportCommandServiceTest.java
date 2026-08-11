@@ -296,7 +296,7 @@ final class BugReportCommandServiceTest {
         assertEquals(after.revision() + 1, planned.revision());
         assertEquals(submission, service.confirmedForm(sessionId).orElseThrow());
 
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(confirmation.planRequest().orElseThrow()));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.FORM_IN_PROGRESS,
                 service.form(sessionId).orElseThrow().state());
         assertTrue(service.confirmedForm(sessionId).isEmpty());
@@ -324,7 +324,7 @@ final class BugReportCommandServiceTest {
         assertTrue(service.acceptCollectionPlan(request, reviewed));
         assertSame(reviewed, service.collectionPlan(sessionId).orElseThrow());
 
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(request));
         assertTrue(service.collectionPlan(sessionId).isEmpty());
     }
 
@@ -337,12 +337,35 @@ final class BugReportCommandServiceTest {
 
         BugReportCommandService.CollectionPlanRequest first = service
                 .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
-        assertTrue(service.returnToForm(sessionId));
+        assertTrue(service.returnToForm(first));
         BugReportCommandService.CollectionPlanRequest second = service
                 .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
 
         assertFalse(service.acceptCollectionPlan(first, ReviewedCollectionPlan.defaults(plan)));
         assertTrue(service.acceptCollectionPlan(second, ReviewedCollectionPlan.defaults(plan)));
+    }
+
+    @Test
+    void stalePlanningFailureCannotRollbackANewerFormGeneration() {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        BugReportCommandService.CollectionPlanRequest first = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        assertTrue(service.returnToForm(first));
+        BugReportCommandService.CollectionPlanRequest second = service
+                .confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+
+        assertFalse(service.returnToForm(first));
+        BugReportCommandService.FormView current = service.form(sessionId).orElseThrow();
+        assertEquals(ReportSessionState.COLLECTION_PLANNED, current.state());
+        assertEquals(second.collectionPlanRevision(), current.revision());
+        assertTrue(service.confirmedForm(sessionId).isPresent());
+
+        assertTrue(service.returnToForm(second));
+        assertEquals(ReportSessionState.FORM_IN_PROGRESS,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.confirmedForm(sessionId).isEmpty());
     }
 
     @Test
@@ -363,7 +386,7 @@ final class BugReportCommandServiceTest {
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COLLECTING,
                 service.form(sessionId).orElseThrow().state());
         assertTrue(service.beginCollection(sessionId).isEmpty());
-        assertFalse(service.returnToForm(sessionId));
+        assertFalse(service.returnToForm(request));
     }
 
     @Test
