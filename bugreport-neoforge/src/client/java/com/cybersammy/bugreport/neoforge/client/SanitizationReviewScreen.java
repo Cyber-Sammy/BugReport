@@ -14,6 +14,9 @@ import net.minecraft.network.chat.Component;
 
 /** Sanitizes collected bytes off-thread and captures explicit per-artifact review decisions. */
 final class SanitizationReviewScreen extends Screen {
+    private static final int MAX_ARTIFACTS_PER_PAGE = 4;
+    private static final int ARTIFACT_ROW_HEIGHT = 40;
+
     private final BugReportCommandService commands;
     private final BugReportCommandService.SanitizationExecutionRequest execution;
     private final Set<String> included = new HashSet<>();
@@ -106,7 +109,7 @@ final class SanitizationReviewScreen extends Screen {
     }
 
     private void addArtifactControls(List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
-        int pageSize = 4;
+        int pageSize = artifactsPerPage();
         int pageCount = Math.max(1, (artifacts.size() + pageSize - 1) / pageSize);
         page = Math.min(page, pageCount - 1);
         int first = page * pageSize;
@@ -117,11 +120,11 @@ final class SanitizationReviewScreen extends Screen {
             Button include = Button.builder(
                             Component.translatable(
                                     included.contains(artifact.artifactName())
-                                            ? "bugreport.screen.review.exclude"
-                                            : "bugreport.screen.review.include",
-                                    index + 1),
+                                            ? "bugreport.screen.review.included"
+                                            : "bugreport.screen.review.excluded"),
                             ignored -> toggleIncluded(artifact))
-                    .bounds(width / 2 - 140, 62 + (index - first) * 40, 135, 20).build();
+                    .bounds(width / 2 - 140, 62 + (index - first) * ARTIFACT_ROW_HEIGHT, 135, 20)
+                    .build();
             include.active = !failed && !preparing && !completed;
             addRenderableWidget(include);
             if (artifact.explicitReviewRequired()) {
@@ -131,7 +134,8 @@ final class SanitizationReviewScreen extends Screen {
                                                 ? "bugreport.screen.review.confirmed"
                                                 : "bugreport.screen.review.confirm"),
                                 ignored -> toggleReviewed(artifact))
-                        .bounds(width / 2 + 5, 62 + (index - first) * 40, 135, 20).build();
+                        .bounds(width / 2 + 5, 62 + (index - first) * ARTIFACT_ROW_HEIGHT, 135, 20)
+                        .build();
                 confirm.active = included.contains(artifact.artifactName())
                         && !preparing && !completed;
                 addRenderableWidget(confirm);
@@ -149,6 +153,11 @@ final class SanitizationReviewScreen extends Screen {
             next.active = page + 1 < pageCount;
             addRenderableWidget(next);
         }
+    }
+
+    private int artifactsPerPage() {
+        int rowsAboveInstructions = Math.floorDiv(height - 212, ARTIFACT_ROW_HEIGHT) + 1;
+        return Math.max(1, Math.min(MAX_ARTIFACTS_PER_PAGE, rowsAboveInstructions));
     }
 
     private void toggleIncluded(WorkspaceReviewCoordinator.ArtifactReview artifact) {
@@ -249,13 +258,31 @@ final class SanitizationReviewScreen extends Screen {
                 completed ? 0x60FF60 : 0xFFCC66);
         if (review != null) {
             renderArtifacts(graphics, review.batch().artifacts());
+            renderInstructions(graphics);
+        }
+    }
+
+    private void renderInstructions(GuiGraphics graphics) {
+        Component firstLine = Component.translatable(
+                completed
+                        ? "bugreport.screen.review.help.completed"
+                        : "bugreport.screen.review.help.selection");
+        graphics.drawCenteredString(font, firstLine, width / 2, height - 112, 0xD0D0D0);
+        if (!completed) {
+            graphics.drawCenteredString(
+                    font,
+                    Component.translatable("bugreport.screen.review.help.sensitive"),
+                    width / 2,
+                    height - 100,
+                    0xFFCC66);
         }
     }
 
     private void renderArtifacts(
             GuiGraphics graphics, List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
-        int first = page * 4;
-        int last = Math.min(first + 4, artifacts.size());
+        int pageSize = artifactsPerPage();
+        int first = page * pageSize;
+        int last = Math.min(first + pageSize, artifacts.size());
         for (int index = first; index < last; index++) {
             var artifact = artifacts.get(index);
             Component row = Component.translatable(
@@ -267,7 +294,12 @@ final class SanitizationReviewScreen extends Screen {
                     artifact.byteCount(),
                     artifact.status().name(),
                     artifact.findingCount());
-            graphics.drawString(font, row, width / 2 - 140, 86 + (index - first) * 40, 0xE0E0E0);
+            graphics.drawString(
+                    font,
+                    row,
+                    width / 2 - 140,
+                    86 + (index - first) * ARTIFACT_ROW_HEIGHT,
+                    0xE0E0E0);
         }
     }
 }
