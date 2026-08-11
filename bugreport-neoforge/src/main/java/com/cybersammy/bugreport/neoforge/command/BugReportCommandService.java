@@ -218,6 +218,93 @@ public final class BugReportCommandService {
                 snapshot.state().name()));
     }
 
+    /** Resolves one live in-memory report to the next safe first-party UI checkpoint. */
+    public synchronized SessionResumeResult resumeSession(String sessionValue) {
+        ReportSession session = session(sessionValue);
+        if (session == null) {
+            ReportSessionId id = parseSessionId(sessionValue);
+            if (id == null) {
+                return SessionResumeResult.withoutTarget(SessionResumeStatus.UNKNOWN_SESSION);
+            }
+            Optional<DraftResume> recovered = resumeDraft(id);
+            if (recovered.isEmpty()) {
+                return SessionResumeResult.withoutTarget(SessionResumeStatus.UNKNOWN_SESSION);
+            }
+            DraftResume draft = recovered.orElseThrow();
+            return SessionResumeResult.ready(
+                    new FormResumeTarget(draft.sessionId(), draft.formSubmission()));
+        }
+        ReportSessionSnapshot snapshot = session.snapshot();
+        return switch (snapshot.state()) {
+            case FORM_IN_PROGRESS -> SessionResumeResult.ready(new FormResumeTarget(
+                    snapshot.id(), currentFormSubmission(snapshot.id())));
+            case COLLECTION_PLANNED -> collectionPlanResume(snapshot);
+            case PARTIALLY_COLLECTED -> sanitizationResume(snapshot.id());
+            case SANITIZING -> activeSanitizations.containsKey(snapshot.id())
+                    ? SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY)
+                    : sanitizationResume(snapshot.id());
+            case REVIEW_REQUIRED -> Optional.ofNullable(activeReviews.get(snapshot.id()))
+                    .<SessionResumeResult>map(request ->
+                            SessionResumeResult.ready(new ReviewResumeTarget(request)))
+                    .orElseGet(() ->
+                            SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+            case READY -> exportResume(snapshot.id());
+            case FAILED_DELIVERY -> {
+                session.transitionTo(ReportSessionState.READY);
+                yield exportResume(snapshot.id());
+            }
+            case COLLECTING, DELIVERING ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY);
+            case COMPLETED, CANCELLED ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.TERMINAL);
+            case CREATED, FAILED_VALIDATION, FAILED_COLLECTION, FAILED_SANITIZATION ->
+                    SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE);
+        };
+    }
+
+    private SessionResumeResult collectionPlanResume(ReportSessionSnapshot snapshot) {
+        FormSubmission submission = confirmedForms.get(snapshot.id());
+        CategorySpecification category = snapshot.selectedCategory().orElse(null);
+        if (submission == null || category == null) {
+            return SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE);
+        }
+        CollectionPlanRequest request = new CollectionPlanRequest(
+                snapshot.id(),
+                snapshot.revision(),
+                snapshot.providerSpecification().id(),
+                snapshot.providerSpecification().version(),
+                category.id());
+        return SessionResumeResult.ready(new CollectionPlanResumeTarget(request, submission));
+    }
+
+    private SessionResumeResult sanitizationResume(ReportSessionId sessionId) {
+        return beginSanitization(sessionId.toString())
+                .<SessionResumeResult>map(request ->
+                        SessionResumeResult.ready(new SanitizationResumeTarget(request)))
+                .orElseGet(() ->
+                        SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+    }
+
+    private SessionResumeResult exportResume(ReportSessionId sessionId) {
+        LocalExportRequest activeExport = activeExports.get(sessionId);
+        if (activeExport != null) {
+            return SessionResumeResult.ready(new ExportResumeTarget(activeExport));
+        }
+        if (activeExportPreparations.containsKey(sessionId)) {
+            return SessionResumeResult.withoutTarget(SessionResumeStatus.BUSY);
+        }
+        return beginLocalExport(sessionId.toString())
+                .<SessionResumeResult>map(request ->
+                        SessionResumeResult.ready(new ExportPreparationResumeTarget(request)))
+                .orElseGet(() ->
+                        SessionResumeResult.withoutTarget(SessionResumeStatus.UNAVAILABLE));
+    }
+
+    private FormSubmission currentFormSubmission(ReportSessionId sessionId) {
+        PersistedFormDraft persisted = persistedForms.get(sessionId);
+        return persisted == null ? FormSubmission.empty() : persisted.submission();
+    }
+
     /** Returns the trusted immutable identity and declaration for one selected session form. */
     public synchronized Optional<FormView> form(String sessionValue) {
         ReportSession session = session(sessionValue);
@@ -861,6 +948,8 @@ public final class BugReportCommandService {
         }
         sessions.put(id, session);
         persistedDraftFiles.add(id);
+        persistedForms.put(
+                id, new PersistedFormDraft(snapshot.revision(), recovered.formSubmission()));
         return Optional.of(
                 new DraftResume(
                         id,
@@ -1356,6 +1445,90 @@ public final class BugReportCommandService {
         INVALID_STATE,
         UNAVAILABLE,
         FAILED
+    }
+
+    /** Stable result for reopening one live in-memory report without restoring new authority. */
+    public record SessionResumeResult(
+            SessionResumeStatus status, Optional<SessionResumeTarget> target) {
+        public SessionResumeResult {
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(target, "target");
+            if ((status == SessionResumeStatus.READY) != target.isPresent()) {
+                throw new IllegalArgumentException(
+                        "Only a ready session resume result carries a target");
+            }
+        }
+
+        private static SessionResumeResult ready(SessionResumeTarget target) {
+            return new SessionResumeResult(SessionResumeStatus.READY, Optional.of(target));
+        }
+
+        private static SessionResumeResult withoutTarget(SessionResumeStatus status) {
+            return new SessionResumeResult(status, Optional.empty());
+        }
+    }
+
+    public enum SessionResumeStatus {
+        READY,
+        UNKNOWN_SESSION,
+        BUSY,
+        UNAVAILABLE,
+        TERMINAL
+    }
+
+    /** Closed set of service-issued inputs accepted by the first-party screen router. */
+    public sealed interface SessionResumeTarget permits
+            FormResumeTarget,
+            CollectionPlanResumeTarget,
+            SanitizationResumeTarget,
+            ReviewResumeTarget,
+            ExportPreparationResumeTarget,
+            ExportResumeTarget {}
+
+    public record FormResumeTarget(
+            ReportSessionId sessionId, FormSubmission submission)
+            implements SessionResumeTarget {
+        public FormResumeTarget {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(submission, "submission");
+        }
+    }
+
+    public record CollectionPlanResumeTarget(
+            CollectionPlanRequest request, FormSubmission submission)
+            implements SessionResumeTarget {
+        public CollectionPlanResumeTarget {
+            Objects.requireNonNull(request, "request");
+            Objects.requireNonNull(submission, "submission");
+        }
+    }
+
+    public record SanitizationResumeTarget(SanitizationExecutionRequest request)
+            implements SessionResumeTarget {
+        public SanitizationResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ReviewResumeTarget(WorkspaceReviewRequest request)
+            implements SessionResumeTarget {
+        public ReviewResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ExportPreparationResumeTarget(LocalExportPreparationRequest request)
+            implements SessionResumeTarget {
+        public ExportPreparationResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
+    }
+
+    public record ExportResumeTarget(LocalExportRequest request)
+            implements SessionResumeTarget {
+        public ExportResumeTarget {
+            Objects.requireNonNull(request, "request");
+        }
     }
 
     /** Identity-only request for client-side source planning. */

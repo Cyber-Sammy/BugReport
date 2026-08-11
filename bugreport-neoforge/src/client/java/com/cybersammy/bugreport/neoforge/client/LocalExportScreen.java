@@ -35,6 +35,19 @@ final class LocalExportScreen extends Screen {
         exportDirectory = gameDirectory.toAbsolutePath().normalize();
     }
 
+    LocalExportScreen(
+            BugReportCommandService commands,
+            BugReportCommandService.LocalExportRequest export,
+            Path gameDirectory) {
+        super(Component.translatable("bugreport.screen.export.title"));
+        this.commands = commands;
+        preparation = null;
+        this.export = export;
+        exportDirectory = gameDirectory.toAbsolutePath().normalize();
+        status = Component.translatable("bugreport.screen.export.ready");
+        started = true;
+    }
+
     @Override
     protected void init() {
         visible = true;
@@ -121,7 +134,6 @@ final class LocalExportScreen extends Screen {
     @Override
     public void onClose() {
         visible = false;
-        if (running && control != null) control.requestCancellation();
         super.onClose();
     }
 

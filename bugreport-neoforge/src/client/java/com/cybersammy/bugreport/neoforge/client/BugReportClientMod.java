@@ -10,6 +10,7 @@ import com.cybersammy.bugreport.core.draft.FileDraftStore;
 import com.cybersammy.bugreport.core.history.FileReportHistoryStore;
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
 import java.util.Objects;
+import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -104,6 +105,78 @@ public final class BugReportClientMod {
                             return BugReportCommandTree.SelectionResult.OPENED;
                         }).orElse(BugReportCommandTree.SelectionResult.UNKNOWN);
                     }
-                });
+                }, this::openLiveSession);
+    }
+
+    private List<BugReportCommandService.Message> openLiveSession(String sessionValue) {
+        BugReportCommandService.SessionResumeResult resumed =
+                commands.resumeSession(sessionValue);
+        if (resumed.status() != BugReportCommandService.SessionResumeStatus.READY) {
+            return List.of(new BugReportCommandService.Message(switch (resumed.status()) {
+                case UNKNOWN_SESSION -> "bugreport.command.error.unknown_session";
+                case BUSY -> "bugreport.command.open.busy";
+                case UNAVAILABLE -> "bugreport.command.open.unavailable";
+                case TERMINAL -> "bugreport.command.open.terminal";
+                case READY -> throw new IllegalStateException("Ready resume has no target");
+            }));
+        }
+        BugReportCommandService.SessionResumeTarget target = resumed.target().orElseThrow();
+        if (!openTarget(target)) {
+            return List.of(new BugReportCommandService.Message(
+                    "bugreport.command.open.unavailable"));
+        }
+        return List.of(new BugReportCommandService.Message(
+                "bugreport.command.open.success", sessionValue));
+    }
+
+    private boolean openTarget(BugReportCommandService.SessionResumeTarget target) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (target instanceof BugReportCommandService.FormResumeTarget form) {
+            return attachForm(form.sessionId(), form.submission())
+                    .map(screen -> {
+                        minecraft.setScreen(screen);
+                        return true;
+                    })
+                    .orElse(false);
+        }
+        if (target instanceof BugReportCommandService.CollectionPlanResumeTarget planning) {
+            return attachForm(planning.request().sessionId(), planning.submission())
+                    .map(form -> {
+                        minecraft.setScreen(new CollectionPlanScreen(
+                                commands, planning.request(), form));
+                        return true;
+                    })
+                    .orElse(false);
+        }
+        if (target instanceof BugReportCommandService.SanitizationResumeTarget sanitization) {
+            minecraft.setScreen(new SanitizationReviewScreen(commands, sanitization.request()));
+            return true;
+        }
+        if (target instanceof BugReportCommandService.ReviewResumeTarget review) {
+            minecraft.setScreen(new SanitizationReviewScreen(commands, review.request()));
+            return true;
+        }
+        if (target instanceof BugReportCommandService.ExportPreparationResumeTarget export) {
+            minecraft.setScreen(new LocalExportScreen(
+                    commands, export.request(), minecraft.gameDirectory.toPath()));
+            return true;
+        }
+        if (target instanceof BugReportCommandService.ExportResumeTarget export) {
+            minecraft.setScreen(new LocalExportScreen(
+                    commands, export.request(), minecraft.gameDirectory.toPath()));
+            return true;
+        }
+        return false;
+    }
+
+    private Optional<CategoryFormScreen> attachForm(
+            com.cybersammy.bugreport.core.session.ReportSessionId sessionId,
+            com.cybersammy.bugreport.core.form.FormSubmission submission) {
+        return commands.form(sessionId.toString()).flatMap(form ->
+                commands.providerChoice(form.providerId()).map(provider -> {
+                    ProviderCategoryScreen selector =
+                            new ProviderCategoryScreen(commands, provider);
+                    return selector.attachLiveForm(sessionId, provider, submission);
+                }));
     }
 }

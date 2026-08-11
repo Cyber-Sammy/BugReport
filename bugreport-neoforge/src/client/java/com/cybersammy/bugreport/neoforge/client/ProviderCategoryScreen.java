@@ -1,6 +1,8 @@
 package com.cybersammy.bugreport.neoforge.client;
 
 import com.cybersammy.bugreport.core.registry.ProviderSupportState;
+import com.cybersammy.bugreport.core.form.FormSubmission;
+import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
 import net.minecraft.client.Minecraft;
@@ -138,6 +140,16 @@ final class ProviderCategoryScreen extends Screen {
         status = Component.translatable(
                 "bugreport.screen.recovery.resumed", resumed.recordedState().name());
         minecraft.setScreen(activeForm);
+    }
+
+    CategoryFormScreen attachLiveForm(
+            ReportSessionId sessionId,
+            BugReportCommandService.ProviderChoice provider,
+            FormSubmission submission) {
+        selectedProvider = provider;
+        activeForm = new CategoryFormScreen(
+                commands, sessionId.toString(), this, submission);
+        return activeForm;
     }
 
     void updateRecoveryOverview(BugReportCommandService.DraftRecoveryOverview overview) {

@@ -170,6 +170,13 @@ the provider and category creates the session directly. Category selection
 opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
+`/bugreport open <report-id>` reopens the current safe UI checkpoint for a live
+session, including the form, collection planning, artifact review, and local
+export confirmation. A still-running collection, sanitization, or delivery is
+reported as busy and can be opened after it reaches its next checkpoint.
+Persisted form drafts can also be reopened by ID after restart; no later
+collection, workspace, review, or delivery authority is reconstructed from
+disk.
 Form edits are periodically saved off the render thread. Back waits for the
 latest typed draft to be persisted, while Cancel discards both the session and
 its canonical persisted draft and reports failure without cancelling when that

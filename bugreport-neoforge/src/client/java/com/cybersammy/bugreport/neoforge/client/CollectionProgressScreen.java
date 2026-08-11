@@ -130,9 +130,6 @@ final class CollectionProgressScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (!terminal) {
-            control.requestCancellation();
-        }
         visible = false;
         super.onClose();
     }

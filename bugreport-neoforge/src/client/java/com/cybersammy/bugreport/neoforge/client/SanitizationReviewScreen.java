@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.neoforge.client;
 import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
+import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -26,6 +27,7 @@ final class SanitizationReviewScreen extends Screen {
 
     private final BugReportCommandService commands;
     private final BugReportCommandService.SanitizationExecutionRequest execution;
+    private final ReportSessionId sessionId;
     private final Set<String> included = new HashSet<>();
     private final Set<String> explicitlyReviewed = new HashSet<>();
     private volatile boolean visible;
@@ -48,6 +50,18 @@ final class SanitizationReviewScreen extends Screen {
         super(Component.translatable("bugreport.screen.review.title"));
         this.commands = commands;
         this.execution = execution;
+        sessionId = execution.sessionId();
+    }
+
+    SanitizationReviewScreen(
+            BugReportCommandService commands,
+            BugReportCommandService.WorkspaceReviewRequest review) {
+        super(Component.translatable("bugreport.screen.review.title"));
+        this.commands = commands;
+        execution = null;
+        sessionId = review.sessionId();
+        started = true;
+        installReview(review);
     }
 
     @Override
@@ -78,7 +92,13 @@ final class SanitizationReviewScreen extends Screen {
         if (!visible) {
             return;
         }
+        installReview(request);
+        rebuildReviewWidgets();
+    }
+
+    private void installReview(BugReportCommandService.WorkspaceReviewRequest request) {
         review = request;
+        included.clear();
         for (WorkspaceReviewCoordinator.ArtifactReview artifact : request.artifacts()) {
             if (artifact.status() != WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED
                     && artifact.inclusionDefault() == InclusionDefault.INCLUDED) {
@@ -88,7 +108,6 @@ final class SanitizationReviewScreen extends Screen {
         status = Component.translatable(
                 "bugreport.screen.review.ready", request.artifacts().size());
         ensureActiveSection(request.artifacts());
-        rebuildReviewWidgets();
     }
 
     private void presentFailure() {
@@ -333,7 +352,7 @@ final class SanitizationReviewScreen extends Screen {
     }
 
     private void openExport() {
-        commands.beginLocalExport(execution.sessionId().toString()).ifPresent(request ->
+        commands.beginLocalExport(sessionId.toString()).ifPresent(request ->
                 minecraft.setScreen(new LocalExportScreen(commands, request, minecraft.gameDirectory.toPath())));
     }
 
@@ -346,7 +365,7 @@ final class SanitizationReviewScreen extends Screen {
         status = Component.translatable("bugreport.screen.review.cancelling");
         rebuildReviewWidgets();
         Thread.ofVirtual().name("bugreport-review-cancel").start(() -> {
-            boolean discarded = commands.discard(execution.sessionId().toString()).stream()
+            boolean discarded = commands.discard(sessionId.toString()).stream()
                     .anyMatch(message ->
                             "bugreport.command.discard.success".equals(message.translationKey()));
             Minecraft.getInstance().execute(() -> finishCancel(discarded));
@@ -367,12 +386,8 @@ final class SanitizationReviewScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (!completed) {
-            cancel();
-        } else {
-            visible = false;
-            super.onClose();
-        }
+        visible = false;
+        super.onClose();
     }
 
     @Override

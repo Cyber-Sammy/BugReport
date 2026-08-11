@@ -13,12 +13,20 @@ public final class BugReportCommandTree {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands) {
-        register(dispatcher, commands, ProviderSelector.none());
+        register(dispatcher, commands, ProviderSelector.none(), commands::open);
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands, ProviderSelector selector) {
-        dispatcher.register(commandRoot(commands, selector));
+        register(dispatcher, commands, selector, commands::open);
+    }
+
+    public static void register(
+            CommandDispatcher<CommandSourceStack> dispatcher,
+            BugReportCommandService commands,
+            ProviderSelector selector,
+            SessionOpener sessionOpener) {
+        dispatcher.register(commandRoot(commands, selector, sessionOpener));
     }
 
     public static boolean registrationReadyForSmoke(BugReportCommandService commands) {
@@ -32,7 +40,9 @@ public final class BugReportCommandTree {
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> commandRoot(
-            BugReportCommandService commands, ProviderSelector selector) {
+            BugReportCommandService commands,
+            ProviderSelector selector,
+            SessionOpener sessionOpener) {
         LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal("bugreport")
                 .executes(context -> {
                     selector.open();
@@ -48,7 +58,7 @@ public final class BugReportCommandTree {
                                 StringArgumentType.getString(context, "mod-id"),
                                 StringArgumentType.getString(context, "category-id")))))));
         root.then(Commands.literal("open").then(Commands.argument("report-id", StringArgumentType.word())
-                .executes(context -> respond(context.getSource(), commands.open(
+                .executes(context -> respond(context.getSource(), sessionOpener.open(
                         StringArgumentType.getString(context, "report-id"))))));
         root.then(Commands.literal("discard").then(Commands.argument("report-id", StringArgumentType.word())
                 .executes(context -> respond(context.getSource(), commands.discard(
@@ -92,6 +102,11 @@ public final class BugReportCommandTree {
                 @Override public SelectionResult open(ProviderId providerId) { return SelectionResult.UNKNOWN; }
             };
         }
+    }
+
+    @FunctionalInterface
+    public interface SessionOpener {
+        java.util.List<BugReportCommandService.Message> open(String sessionId);
     }
 
     public enum SelectionResult { OPENED, UNKNOWN, UNAVAILABLE }

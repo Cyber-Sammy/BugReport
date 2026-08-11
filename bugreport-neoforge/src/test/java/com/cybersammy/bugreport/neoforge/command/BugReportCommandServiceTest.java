@@ -2,6 +2,7 @@ package com.cybersammy.bugreport.neoforge.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -158,6 +159,9 @@ final class BugReportCommandServiceTest {
                 "bugreport.command.error.unknown_session",
                 commands.open("not-a-session").getFirst().translationKey());
         assertEquals(
+                BugReportCommandService.SessionResumeStatus.UNKNOWN_SESSION,
+                commands.resumeSession("not-a-session").status());
+        assertEquals(
                 "bugreport.command.error.unknown_session",
                 commands.discard("not-a-session").getFirst().translationKey());
     }
@@ -172,6 +176,31 @@ final class BugReportCommandServiceTest {
         assertEquals("bugreport.command.open.summary", service.open(sessionId).getFirst().translationKey());
         assertEquals("bugreport.command.discard.success", service.discard(sessionId).getFirst().translationKey());
         assertEquals("bugreport.command.error.unknown_session", service.open(sessionId).getFirst().translationKey());
+    }
+
+    @Test
+    void liveFormAndConfirmedPlanningCanBeReopenedWithTypedState() {
+        BugReportCommandService service =
+                new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        var formResume = service.resumeSession(sessionId);
+        assertEquals(BugReportCommandService.SessionResumeStatus.READY, formResume.status());
+        var form = assertInstanceOf(
+                BugReportCommandService.FormResumeTarget.class,
+                formResume.target().orElseThrow());
+        assertEquals(FormSubmission.empty(), form.submission());
+
+        var confirmation = service.confirmForm(sessionId, validSubmission());
+        assertEquals(BugReportCommandService.FormConfirmationStatus.ACCEPTED,
+                confirmation.status());
+        var planResume = service.resumeSession(sessionId);
+        var planning = assertInstanceOf(
+                BugReportCommandService.CollectionPlanResumeTarget.class,
+                planResume.target().orElseThrow());
+        assertEquals(validSubmission(), planning.submission());
+        assertEquals(confirmation.planRequest().orElseThrow(), planning.request());
     }
 
     @Test
@@ -358,6 +387,9 @@ final class BugReportCommandServiceTest {
 
         var sanitization = service.beginSanitization(sessionId).orElseThrow();
         assertTrue(service.beginSanitization(sessionId).isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.BUSY,
+                service.resumeSession(sessionId).status());
         var sanitizationConstructor =
                 BugReportCommandService.SanitizationExecutionRequest.class.getDeclaredConstructor(
                         com.cybersammy.bugreport.core.session.ReportSessionId.class,
@@ -376,6 +408,10 @@ final class BugReportCommandServiceTest {
                 syntheticSanitization, CancellationSignal.neverCancelled()).isEmpty());
         var review = service.executeSanitization(
                 sanitization, CancellationSignal.neverCancelled()).orElseThrow();
+        var reviewResume = assertInstanceOf(
+                BugReportCommandService.ReviewResumeTarget.class,
+                service.resumeSession(sessionId).target().orElseThrow());
+        assertSame(review, reviewResume.request());
         Set<String> includedArtifacts = Set.of(
                 review.batch().artifacts().getFirst().artifactName());
         var reviewConstructor = BugReportCommandService.WorkspaceReviewRequest.class
@@ -439,7 +475,14 @@ final class BugReportCommandServiceTest {
 
         var exportPreparation = service.beginLocalExport(sessionId).orElseThrow();
         assertTrue(service.beginLocalExport(sessionId).isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.BUSY,
+                service.resumeSession(sessionId).status());
         var export = service.prepareLocalExport(exportPreparation).orElseThrow();
+        var exportResume = assertInstanceOf(
+                BugReportCommandService.ExportResumeTarget.class,
+                service.resumeSession(sessionId).target().orElseThrow());
+        assertSame(export, exportResume.request());
         assertEquals(3, export.summary().entryCount());
         assertFalse(service.executeLocalExport(
                 export, gameDirectory, "../unsafe.bugreport.zip",
@@ -454,6 +497,9 @@ final class BugReportCommandServiceTest {
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COMPLETED,
                 service.form(sessionId).orElseThrow().state());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.TERMINAL,
+                service.resumeSession(sessionId).status());
     }
 
     @Test
@@ -695,21 +741,15 @@ final class BugReportCommandServiceTest {
                 BugReportCommandService.DraftRecoveryStatus.READY,
                 recovery.choices().getFirst().status());
 
-        BugReportCommandService.DraftResume resumed = restarted
-                .resumeDraft(ReportSessionId.parse(sessionId))
-                .orElseThrow();
-        assertEquals(submission, resumed.formSubmission());
+        var resumed = assertInstanceOf(
+                BugReportCommandService.FormResumeTarget.class,
+                restarted.resumeSession(sessionId).target().orElseThrow());
+        assertEquals(submission, resumed.submission());
         assertEquals(ReportSessionState.FORM_IN_PROGRESS,
                 restarted.form(sessionId).orElseThrow().state());
         assertTrue(restarted.beginCollection(sessionId).isEmpty());
         assertTrue(restarted.beginLocalExport(sessionId).isEmpty());
-        assertTrue(restarted.submitForm(sessionId, resumed.formSubmission()).validation().isValid());
-        assertEquals(
-                BugReportCommandService.FormConfirmationStatus.PERSISTENCE_FAILED,
-                restarted.confirmForm(sessionId, submission).status());
-        assertEquals(
-                BugReportCommandService.DraftSaveStatus.SAVED,
-                restarted.saveFormDraft(sessionId, submission));
+        assertTrue(restarted.submitForm(sessionId, resumed.submission()).validation().isValid());
         assertEquals(
                 BugReportCommandService.FormConfirmationStatus.ACCEPTED,
                 restarted.confirmForm(sessionId, submission).status());
