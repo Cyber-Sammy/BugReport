@@ -37,6 +37,7 @@ final class CollectionPlanScreen extends Screen {
     private Set<com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId> includedGeneratorIds = Set.of();
     private boolean planning = true;
     private boolean selectionAccepted;
+    private boolean emptySelectionConfirmationPending;
     private int sourcePage;
     private Component status = Component.translatable("bugreport.screen.plan.planning");
 
@@ -70,9 +71,13 @@ final class CollectionPlanScreen extends Screen {
             return;
         }
         addSourceControls();
-        Button accept = Button.builder(Component.translatable("bugreport.screen.plan.accept"),
+        Component acceptLabel = emptySelectionConfirmationPending
+                ? Component.translatable("bugreport.screen.plan.continue_without")
+                : Component.translatable(
+                        "bugreport.screen.plan.accept", selectedChoiceCount());
+        Button accept = Button.builder(acceptLabel,
                         ignored -> acceptSelection())
-                .bounds(width / 2 - 58, height - 56, 116, 20).build();
+                .bounds(width / 2 - 90, height - 56, 180, 20).build();
         accept.active = !selectionAccepted;
         addRenderableWidget(accept);
     }
@@ -104,7 +109,7 @@ final class CollectionPlanScreen extends Screen {
         planning = false;
         status = Component.translatable(
                 "bugreport.screen.plan.ready",
-                planned.sources().files().size(),
+                availableChoiceCount(planned),
                 knownBytes(planned.sources()));
         rebuildPlanWidgets();
     }
@@ -180,6 +185,7 @@ final class CollectionPlanScreen extends Screen {
             updated.remove(sourceId);
         }
         includedSourceIds = updated;
+        selectionChanged();
         rebuildPlanWidgets();
     }
 
@@ -191,6 +197,7 @@ final class CollectionPlanScreen extends Screen {
             updated.remove(generatorId);
         }
         includedGeneratorIds = updated;
+        selectionChanged();
         rebuildPlanWidgets();
     }
 
@@ -200,6 +207,12 @@ final class CollectionPlanScreen extends Screen {
     }
 
     private void acceptSelection() {
+        if (selectedChoiceCount() == 0 && !emptySelectionConfirmationPending) {
+            emptySelectionConfirmationPending = true;
+            status = Component.translatable("bugreport.screen.plan.empty_warning");
+            rebuildPlanWidgets();
+            return;
+        }
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
                 collectionPlan, includedSourceIds, includedGeneratorIds);
         if (reviewed.includedSources().stream()
@@ -220,6 +233,26 @@ final class CollectionPlanScreen extends Screen {
             return;
         }
         completeSelection(reviewed);
+    }
+
+    private void selectionChanged() {
+        emptySelectionConfirmationPending = false;
+        status = Component.translatable(
+                "bugreport.screen.plan.selection", selectedChoiceCount());
+    }
+
+    private int selectedChoiceCount() {
+        return Math.addExact(includedSourceIds.size(), includedGeneratorIds.size());
+    }
+
+    private static int availableChoiceCount(CategoryCollectionPlan planned) {
+        int sources = (int) planned.sources().sources().stream()
+                .filter(source -> !(source.selection() instanceof UnavailableSourcePlan))
+                .count();
+        int generators = (int) planned.generators().stream()
+                .filter(planned::isAvailable)
+                .count();
+        return Math.addExact(sources, generators);
     }
 
     private void completeSelection(ReviewedCollectionPlan reviewed) {
