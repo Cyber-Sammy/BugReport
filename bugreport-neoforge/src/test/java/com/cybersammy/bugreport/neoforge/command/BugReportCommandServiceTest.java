@@ -195,6 +195,27 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
+    void latestActiveSessionIsSuggestedAndOpenedNewestFirst() {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String first = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        String second = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+
+        assertEquals(List.of(second, first), service.activeSessionIds());
+        assertEquals(Optional.of(second), service.latestActiveSessionId());
+        assertEquals(second, service.openLatest().getFirst().arguments()[0]);
+
+        service.discard(second);
+        assertEquals(Optional.of(first), service.latestActiveSessionId());
+        service.discard(first);
+        assertTrue(service.latestActiveSessionId().isEmpty());
+        assertEquals(
+                "bugreport.command.error.unknown_session",
+                service.openLatest().getFirst().translationKey());
+    }
+
+    @Test
     void liveFormAndConfirmedPlanningCanBeReopenedWithTypedState() {
         BugReportCommandService service =
                 new BugReportCommandService(BugReportCommandServiceTest::registry);

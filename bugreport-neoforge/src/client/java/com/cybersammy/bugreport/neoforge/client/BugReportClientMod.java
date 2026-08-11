@@ -105,7 +105,24 @@ public final class BugReportClientMod {
                             return BugReportCommandTree.SelectionResult.OPENED;
                         }).orElse(BugReportCommandTree.SelectionResult.UNKNOWN);
                     }
-                }, this::openLiveSession);
+                }, new BugReportCommandTree.SessionOpener() {
+                    @Override
+                    public List<BugReportCommandService.Message> openLatest() {
+                        return openLatestLiveSession();
+                    }
+
+                    @Override
+                    public List<BugReportCommandService.Message> open(String sessionId) {
+                        return openLiveSession(sessionId);
+                    }
+                });
+    }
+
+    private List<BugReportCommandService.Message> openLatestLiveSession() {
+        return commands.latestActiveSessionId()
+                .map(this::openLiveSession)
+                .orElseGet(() -> List.of(new BugReportCommandService.Message(
+                        "bugreport.command.error.unknown_session")));
     }
 
     private List<BugReportCommandService.Message> openLiveSession(String sessionValue) {

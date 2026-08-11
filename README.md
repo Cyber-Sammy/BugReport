@@ -161,7 +161,7 @@ The first client command boundary is available after the client has loaded:
 /bugreport
 /bugreport list
 /bugreport create <mod-id> [category-id]
-/bugreport open <report-id>
+/bugreport open [report-id]
 /bugreport discard <report-id>
 ```
 
@@ -171,10 +171,12 @@ the provider and category creates the session directly. Category selection
 opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
-`/bugreport open <report-id>` reopens the current safe UI checkpoint for a live
-session, including the form, collection planning, artifact review, and local
-export confirmation. A still-running collection, sanitization, or delivery is
-reported as busy and can be opened after it reaches its next checkpoint.
+`/bugreport open` reopens the most recently created unfinished in-memory report;
+an optional exact report ID selects another active report. Active report IDs are
+offered as command suggestions. The command reopens the current safe UI checkpoint,
+including the form, collection planning, artifact review, and local export confirmation.
+A still-running collection, sanitization, or delivery is reported as busy and can
+be opened after it reaches its next checkpoint.
 Persisted form drafts can also be reopened by ID after restart; no later
 collection, workspace, review, or delivery authority is reconstructed from
 disk.

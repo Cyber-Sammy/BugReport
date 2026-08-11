@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 
 /** Builds the client-independent Minecraft command tree used by the NeoForge client adapter. */
@@ -13,12 +14,12 @@ public final class BugReportCommandTree {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands) {
-        register(dispatcher, commands, ProviderSelector.none(), commands::open);
+        register(dispatcher, commands, ProviderSelector.none(), SessionOpener.forService(commands));
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher,
             BugReportCommandService commands, ProviderSelector selector) {
-        register(dispatcher, commands, selector, commands::open);
+        register(dispatcher, commands, selector, SessionOpener.forService(commands));
     }
 
     public static void register(
@@ -36,6 +37,8 @@ public final class BugReportCommandTree {
                 && dispatcher.getRoot().getChild("bugreport").getChild("list") != null
                 && dispatcher.getRoot().getChild("bugreport").getChild("create") != null
                 && dispatcher.parse("bugreport list", (CommandSourceStack) null)
+                        .getReader().getRemainingLength() == 0
+                && dispatcher.parse("bugreport open", (CommandSourceStack) null)
                         .getReader().getRemainingLength() == 0;
     }
 
@@ -57,9 +60,13 @@ public final class BugReportCommandTree {
                         .executes(context -> respond(context.getSource(), commands.create(
                                 StringArgumentType.getString(context, "mod-id"),
                                 StringArgumentType.getString(context, "category-id")))))));
-        root.then(Commands.literal("open").then(Commands.argument("report-id", StringArgumentType.word())
-                .executes(context -> respond(context.getSource(), sessionOpener.open(
-                        StringArgumentType.getString(context, "report-id"))))));
+        root.then(Commands.literal("open")
+                .executes(context -> respond(context.getSource(), sessionOpener.openLatest()))
+                .then(Commands.argument("report-id", StringArgumentType.word())
+                        .suggests((context, builder) ->
+                                SharedSuggestionProvider.suggest(commands.activeSessionIds(), builder))
+                        .executes(context -> respond(context.getSource(), sessionOpener.open(
+                                StringArgumentType.getString(context, "report-id"))))));
         root.then(Commands.literal("discard").then(Commands.argument("report-id", StringArgumentType.word())
                 .executes(context -> respond(context.getSource(), commands.discard(
                         StringArgumentType.getString(context, "report-id"))))));
@@ -104,9 +111,24 @@ public final class BugReportCommandTree {
         }
     }
 
-    @FunctionalInterface
     public interface SessionOpener {
+        java.util.List<BugReportCommandService.Message> openLatest();
+
         java.util.List<BugReportCommandService.Message> open(String sessionId);
+
+        static SessionOpener forService(BugReportCommandService commands) {
+            return new SessionOpener() {
+                @Override
+                public java.util.List<BugReportCommandService.Message> openLatest() {
+                    return commands.openLatest();
+                }
+
+                @Override
+                public java.util.List<BugReportCommandService.Message> open(String sessionId) {
+                    return commands.open(sessionId);
+                }
+            };
+        }
     }
 
     public enum SelectionResult { OPENED, UNKNOWN, UNAVAILABLE }

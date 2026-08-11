@@ -218,6 +218,31 @@ public final class BugReportCommandService {
                 snapshot.state().name()));
     }
 
+    /** Returns active in-memory report IDs newest-first for first-party command suggestions. */
+    public synchronized List<String> activeSessionIds() {
+        List<ReportSessionId> ids = List.copyOf(sessions.keySet());
+        java.util.ArrayList<String> active = new java.util.ArrayList<>(ids.size());
+        for (int index = ids.size() - 1; index >= 0; index--) {
+            ReportSession session = sessions.get(ids.get(index));
+            if (session != null && isActiveSessionState(session.snapshot().state())) {
+                active.add(ids.get(index).toString());
+            }
+        }
+        return List.copyOf(active);
+    }
+
+    /** Returns the most recently created unfinished in-memory report, if one exists. */
+    public synchronized Optional<String> latestActiveSessionId() {
+        return activeSessionIds().stream().findFirst();
+    }
+
+    /** Describes the latest active report for command adapters without a resumable UI. */
+    public synchronized List<Message> openLatest() {
+        return latestActiveSessionId()
+                .map(this::open)
+                .orElseGet(() -> List.of(new Message("bugreport.command.error.unknown_session")));
+    }
+
     /** Resolves one live in-memory report to the next safe first-party UI checkpoint. */
     public synchronized SessionResumeResult resumeSession(String sessionValue) {
         ReportSession session = session(sessionValue);
@@ -1172,6 +1197,10 @@ public final class BugReportCommandService {
         } catch (IllegalArgumentException exception) {
             return null;
         }
+    }
+
+    private static boolean isActiveSessionState(ReportSessionState state) {
+        return state != ReportSessionState.COMPLETED && state != ReportSessionState.CANCELLED;
     }
 
     private static boolean matchesPlan(
