@@ -1,10 +1,14 @@
 package com.cybersammy.bugreport.neoforge.client;
 
+import com.cybersammy.bugreport.api.specification.DiagnosticContentType;
 import com.cybersammy.bugreport.api.specification.InclusionDefault;
 import com.cybersammy.bugreport.core.workspace.WorkspaceReviewCoordinator;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
@@ -15,8 +19,10 @@ import net.minecraft.network.chat.Component;
 
 /** Sanitizes collected bytes off-thread and captures explicit per-artifact review decisions. */
 final class SanitizationReviewScreen extends Screen {
-    private static final int MAX_ARTIFACTS_PER_PAGE = 4;
     private static final int ARTIFACT_ROW_HEIGHT = 64;
+    private static final int PANEL_MAX_WIDTH = 760;
+    private static final int PANEL_SIDE_PADDING = 10;
+    private static final int SCROLLBAR_WIDTH = 6;
 
     private final BugReportCommandService commands;
     private final BugReportCommandService.SanitizationExecutionRequest execution;
@@ -29,7 +35,10 @@ final class SanitizationReviewScreen extends Screen {
     private boolean completed;
     private boolean openingArtifact;
     private boolean cancelInProgress;
-    private int page;
+    private boolean draggingScrollbar;
+    private ReviewSection activeSection;
+    private final Map<ReviewSection, Integer> scrollOffsets =
+            new EnumMap<>(ReviewSection.class);
     private BugReportCommandService.WorkspaceReviewRequest review;
     private Component status = Component.translatable("bugreport.screen.review.sanitizing");
 
@@ -78,6 +87,7 @@ final class SanitizationReviewScreen extends Screen {
         }
         status = Component.translatable(
                 "bugreport.screen.review.ready", request.artifacts().size());
+        ensureActiveSection(request.artifacts());
         rebuildReviewWidgets();
     }
 
@@ -92,7 +102,10 @@ final class SanitizationReviewScreen extends Screen {
     private void rebuildReviewWidgets() {
         clearWidgets();
         if (review != null) {
-            addArtifactControls(review.artifacts());
+            List<ReviewSection> sections = availableSections(review.artifacts());
+            ensureActiveSection(review.artifacts());
+            addSectionTabs(sections);
+            addArtifactControls(sectionArtifacts(review.artifacts(), activeSection));
             Button accept = Button.builder(
                             Component.translatable("bugreport.screen.review.accept"),
                             ignored -> prepareSelection())
@@ -111,23 +124,45 @@ final class SanitizationReviewScreen extends Screen {
         }
     }
 
+    private void addSectionTabs(List<ReviewSection> sections) {
+        if (sections.isEmpty()) {
+            return;
+        }
+        int gap = 4;
+        int availableWidth = Math.min(PANEL_MAX_WIDTH, width - 32);
+        int tabWidth = Math.min(210, (availableWidth - gap * (sections.size() - 1)) / sections.size());
+        int firstLeft = width / 2 - (tabWidth * sections.size() + gap * (sections.size() - 1)) / 2;
+        for (int index = 0; index < sections.size(); index++) {
+            ReviewSection section = sections.get(index);
+            int count = sectionArtifacts(review.artifacts(), section).size();
+            Button tab = Button.builder(
+                            Component.translatable(section.translationKey, count),
+                            ignored -> selectSection(section))
+                    .bounds(firstLeft + index * (tabWidth + gap), 60, tabWidth, 20)
+                    .build();
+            tab.active = section != activeSection && !preparing && !completed;
+            addRenderableWidget(tab);
+        }
+    }
+
     private void addArtifactControls(List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
-        int pageSize = artifactsPerPage();
-        int pageCount = Math.max(1, (artifacts.size() + pageSize - 1) / pageSize);
-        page = Math.min(page, pageCount - 1);
-        int first = page * pageSize;
-        int last = Math.min(first + pageSize, artifacts.size());
+        ReviewPanel panel = reviewPanel();
+        int visibleRows = visibleRows(panel);
+        int first = clampedScrollOffset(artifacts.size(), visibleRows);
+        int last = Math.min(first + visibleRows, artifacts.size());
+        int controlsWidth = panel.width - PANEL_SIDE_PADDING * 2 - SCROLLBAR_WIDTH - 8;
+        int halfWidth = (controlsWidth - 10) / 2;
         for (int index = first; index < last; index++) {
             WorkspaceReviewCoordinator.ArtifactReview artifact = artifacts.get(index);
             boolean failed = artifact.status() == WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED;
-            int rowTop = 62 + (index - first) * ARTIFACT_ROW_HEIGHT;
+            int rowTop = panel.contentTop + (index - first) * ARTIFACT_ROW_HEIGHT;
             Button include = Button.builder(
                             Component.translatable(
                                     included.contains(artifact.artifactName())
                                             ? "bugreport.screen.review.included"
                                             : "bugreport.screen.review.excluded"),
                             ignored -> toggleIncluded(artifact))
-                    .bounds(width / 2 - 140, rowTop + 14, 135, 20)
+                    .bounds(panel.left + PANEL_SIDE_PADDING, rowTop + 14, halfWidth, 20)
                     .build();
             include.active = !failed && !preparing && !completed;
             addRenderableWidget(include);
@@ -138,42 +173,31 @@ final class SanitizationReviewScreen extends Screen {
                                                 ? "bugreport.screen.review.confirmed"
                                                 : "bugreport.screen.review.confirm"),
                                 ignored -> toggleReviewed(artifact))
-                        .bounds(width / 2 + 5, rowTop + 14, 135, 20)
+                        .bounds(panel.left + PANEL_SIDE_PADDING + halfWidth + 10,
+                                rowTop + 14, halfWidth, 20)
                         .build();
                 confirm.active = included.contains(artifact.artifactName())
                         && !preparing && !completed;
                 addRenderableWidget(confirm);
             }
-            addOpenControls(artifact, rowTop + 38);
+            addOpenControls(artifact, rowTop + 38, panel.left + PANEL_SIDE_PADDING,
+                    controlsWidth, halfWidth);
         }
-        if (pageCount > 1) {
-            Button previous = Button.builder(Component.translatable("bugreport.screen.form.previous"),
-                            ignored -> changePage(-1))
-                    .bounds(width / 2 - 120, height - 82, 56, 20).build();
-            previous.active = page > 0;
-            addRenderableWidget(previous);
-            Button next = Button.builder(Component.translatable("bugreport.screen.form.next"),
-                            ignored -> changePage(1))
-                    .bounds(width / 2 + 64, height - 82, 56, 20).build();
-            next.active = page + 1 < pageCount;
-            addRenderableWidget(next);
-        }
-    }
-
-    private int artifactsPerPage() {
-        int rowsAboveInstructions = Math.floorDiv(height - 244, ARTIFACT_ROW_HEIGHT) + 1;
-        return Math.max(1, Math.min(MAX_ARTIFACTS_PER_PAGE, rowsAboveInstructions));
     }
 
     private void addOpenControls(
-            WorkspaceReviewCoordinator.ArtifactReview artifact, int top) {
+            WorkspaceReviewCoordinator.ArtifactReview artifact,
+            int top,
+            int left,
+            int controlsWidth,
+            int halfWidth) {
         if (artifact.status() == WorkspaceReviewCoordinator.ArtifactReviewStatus.SANITIZED) {
             Button original = Button.builder(
                             Component.translatable("bugreport.screen.review.open_original"),
                             ignored -> openArtifact(
                                     artifact,
                                     WorkspaceReviewCoordinator.ReviewArtifactVersion.ORIGINAL))
-                    .bounds(width / 2 - 140, top, 135, 20)
+                    .bounds(left, top, halfWidth, 20)
                     .build();
             original.active = canOpenArtifact();
             addRenderableWidget(original);
@@ -182,7 +206,7 @@ final class SanitizationReviewScreen extends Screen {
                             ignored -> openArtifact(
                                     artifact,
                                     WorkspaceReviewCoordinator.ReviewArtifactVersion.SANITIZED))
-                    .bounds(width / 2 + 5, top, 135, 20)
+                    .bounds(left + halfWidth + 10, top, halfWidth, 20)
                     .build();
             sanitized.active = canOpenArtifact();
             addRenderableWidget(sanitized);
@@ -193,7 +217,7 @@ final class SanitizationReviewScreen extends Screen {
                         ignored -> openArtifact(
                                 artifact,
                                 WorkspaceReviewCoordinator.ReviewArtifactVersion.ORIGINAL))
-                .bounds(width / 2 - 140, top, 280, 20)
+                .bounds(left, top, controlsWidth, 20)
                 .build();
         artifactFile.active = canOpenArtifact();
         addRenderableWidget(artifactFile);
@@ -302,8 +326,9 @@ final class SanitizationReviewScreen extends Screen {
         rebuildReviewWidgets();
     }
 
-    private void changePage(int delta) {
-        page += delta;
+    private void selectSection(ReviewSection section) {
+        activeSection = section;
+        draggingScrollbar = false;
         rebuildReviewWidgets();
     }
 
@@ -352,12 +377,15 @@ final class SanitizationReviewScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        if (review != null) {
+            renderReviewPanelBackground(graphics);
+        }
         super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 42,
                 completed ? 0x60FF60 : 0xFFCC66);
         if (review != null) {
-            renderArtifacts(graphics, review.artifacts());
+            renderReviewPanel(graphics);
             renderInstructions(graphics);
         }
     }
@@ -378,28 +406,246 @@ final class SanitizationReviewScreen extends Screen {
         }
     }
 
-    private void renderArtifacts(
-            GuiGraphics graphics, List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
-        int pageSize = artifactsPerPage();
-        int first = page * pageSize;
-        int last = Math.min(first + pageSize, artifacts.size());
+    private void renderReviewPanel(GuiGraphics graphics) {
+        List<WorkspaceReviewCoordinator.ArtifactReview> artifacts =
+                sectionArtifacts(review.artifacts(), activeSection);
+        ReviewPanel panel = reviewPanel();
+        graphics.drawString(
+                font,
+                Component.translatable("bugreport.screen.review.panel_hint"),
+                panel.left + PANEL_SIDE_PADDING,
+                panel.top + 7,
+                0xB0B0B0);
+
+        int visibleRows = visibleRows(panel);
+        int first = clampedScrollOffset(artifacts.size(), visibleRows);
+        int last = Math.min(first + visibleRows, artifacts.size());
         for (int index = first; index < last; index++) {
             var artifact = artifacts.get(index);
             Component row = Component.translatable(
                     "bugreport.screen.review.artifact",
-                    index + 1,
                     Component.translatable(artifact.labelKey().value()),
+                    artifact.artifactName(),
                     artifact.contentType().name(),
                     artifact.privacy().name(),
                     artifact.byteCount(),
                     artifact.status().name(),
                     artifact.findingCount());
+            int rowTop = panel.contentTop + (index - first) * ARTIFACT_ROW_HEIGHT;
+            graphics.enableScissor(
+                    panel.left + 1,
+                    rowTop,
+                    panel.right() - SCROLLBAR_WIDTH - 9,
+                    rowTop + 12);
             graphics.drawString(
                     font,
                     row,
-                    width / 2 - 140,
-                    62 + (index - first) * ARTIFACT_ROW_HEIGHT,
+                    panel.left + PANEL_SIDE_PADDING,
+                    rowTop,
                     0xE0E0E0);
+            graphics.disableScissor();
+        }
+        renderScrollbar(graphics, panel, artifacts.size(), visibleRows, first);
+    }
+
+    private void renderReviewPanelBackground(GuiGraphics graphics) {
+        ReviewPanel panel = reviewPanel();
+        graphics.fill(panel.left, panel.top, panel.right(), panel.bottom, 0x66000000);
+        graphics.renderOutline(panel.left, panel.top, panel.width, panel.height(), 0xFF808080);
+    }
+
+    private void renderScrollbar(
+            GuiGraphics graphics,
+            ReviewPanel panel,
+            int totalRows,
+            int visibleRows,
+            int offset) {
+        if (totalRows <= visibleRows) {
+            return;
+        }
+        int trackLeft = panel.right() - SCROLLBAR_WIDTH - 4;
+        int trackTop = panel.contentTop;
+        int trackHeight = panel.bottom - panel.contentTop - 6;
+        int thumbHeight = Math.max(20, trackHeight * visibleRows / totalRows);
+        int travel = trackHeight - thumbHeight;
+        int maximumOffset = totalRows - visibleRows;
+        int thumbTop = trackTop + travel * offset / maximumOffset;
+        graphics.fill(trackLeft, trackTop, trackLeft + SCROLLBAR_WIDTH, trackTop + trackHeight,
+                0xFF303030);
+        graphics.fill(trackLeft, thumbTop, trackLeft + SCROLLBAR_WIDTH, thumbTop + thumbHeight,
+                0xFFA0A0A0);
+    }
+
+    @Override
+    public boolean mouseScrolled(
+            double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        if (review != null && reviewPanel().contains(mouseX, mouseY) && scrollBy(verticalAmount)) {
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button == 0 && review != null && scrollbarContains(mouseX, mouseY)) {
+            draggingScrollbar = true;
+            updateScrollFromMouse(mouseY);
+            return true;
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseDragged(
+            double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (button == 0 && draggingScrollbar) {
+            updateScrollFromMouse(mouseY);
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && draggingScrollbar) {
+            draggingScrollbar = false;
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    private boolean scrollBy(double verticalAmount) {
+        if (verticalAmount == 0) {
+            return false;
+        }
+        List<WorkspaceReviewCoordinator.ArtifactReview> artifacts = activeSectionArtifacts();
+        int visibleRows = visibleRows(reviewPanel());
+        int current = clampedScrollOffset(artifacts.size(), visibleRows);
+        int maximum = Math.max(0, artifacts.size() - visibleRows);
+        int next = Math.max(0, Math.min(maximum, current + (verticalAmount < 0 ? 1 : -1)));
+        if (next == current) {
+            return false;
+        }
+        scrollOffsets.put(activeSection, next);
+        rebuildReviewWidgets();
+        return true;
+    }
+
+    private boolean scrollbarContains(double mouseX, double mouseY) {
+        ReviewPanel panel = reviewPanel();
+        int visibleRows = visibleRows(panel);
+        if (activeSectionArtifacts().size() <= visibleRows) {
+            return false;
+        }
+        int left = panel.right() - SCROLLBAR_WIDTH - 6;
+        return mouseX >= left && mouseX < panel.right()
+                && mouseY >= panel.contentTop && mouseY < panel.bottom;
+    }
+
+    private void updateScrollFromMouse(double mouseY) {
+        List<WorkspaceReviewCoordinator.ArtifactReview> artifacts = activeSectionArtifacts();
+        ReviewPanel panel = reviewPanel();
+        int visibleRows = visibleRows(panel);
+        int maximumOffset = Math.max(0, artifacts.size() - visibleRows);
+        if (maximumOffset == 0) {
+            return;
+        }
+        int trackHeight = panel.bottom - panel.contentTop - 6;
+        int thumbHeight = Math.max(20, trackHeight * visibleRows / artifacts.size());
+        int travel = trackHeight - thumbHeight;
+        double position = Math.max(0, Math.min(travel, mouseY - panel.contentTop - thumbHeight / 2.0));
+        int next = (int) Math.round(position * maximumOffset / travel);
+        if (next != scrollOffsets.getOrDefault(activeSection, 0)) {
+            scrollOffsets.put(activeSection, next);
+            rebuildReviewWidgets();
+            draggingScrollbar = true;
+        }
+    }
+
+    private void ensureActiveSection(List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
+        List<ReviewSection> available = availableSections(artifacts);
+        if (!available.contains(activeSection)) {
+            activeSection = available.isEmpty() ? null : available.getFirst();
+        }
+    }
+
+    private List<ReviewSection> availableSections(
+            List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
+        List<ReviewSection> available = new ArrayList<>();
+        for (ReviewSection section : ReviewSection.values()) {
+            if (!sectionArtifacts(artifacts, section).isEmpty()) {
+                available.add(section);
+            }
+        }
+        return List.copyOf(available);
+    }
+
+    private List<WorkspaceReviewCoordinator.ArtifactReview> sectionArtifacts(
+            List<WorkspaceReviewCoordinator.ArtifactReview> artifacts, ReviewSection section) {
+        if (section == null) {
+            return List.of();
+        }
+        return artifacts.stream()
+                .filter(artifact -> section.accepts(artifact.contentType()))
+                .toList();
+    }
+
+    private List<WorkspaceReviewCoordinator.ArtifactReview> activeSectionArtifacts() {
+        return sectionArtifacts(review.artifacts(), activeSection);
+    }
+
+    private int clampedScrollOffset(int artifactCount, int visibleRows) {
+        if (activeSection == null) {
+            return 0;
+        }
+        int maximum = Math.max(0, artifactCount - visibleRows);
+        int current = scrollOffsets.getOrDefault(activeSection, 0);
+        int clamped = Math.max(0, Math.min(maximum, current));
+        scrollOffsets.put(activeSection, clamped);
+        return clamped;
+    }
+
+    private int visibleRows(ReviewPanel panel) {
+        return Math.max(1, (panel.bottom - panel.contentTop - 6) / ARTIFACT_ROW_HEIGHT);
+    }
+
+    private ReviewPanel reviewPanel() {
+        int panelWidth = Math.max(280, Math.min(PANEL_MAX_WIDTH, width - 32));
+        int left = width / 2 - panelWidth / 2;
+        int top = 86;
+        int bottom = Math.max(top + ARTIFACT_ROW_HEIGHT + 30, height - 124);
+        return new ReviewPanel(left, top, panelWidth, bottom, top + 24);
+    }
+
+    private enum ReviewSection {
+        TEXT("bugreport.screen.review.section.text", DiagnosticContentType.TEXT),
+        JSON("bugreport.screen.review.section.json", DiagnosticContentType.JSON),
+        BINARY("bugreport.screen.review.section.binary", DiagnosticContentType.BINARY);
+
+        private final String translationKey;
+        private final DiagnosticContentType contentType;
+
+        ReviewSection(String translationKey, DiagnosticContentType contentType) {
+            this.translationKey = translationKey;
+            this.contentType = contentType;
+        }
+
+        private boolean accepts(DiagnosticContentType candidate) {
+            return contentType == candidate;
+        }
+    }
+
+    private record ReviewPanel(int left, int top, int width, int bottom, int contentTop) {
+        private int right() {
+            return left + width;
+        }
+
+        private int height() {
+            return bottom - top;
+        }
+
+        private boolean contains(double x, double y) {
+            return x >= left && x < right() && y >= top && y < bottom;
         }
     }
 }
