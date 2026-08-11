@@ -27,6 +27,7 @@ final class LocalExportScreen extends Screen {
     private boolean running;
     private boolean finished;
     private boolean successful;
+    private boolean retrying;
     private boolean openingFolder;
     private String archiveFileName;
 
@@ -103,6 +104,13 @@ final class LocalExportScreen extends Screen {
                         .bounds(width / 2 - 58, 158, 116, 20).build());
             }
         }
+        if (finished && !successful) {
+            Button retry = Button.builder(Component.translatable("bugreport.screen.export.retry"),
+                            ignored -> retryExport())
+                    .bounds(width / 2 - 100, 132, 200, 20).build();
+            retry.active = !retrying;
+            addRenderableWidget(retry);
+        }
         Button openFolder = Button.builder(Component.translatable("bugreport.screen.export.open_folder"),
                         ignored -> openExportFolder())
                 .bounds(width / 2 - 100, 184, 200, 20).build();
@@ -159,10 +167,36 @@ final class LocalExportScreen extends Screen {
     private void complete(ReportTransportResult result) {
         if (!visible) return;
         running = false;
-        finished = result != null;
-        successful = finished && result.status() == ReportTransportResult.Status.SUCCESS;
+        finished = true;
+        successful = result != null && result.status() == ReportTransportResult.Status.SUCCESS;
         status = Component.translatable(successful
                 ? "bugreport.screen.export.completed" : "bugreport.screen.export.failed");
+        rebuildExportWidgets();
+    }
+
+    private void retryExport() {
+        if (retrying || export == null || successful) return;
+        retrying = true;
+        status = Component.translatable("bugreport.screen.export.retrying");
+        rebuildExportWidgets();
+        String sessionId = export.sessionId().toString();
+        Thread.ofVirtual().name("bugreport-local-export-retry").start(() -> {
+            var preparation = commands.retryLocalExport(sessionId)
+                    ? commands.beginLocalExport(sessionId)
+                    : java.util.Optional.<BugReportCommandService.LocalExportPreparationRequest>empty();
+            Minecraft.getInstance().execute(() -> {
+                if (!visible) return;
+                preparation.ifPresentOrElse(
+                        request -> minecraft.setScreen(
+                                new LocalExportScreen(commands, request, gameDirectory)),
+                        this::retryFailed);
+            });
+        });
+    }
+
+    private void retryFailed() {
+        retrying = false;
+        status = Component.translatable("bugreport.screen.export.retry_failed");
         rebuildExportWidgets();
     }
 

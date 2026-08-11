@@ -302,6 +302,14 @@ tasks.register('verifyClientBoundarySmoke') {
         }
     }
 }
+
+tasks.register('verifyM3GameplaySmoke') {
+    group = 'verification'
+    description = 'Verifies the physical-client boundary and the complete trusted M3 lifecycle to ZIP.'
+    dependsOn tasks.named('verifyClientBoundarySmoke'),
+            ':bugreport-core:m3LifecycleSmoke',
+            ':bugreport-neoforge:m3ApplicationLifecycleSmoke'
+}
 verifyMarker(
         'verifyExampleCompatible',
         'example-compatible',

@@ -3,6 +3,7 @@ package com.cybersammy.bugreport.neoforge.command;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -195,21 +196,26 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
-    void latestActiveSessionIsSuggestedAndOpenedNewestFirst() {
+    void latestReportSkipsNewerSessionsWithoutAResumableCheckpoint() {
         BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
         String first = (String) service.create("example_mod", "general")
                 .getFirst().arguments()[0];
-        String second = (String) service.create("example_mod", "general")
+        String unavailable = (String) service.create("example_mod", null)
                 .getFirst().arguments()[0];
 
-        assertEquals(List.of(second, first), service.activeSessionIds());
-        assertEquals(Optional.of(second), service.latestActiveSessionId());
-        assertEquals(second, service.openLatest().getFirst().arguments()[0]);
+        assertEquals(List.of(first), service.resumableSessionIds());
+        assertEquals(Optional.of(first), service.latestResumableSessionId());
+        assertEquals(first, service.openLatest().getFirst().arguments()[0]);
 
-        service.discard(second);
-        assertEquals(Optional.of(first), service.latestActiveSessionId());
+        String latest = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        assertEquals(List.of(latest, first), service.resumableSessionIds());
+        assertEquals(Optional.of(latest), service.latestResumableSessionId());
+
+        service.discard(latest);
+        service.discard(unavailable);
         service.discard(first);
-        assertTrue(service.latestActiveSessionId().isEmpty());
+        assertTrue(service.latestResumableSessionId().isEmpty());
         assertEquals(
                 "bugreport.command.error.unknown_session",
                 service.openLatest().getFirst().translationKey());
@@ -549,9 +555,29 @@ final class BugReportCommandServiceTest {
                 new com.cybersammy.bugreport.core.transport.TransportRunControl()).isPresent());
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.READY,
                 service.form(sessionId).orElseThrow().state());
+
+        Path exportDirectory = service.localExportDirectory(gameDirectory).orElseThrow();
+        Files.writeString(exportDirectory.resolve("existing.bugreport.zip"), "occupied");
+        assertEquals(com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.FAILED,
+                service.executeLocalExport(
+                                export, gameDirectory, "existing.bugreport.zip",
+                                new com.cybersammy.bugreport.core.transport.TransportRunControl())
+                        .orElseThrow().status());
+        assertEquals(ReportSessionState.FAILED_DELIVERY,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(service.executeLocalExport(
+                        export, gameDirectory, "stale.bugreport.zip",
+                        new com.cybersammy.bugreport.core.transport.TransportRunControl())
+                .isEmpty());
+
+        assertTrue(service.retryLocalExport(sessionId));
+        var retryPreparation = service.beginLocalExport(sessionId).orElseThrow();
+        assertNotSame(exportPreparation, retryPreparation);
+        var retryExport = service.prepareLocalExport(retryPreparation).orElseThrow();
+        assertNotSame(export, retryExport);
         assertEquals(com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.SUCCESS,
                 service.executeLocalExport(
-                                export, gameDirectory, "report.bugreport.zip",
+                                retryExport, gameDirectory, "report.bugreport.zip",
                                 new com.cybersammy.bugreport.core.transport.TransportRunControl())
                         .orElseThrow().status());
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));

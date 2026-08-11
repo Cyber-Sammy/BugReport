@@ -218,27 +218,27 @@ public final class BugReportCommandService {
                 snapshot.state().name()));
     }
 
-    /** Returns active in-memory report IDs newest-first for first-party command suggestions. */
-    public synchronized List<String> activeSessionIds() {
+    /** Returns safely resumable in-memory report IDs newest-first for command suggestions. */
+    public synchronized List<String> resumableSessionIds() {
         List<ReportSessionId> ids = List.copyOf(sessions.keySet());
-        java.util.ArrayList<String> active = new java.util.ArrayList<>(ids.size());
+        java.util.ArrayList<String> resumable = new java.util.ArrayList<>(ids.size());
         for (int index = ids.size() - 1; index >= 0; index--) {
             ReportSession session = sessions.get(ids.get(index));
-            if (session != null && isActiveSessionState(session.snapshot().state())) {
-                active.add(ids.get(index).toString());
+            if (session != null && isResumableSession(session.snapshot())) {
+                resumable.add(ids.get(index).toString());
             }
         }
-        return List.copyOf(active);
+        return List.copyOf(resumable);
     }
 
-    /** Returns the most recently created unfinished in-memory report, if one exists. */
-    public synchronized Optional<String> latestActiveSessionId() {
-        return activeSessionIds().stream().findFirst();
+    /** Returns the most recently created report that can currently reopen a safe UI checkpoint. */
+    public synchronized Optional<String> latestResumableSessionId() {
+        return resumableSessionIds().stream().findFirst();
     }
 
     /** Describes the latest active report for command adapters without a resumable UI. */
     public synchronized List<Message> openLatest() {
-        return latestActiveSessionId()
+        return latestResumableSessionId()
                 .map(this::open)
                 .orElseGet(() -> List.of(new Message("bugreport.command.error.unknown_session")));
     }
@@ -1200,8 +1200,29 @@ public final class BugReportCommandService {
         }
     }
 
-    private static boolean isActiveSessionState(ReportSessionState state) {
-        return state != ReportSessionState.COMPLETED && state != ReportSessionState.CANCELLED;
+    private boolean isResumableSession(ReportSessionSnapshot snapshot) {
+        ReportSessionId id = snapshot.id();
+        return switch (snapshot.state()) {
+            case FORM_IN_PROGRESS -> snapshot.selectedCategory().isPresent();
+            case COLLECTION_PLANNED ->
+                    snapshot.selectedCategory().isPresent() && confirmedForms.containsKey(id);
+            case PARTIALLY_COLLECTED ->
+                    collectionResults.containsKey(id) && collectionWorkspaces.containsKey(id);
+            case SANITIZING -> !activeSanitizations.containsKey(id)
+                    && collectionResults.containsKey(id)
+                    && collectionWorkspaces.containsKey(id);
+            case REVIEW_REQUIRED -> activeReviews.containsKey(id);
+            case READY -> activeExports.containsKey(id)
+                    || (!activeExportPreparations.containsKey(id)
+                            && preparedSnapshots.containsKey(id)
+                            && collectionWorkspaces.containsKey(id)
+                            && confirmedForms.containsKey(id));
+            case FAILED_DELIVERY -> preparedSnapshots.containsKey(id)
+                    && collectionWorkspaces.containsKey(id)
+                    && confirmedForms.containsKey(id);
+            case CREATED, COLLECTING, DELIVERING, COMPLETED, CANCELLED,
+                    FAILED_VALIDATION, FAILED_COLLECTION, FAILED_SANITIZATION -> false;
+        };
     }
 
     private static boolean matchesCollectionPlanRequest(

@@ -27,3 +27,15 @@ tasks.named('jar', Jar) {
         )
     }
 }
+
+tasks.register('m3LifecycleSmoke', Test) {
+    group = 'verification'
+    description = 'Runs the exact Core lifecycle from reviewed data through a verified local ZIP.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter {
+        includeTestsMatching(
+                'com.cybersammy.bugreport.core.workspace.HeadlessReportLifecycleHarnessTest'
+                        + '.producesReviewedSanitizedZipThroughExplicitLocalExport')
+    }
+}
