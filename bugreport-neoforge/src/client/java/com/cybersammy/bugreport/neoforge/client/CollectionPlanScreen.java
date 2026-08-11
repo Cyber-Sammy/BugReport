@@ -139,8 +139,8 @@ final class CollectionPlanScreen extends Screen {
                 Button toggle = Button.builder(
                                 Component.translatable(
                                         included
-                                                ? "bugreport.screen.plan.exclude"
-                                                : "bugreport.screen.plan.include",
+                                                ? "bugreport.screen.plan.selected"
+                                                : "bugreport.screen.plan.not_selected",
                                         Component.translatable(generator.labelKey().value())),
                                 ignored -> toggleGenerator(generatorId))
                         .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20)
@@ -156,8 +156,8 @@ final class CollectionPlanScreen extends Screen {
             Button toggle = Button.builder(
                             Component.translatable(
                                     included
-                                            ? "bugreport.screen.plan.exclude"
-                                            : "bugreport.screen.plan.include",
+                                            ? "bugreport.screen.plan.selected"
+                                            : "bugreport.screen.plan.not_selected",
                                     Component.translatable(source.selection().source().labelKey().value())),
                             ignored -> toggleSource(sourceId))
                     .bounds(width / 2 - 140, 62 + (index - first) * 32, 280, 20).build();
