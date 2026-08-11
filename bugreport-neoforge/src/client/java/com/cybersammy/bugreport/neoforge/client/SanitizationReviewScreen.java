@@ -564,7 +564,7 @@ final class SanitizationReviewScreen extends Screen {
 
     private void ensureActiveSection(List<WorkspaceReviewCoordinator.ArtifactReview> artifacts) {
         List<ReviewSection> available = availableSections(artifacts);
-        if (!available.contains(activeSection)) {
+        if (activeSection == null || !available.contains(activeSection)) {
             activeSection = available.isEmpty() ? null : available.getFirst();
         }
     }
