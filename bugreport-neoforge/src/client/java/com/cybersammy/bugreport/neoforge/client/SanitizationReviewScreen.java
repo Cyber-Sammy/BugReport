@@ -243,14 +243,13 @@ final class SanitizationReviewScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 42,
                 completed ? 0x60FF60 : 0xFFCC66);
         if (review != null) {
             renderArtifacts(graphics, review.batch().artifacts());
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     private void renderArtifacts(

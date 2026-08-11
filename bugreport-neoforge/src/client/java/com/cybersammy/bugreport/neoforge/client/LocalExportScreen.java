@@ -127,7 +127,7 @@ final class LocalExportScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 24, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 50, successful ? 0x60FF60 : 0xFFCC66);
         if (export != null) {
@@ -138,6 +138,5 @@ final class LocalExportScreen extends Screen {
             graphics.drawCenteredString(font, Component.translatable("bugreport.screen.export.destination"),
                     width / 2, 182, 0xA0A0A0);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 }

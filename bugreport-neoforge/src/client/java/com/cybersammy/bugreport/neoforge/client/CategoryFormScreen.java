@@ -655,7 +655,7 @@ final class CategoryFormScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 16, 0xFFFFFF);
         if (fields.isEmpty()) {
             graphics.drawCenteredString(font,
@@ -680,7 +680,6 @@ final class CategoryFormScreen extends Screen {
             graphics.drawCenteredString(font, status, width / 2, 180,
                     validationSuccessful ? 0x60FF60 : 0xFF6060);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     private record SubmissionAttempt(

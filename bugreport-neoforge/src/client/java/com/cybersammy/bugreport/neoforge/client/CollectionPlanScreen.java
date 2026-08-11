@@ -259,14 +259,13 @@ final class CollectionPlanScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(font, title, width / 2, 20, 0xFFFFFF);
         graphics.drawCenteredString(font, status, width / 2, 44,
                 plan == null ? 0xFFCC66 : 0x60FF60);
         if (plan != null) {
             renderPlan(graphics);
         }
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     private void renderPlan(GuiGraphics graphics) {
