@@ -4,6 +4,8 @@ import com.cybersammy.bugreport.api.specification.RelativePath;
 import com.cybersammy.bugreport.core.source.ReviewedCollectionPlan;
 import com.cybersammy.bugreport.core.source.ScreenshotCollectionRequest;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
+import com.mojang.blaze3d.platform.NativeImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -35,10 +37,9 @@ import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.client.renderer.texture.DynamicTexture;
-import com.mojang.blaze3d.platform.NativeImage;
 
 /** Explicit bounded picker for recent local screenshots and a new in-game capture. */
 public final class ScreenshotSelectionScreen extends Screen {
@@ -46,6 +47,7 @@ public final class ScreenshotSelectionScreen extends Screen {
     private static final int MAX_INPUT_BYTES = 32 * 1024 * 1024;
     private static final int COPY_BUFFER_BYTES = 64 * 1024;
     private static final int PAGE_SIZE = 5;
+    private static final long PREVIEW_TIMEOUT_SECONDS = 5;
     private static final DateTimeFormatter CAPTURE_NAME = DateTimeFormatter
             .ofPattern("uuuu-MM-dd_HH.mm.ss.SSS", Locale.ROOT)
             .withZone(ZoneOffset.UTC);
@@ -67,6 +69,8 @@ public final class ScreenshotSelectionScreen extends Screen {
     private int previewWidth;
     private int previewHeight;
     private long previewGeneration;
+    private RelativePath previewingPath;
+    private Thread previewWorker;
 
     public ScreenshotSelectionScreen(
             BugReportCommandService commands,
@@ -112,7 +116,7 @@ public final class ScreenshotSelectionScreen extends Screen {
                             ignored -> toggle(candidate))
                     .bounds(width / 2 - 196, 72 + (index - first) * 24, 210, 20)
                     .build();
-            button.active = !completing;
+            button.active = !completing && !candidate.path().equals(previewingPath);
             addRenderableWidget(button);
         }
 
@@ -134,6 +138,7 @@ public final class ScreenshotSelectionScreen extends Screen {
                 .bounds(width / 2 - 150, height - 56, 96, 20)
                 .build();
         capture.active = !completing
+                && previewingPath == null
                 && selected.size() < ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES;
         addRenderableWidget(capture);
         Button back = Button.builder(Component.translatable("gui.back"), ignored -> minecraft.setScreen(parent))
@@ -145,7 +150,7 @@ public final class ScreenshotSelectionScreen extends Screen {
                         Component.translatable("bugreport.screen.screenshot.continue"), ignored -> complete())
                 .bounds(width / 2 + 54, height - 56, 96, 20)
                 .build();
-        continueButton.active = !selected.isEmpty() && !completing;
+        continueButton.active = !selected.isEmpty() && !completing && previewingPath == null;
         addRenderableWidget(continueButton);
     }
 
@@ -260,42 +265,87 @@ public final class ScreenshotSelectionScreen extends Screen {
     }
 
     private void observeAndSelect(RelativePath relativePath) {
-        completing = true;
-        status = Component.translatable("bugreport.screen.screenshot.preparing");
+        cancelPreviewObservation();
+        previewingPath = relativePath;
+        status = Component.translatable(
+                "bugreport.screen.screenshot.previewing", relativePath.value());
         rebuildWidgets();
         long generation = ++previewGeneration;
-        Thread.ofVirtual().name("bugreport-screenshot-preview").start(() -> {
+        Thread worker = Thread.ofVirtual().name("bugreport-screenshot-preview").unstarted(() -> {
             ObservedPreview observed;
             try {
                 observed = readObservedPreview(relativePath);
-            } catch (IOException | RuntimeException failure) {
+            } catch (IOException | RuntimeException | LinkageError failure) {
                 observed = null;
             }
             ObservedPreview result = observed;
-            Minecraft.getInstance().execute(() -> {
-                if (generation != previewGeneration || minecraft.screen != this) {
-                    if (result != null) {
-                        result.image().close();
-                    }
-                    return;
-                }
-                completing = false;
-                if (result == null) {
-                    status = Component.translatable("bugreport.screen.screenshot.invalid");
-                    rebuildWidgets();
-                    return;
-                }
-                selected.put(relativePath, result.selection());
-                releasePreview();
-                previewWidth = result.image().getWidth();
-                previewHeight = result.image().getHeight();
-                previewTexture = minecraft.getTextureManager().register(
-                        "bugreport-screenshot-preview", new DynamicTexture(result.image()));
-                status = Component.translatable(
-                        "bugreport.screen.screenshot.selected", selected.size());
-                rebuildWidgets();
-            });
+            Minecraft.getInstance().execute(
+                    () -> finishPreviewObservation(generation, relativePath, result));
         });
+        previewWorker = worker;
+        worker.start();
+        CompletableFuture.delayedExecutor(PREVIEW_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .execute(() -> Minecraft.getInstance().execute(
+                        () -> timeoutPreviewObservation(generation, relativePath)));
+    }
+
+    private void finishPreviewObservation(
+            long generation, RelativePath relativePath, ObservedPreview result) {
+        if (generation != previewGeneration || !relativePath.equals(previewingPath)) {
+            closePreview(result);
+            return;
+        }
+        previewingPath = null;
+        previewWorker = null;
+        if (minecraft.screen != this) {
+            closePreview(result);
+            return;
+        }
+        if (result == null) {
+            status = Component.translatable("bugreport.screen.screenshot.invalid");
+            rebuildWidgets();
+            return;
+        }
+        selected.put(relativePath, result.selection());
+        releasePreview();
+        previewWidth = result.image().getWidth();
+        previewHeight = result.image().getHeight();
+        previewTexture = minecraft.getTextureManager().register(
+                "bugreport-screenshot-preview", new DynamicTexture(result.image()));
+        status = Component.translatable(
+                "bugreport.screen.screenshot.selected", selected.size());
+        rebuildWidgets();
+    }
+
+    private void timeoutPreviewObservation(long generation, RelativePath relativePath) {
+        if (generation != previewGeneration || !relativePath.equals(previewingPath)) {
+            return;
+        }
+        Thread worker = previewWorker;
+        previewingPath = null;
+        previewWorker = null;
+        previewGeneration++;
+        if (worker != null) {
+            worker.interrupt();
+        }
+        status = Component.translatable("bugreport.screen.screenshot.preview_timeout");
+        rebuildWidgets();
+    }
+
+    private void cancelPreviewObservation() {
+        previewGeneration++;
+        previewingPath = null;
+        Thread worker = previewWorker;
+        previewWorker = null;
+        if (worker != null) {
+            worker.interrupt();
+        }
+    }
+
+    private static void closePreview(ObservedPreview preview) {
+        if (preview != null) {
+            preview.image().close();
+        }
     }
 
     private ObservedPreview readObservedPreview(RelativePath relativePath) throws IOException {
@@ -316,7 +366,12 @@ public final class ScreenshotSelectionScreen extends Screen {
         if (!sameSnapshot(before, after) || bytes.length != after.size()) {
             throw new IOException("Selected screenshot changed while previewing");
         }
-        NativeImage image = NativeImage.read(bytes);
+        NativeImage image;
+        try (ByteArrayInputStream input = new ByteArrayInputStream(bytes)) {
+            // The byte[] overload copies the complete compressed image into LWJGL's
+            // small thread-local MemoryStack. Real screenshots routinely exceed it.
+            image = NativeImage.read(input);
+        }
         ScreenshotCollectionRequest.SelectedImage selection =
                 new ScreenshotCollectionRequest.SelectedImage(
                         relativePath,
@@ -454,6 +509,7 @@ public final class ScreenshotSelectionScreen extends Screen {
 
     @Override
     public void removed() {
+        cancelPreviewObservation();
         releasePreview();
     }
 

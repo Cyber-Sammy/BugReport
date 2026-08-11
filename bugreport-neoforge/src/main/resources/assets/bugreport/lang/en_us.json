@@ -159,6 +159,8 @@
   "bugreport.screen.screenshot.capturing": "Capturing the game view...",
   "bugreport.screen.screenshot.capture_failed": "The screenshot could not be captured safely.",
   "bugreport.screen.screenshot.preparing": "Binding the selected images to this report...",
+  "bugreport.screen.screenshot.previewing": "Loading and verifying %s...",
+  "bugreport.screen.screenshot.preview_timeout": "Preview timed out; the image was not selected.",
   "bugreport.screen.screenshot.invalid": "The screenshot selection is no longer valid.",
   "bugreport.screen.screenshot.limit": "At most %s screenshots may be attached."
 }
