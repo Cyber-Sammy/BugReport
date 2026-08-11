@@ -66,6 +66,22 @@ import org.junit.jupiter.api.io.TempDir;
 final class BugReportCommandServiceTest {
 
     @Test
+    void localExportDirectoryIsCreatedOnlyAsTheValidatedGameDirectoryChild(
+            @TempDir Path directory) throws Exception {
+        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        Path gameDirectory = Files.createDirectory(directory.resolve("game"));
+
+        Path exportDirectory = service.localExportDirectory(gameDirectory).orElseThrow();
+
+        assertEquals(gameDirectory.resolve("bugreport-exports"), exportDirectory);
+        assertTrue(Files.isDirectory(exportDirectory));
+
+        Path blockedGameDirectory = Files.createDirectory(directory.resolve("blocked-game"));
+        Files.writeString(blockedGameDirectory.resolve("bugreport-exports"), "not a directory");
+        assertTrue(service.localExportDirectory(blockedGameDirectory).isEmpty());
+    }
+
+    @Test
     void screenshotAwareCollectionIssuanceIsNotPublicApplicationApi() throws Exception {
         var method = BugReportCommandService.class.getDeclaredMethod(
                 "beginCollectionWithScreenshots", String.class, ScreenshotCollectionRequest.class);

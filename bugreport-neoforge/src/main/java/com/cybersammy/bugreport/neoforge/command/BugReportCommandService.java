@@ -902,6 +902,21 @@ public final class BugReportCommandService {
         }
     }
 
+    /**
+     * Resolves the product-owned local export directory for first-party UI navigation.
+     *
+     * <p>The returned path is confined to the validated direct {@code bugreport-exports} child of
+     * the supplied game directory. Redirected or otherwise ambiguous filesystem paths are rejected.
+     */
+    public Optional<Path> localExportDirectory(Path gameDirectory) {
+        Objects.requireNonNull(gameDirectory, "gameDirectory");
+        try {
+            return Optional.of(safeExportDirectory(gameDirectory));
+        } catch (IOException failure) {
+            return Optional.empty();
+        }
+    }
+
     /** Returns a failed local delivery to READY so the user can prepare a fresh export attempt. */
     public synchronized boolean retryLocalExport(String sessionValue) {
         ReportSession session = session(sessionValue);
@@ -1253,6 +1268,15 @@ public final class BugReportCommandService {
         if (!name.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}\\.bugreport\\.zip")) {
             throw new IllegalArgumentException("Archive file name is invalid");
         }
+        Path root = safeExportDirectory(gameDirectory);
+        Path target = root.resolve(name).normalize();
+        if (!target.getParent().equals(root)) {
+            throw new IllegalArgumentException("Archive destination escapes the export directory");
+        }
+        return target;
+    }
+
+    private static Path safeExportDirectory(Path gameDirectory) throws IOException {
         Path gameRoot = gameDirectory.toAbsolutePath().normalize();
         if (!Files.isDirectory(gameRoot, LinkOption.NOFOLLOW_LINKS)
                 || !gameRoot.equals(gameRoot.toRealPath(LinkOption.NOFOLLOW_LINKS))
@@ -1270,11 +1294,7 @@ public final class BugReportCommandService {
                 || !root.equals(root.toRealPath())) {
             throw new IOException("Bug Report export directory is not safe");
         }
-        Path target = root.resolve(name).normalize();
-        if (!target.getParent().equals(root)) {
-            throw new IllegalArgumentException("Archive destination escapes the export directory");
-        }
-        return target;
+        return root;
     }
 
     private static ReportManifest manifest(LocalExportPreparationRequest request) {

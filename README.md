@@ -76,7 +76,8 @@ Implemented and executable:
 - a final package-summary screen that derives a deterministic ZIP plan from the
   exact sealed workspace, requires a separate explicit local-save click, and
   writes a private ZIP off the render thread into the product-owned
-  `bugreport-exports` game-directory child;
+  `bugreport-exports` game-directory child, with an explicit button to open that
+  validated folder in the platform file browser;
 - a compact persisted report-history screen for completed and failed local
   deliveries, backed by the corruption-tolerant path-free Core history index;
 - off-thread typed form autosave into a bounded product-owned draft directory,
