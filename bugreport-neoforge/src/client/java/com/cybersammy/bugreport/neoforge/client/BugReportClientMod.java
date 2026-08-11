@@ -119,7 +119,7 @@ public final class BugReportClientMod {
     }
 
     private List<BugReportCommandService.Message> openLatestLiveSession() {
-        return commands.latestActiveSessionId()
+        return commands.latestResumableSessionId()
                 .map(this::openLiveSession)
                 .orElseGet(() -> List.of(new BugReportCommandService.Message(
                         "bugreport.command.error.unknown_session")));

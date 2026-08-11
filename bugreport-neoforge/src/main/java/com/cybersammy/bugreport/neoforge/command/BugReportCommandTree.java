@@ -64,7 +64,7 @@ public final class BugReportCommandTree {
                 .executes(context -> respond(context.getSource(), sessionOpener.openLatest()))
                 .then(Commands.argument("report-id", StringArgumentType.word())
                         .suggests((context, builder) ->
-                                SharedSuggestionProvider.suggest(commands.activeSessionIds(), builder))
+                                SharedSuggestionProvider.suggest(commands.resumableSessionIds(), builder))
                         .executes(context -> respond(context.getSource(), sessionOpener.open(
                                 StringArgumentType.getString(context, "report-id"))))));
         root.then(Commands.literal("discard").then(Commands.argument("report-id", StringArgumentType.word())

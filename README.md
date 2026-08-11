@@ -171,7 +171,7 @@ the provider and category creates the session directly. Category selection
 opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
-`/bugreport open` reopens the most recently created unfinished in-memory report;
+`/bugreport open` reopens the most recently created currently resumable in-memory report;
 an optional exact report ID selects another active report. Active report IDs are
 offered as command suggestions. The command reopens the current safe UI checkpoint,
 including the form, collection planning, artifact review, and local export confirmation.
@@ -229,6 +229,18 @@ It launches an isolated development client with a test-only probe, verifies that
 common provider discovery completes with an empty registry, verifies that the
 Bug Report client bootstrap accepts a render-thread dispatch and builds the
 production Brigadier command tree, writes a marker, and exits automatically.
+
+For the complete automated M3 smoke, run:
+
+```powershell
+.\gradlew.bat verifyM3GameplaySmoke
+```
+
+This combines the physical-client bootstrap with the production application and
+Core lifecycle: trusted form/collection authority, sanitization and explicit review,
+fresh export retry authority, package construction, local consent, real ZIP publication,
+and manifest/archive verification. It intentionally does not simulate mouse input or
+judge visual screen layout; those remain part of the manual gameplay pass.
 It does not require a player connection or manual world entry. It is
 intentionally opt-in rather than part of CI `check`, because it needs a usable
 graphical client environment.

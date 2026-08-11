@@ -68,3 +68,15 @@ tasks.named('jar', Jar) {
         attributes 'Automatic-Module-Name': 'com.cybersammy.bugreport.neoforge'
     }
 }
+
+tasks.register('m3ApplicationLifecycleSmoke', Test) {
+    group = 'verification'
+    description = 'Runs the NeoForge application authority chain through retry and local ZIP export.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter {
+        includeTestsMatching(
+                'com.cybersammy.bugreport.neoforge.command.BugReportCommandServiceTest'
+                        + '.advancesOnlyServiceIssuedSanitizationAndReviewAuthorityToReady')
+    }
+}
