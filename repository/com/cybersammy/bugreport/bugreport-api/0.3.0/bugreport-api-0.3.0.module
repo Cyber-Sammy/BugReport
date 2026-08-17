@@ -1,0 +1,100 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.cybersammy.bugreport",
+    "module": "bugreport-api",
+    "version": "0.3.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "bugreport-api-0.3.0.jar",
+          "url": "bugreport-api-0.3.0.jar",
+          "size": 137153,
+          "sha512": "3a1bc2a0ed3a893aa8b7855f852bbef163a65d122522801ff70d27f726302bcf68e81e74d045c3bd2e1c13d32156165ad5c0e306698a70adb91fdb1c6a738544",
+          "sha256": "3aedfebf6d349cedabbf211124fa0002da30167f9a74324781c954bb43d9f9bf",
+          "sha1": "a5749b1659f74902f27abad15793b22ad60e52b1",
+          "md5": "74ed7162575a24f0ad987b7689df20fd"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bugreport-api-0.3.0.jar",
+          "url": "bugreport-api-0.3.0.jar",
+          "size": 137153,
+          "sha512": "3a1bc2a0ed3a893aa8b7855f852bbef163a65d122522801ff70d27f726302bcf68e81e74d045c3bd2e1c13d32156165ad5c0e306698a70adb91fdb1c6a738544",
+          "sha256": "3aedfebf6d349cedabbf211124fa0002da30167f9a74324781c954bb43d9f9bf",
+          "sha1": "a5749b1659f74902f27abad15793b22ad60e52b1",
+          "md5": "74ed7162575a24f0ad987b7689df20fd"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bugreport-api-0.3.0-sources.jar",
+          "url": "bugreport-api-0.3.0-sources.jar",
+          "size": 72246,
+          "sha512": "a391b2e229c5e07182773b79530277bf4e3416acc2c1acf1e9859656f67d7963797434ac2dcdf9c102e2e1ecfc20297763094cf12419e4856f046503964eb235",
+          "sha256": "80805816cb395d5b2f3ad6855da7830c7f5b43236000217c27ec96dac9fae323",
+          "sha1": "d28289015815423a2759a0285a63e4c0f22af723",
+          "md5": "35acc9104a0587f529f23d3120179c32"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bugreport-api-0.3.0-javadoc.jar",
+          "url": "bugreport-api-0.3.0-javadoc.jar",
+          "size": 444034,
+          "sha512": "7fe04bbbaa212a1e42a186af1e86f818edac8b31bfc6485cc2d080b28c0c2b66fa0ce4f699d5f7af36b909036bc08effaee5fc87f379879f065eff7ecca73a95",
+          "sha256": "6c58a8ee9661d220fc88c6e02824adf2bc3e264a7cfd9510f93d35625f0e6b8f",
+          "sha1": "9f805b7093a11bf725295489b6dbeb9a1b9faef5",
+          "md5": "adade487a1d3a6d7fe5258935293c01e"
+        }
+      ]
+    }
+  ]
+}
