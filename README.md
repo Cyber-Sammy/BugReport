@@ -190,9 +190,10 @@ its canonical persisted draft and reports failure without cancelling when that
 durable deletion cannot be completed. Successful form confirmation atomically
 replaces the editable draft with a restart checkpoint for the exact validated
 submission. The checkpoint is retained through collection, review, and failed
-delivery. Completion and cancellation first replace it with a non-recoverable
-terminal tombstone; removing that tombstone is best-effort cleanup and cannot
-change an already published ZIP or terminal outcome. The provider selector exposes a bounded recovery
+delivery. A confirmed export first replaces it with a non-recoverable delivery-intent
+tombstone, before any ZIP is published. Completion and cancellation retain a
+non-recoverable tombstone until best-effort cleanup; cleanup failure cannot change an
+already published ZIP or terminal outcome. The provider selector exposes a bounded recovery
 screen after restart. A recoverable entry is rebound to the exact current
 provider version and category before it can resume; malformed, disabled,
 missing, or structurally incompatible entries remain isolated and may only be

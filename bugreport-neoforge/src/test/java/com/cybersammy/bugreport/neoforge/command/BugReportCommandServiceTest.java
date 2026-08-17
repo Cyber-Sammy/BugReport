@@ -502,7 +502,17 @@ final class BugReportCommandServiceTest {
                 new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
         BugReportCommandService service = new BugReportCommandService(
                 BugReportCommandServiceTest::registry,
-                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new BugReportCommandService.ReportHistoryRecorder() {
+                    @Override
+                    public void record(com.cybersammy.bugreport.core.history.ReportHistoryEntry entry) {
+                        throw new IllegalStateException("injected history failure");
+                    }
+
+                    @Override
+                    public List<com.cybersammy.bugreport.core.history.ReportHistoryEntry> entries() {
+                        throw new IllegalStateException("injected history failure");
+                    }
+                },
                 draftPersistence);
         String sessionId = (String) service.create("example_mod", "general")
                 .getFirst().arguments()[0];
@@ -663,10 +673,29 @@ final class BugReportCommandServiceTest {
         assertNotSame(exportPreparation, retryPreparation);
         var retryExport = service.prepareLocalExport(retryPreparation).orElseThrow();
         assertNotSame(export, retryExport);
+
+        draftPersistence.savesBeforeFailure = 0;
+        assertTrue(service.executeLocalExport(
+                        retryExport,
+                        gameDirectory,
+                        "intent-not-persisted.bugreport.zip",
+                        new com.cybersammy.bugreport.core.transport.TransportRunControl())
+                .isEmpty());
+        assertFalse(Files.exists(
+                exportDirectory.resolve("intent-not-persisted.bugreport.zip")));
+        assertEquals(
+                ReportSessionState.FAILED_DELIVERY,
+                service.form(sessionId).orElseThrow().state());
+
+        assertTrue(service.retryLocalExport(sessionId));
+        var durablePreparation = service.beginLocalExport(sessionId).orElseThrow();
+        var durableExport = service.prepareLocalExport(durablePreparation).orElseThrow();
+        assertNotSame(retryExport, durableExport);
+        draftPersistence.savesBeforeFailure = 1;
         draftPersistence.failDeletes = true;
         assertEquals(com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.SUCCESS,
                 service.executeLocalExport(
-                                retryExport, gameDirectory, "report.bugreport.zip",
+                                durableExport, gameDirectory, "report.bugreport.zip",
                                 new com.cybersammy.bugreport.core.transport.TransportRunControl())
                         .orElseThrow().status());
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
@@ -1343,6 +1372,7 @@ final class BugReportCommandServiceTest {
         private final BugReportCommandService.ReportDraftPersistence delegate;
         private boolean failSaves;
         private boolean failDeletes;
+        private int savesBeforeFailure = -1;
 
         private FailingDraftPersistence(
                 BugReportCommandService.ReportDraftPersistence delegate) {
@@ -1356,8 +1386,11 @@ final class BugReportCommandServiceTest {
 
         @Override
         public void save(ReportDraft draft) {
-            if (failSaves) {
+            if (failSaves || savesBeforeFailure == 0) {
                 throw new IllegalStateException("injected save failure");
+            }
+            if (savesBeforeFailure > 0) {
+                savesBeforeFailure--;
             }
             delegate.save(draft);
         }

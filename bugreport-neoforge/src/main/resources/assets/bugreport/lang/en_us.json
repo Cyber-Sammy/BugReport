@@ -135,6 +135,7 @@
   "bugreport.screen.recovery.status.category_missing": "Category is no longer declared",
   "bugreport.screen.recovery.status.invalid_form_structure": "Fields no longer match the category",
   "bugreport.screen.recovery.status.terminal_draft": "Terminal drafts cannot be resumed",
+  "bugreport.screen.recovery.status.non_recoverable_checkpoint": "Export started; this report cannot be resumed safely",
   "bugreport.screen.recovery.status.revision_exhausted": "Draft revision is exhausted",
   "bugreport.screen.recovery.status.no_selected_category": "Draft has no selected category",
   "bugreport.screen.history.open": "Completed report history",
