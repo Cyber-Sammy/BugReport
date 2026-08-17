@@ -99,12 +99,22 @@ final class SanitizationReviewScreen extends Screen {
     private void installReview(BugReportCommandService.WorkspaceReviewRequest request) {
         review = request;
         included.clear();
-        for (WorkspaceReviewCoordinator.ArtifactReview artifact : request.artifacts()) {
-            if (artifact.status() != WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED
-                    && artifact.inclusionDefault() == InclusionDefault.INCLUDED) {
-                included.add(artifact.artifactName());
-            }
-        }
+        explicitlyReviewed.clear();
+        commands.reviewDecisionDraft(request).ifPresentOrElse(
+                decision -> {
+                    included.addAll(decision.includedArtifacts());
+                    explicitlyReviewed.addAll(decision.explicitlyReviewedArtifacts());
+                },
+                () -> {
+                    for (WorkspaceReviewCoordinator.ArtifactReview artifact : request.artifacts()) {
+                        if (artifact.status()
+                                        != WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED
+                                && artifact.inclusionDefault() == InclusionDefault.INCLUDED) {
+                            included.add(artifact.artifactName());
+                        }
+                    }
+                    saveDecisionDraft();
+                });
         status = Component.translatable(
                 "bugreport.screen.review.ready", request.artifacts().size());
         ensureActiveSection(request.artifacts());
@@ -125,12 +135,14 @@ final class SanitizationReviewScreen extends Screen {
             ensureActiveSection(review.artifacts());
             addSectionTabs(sections);
             addArtifactControls(sectionArtifacts(review.artifacts(), activeSection));
-            Button accept = Button.builder(
-                            Component.translatable("bugreport.screen.review.accept"),
-                            ignored -> prepareSelection())
-                    .bounds(width / 2 - 120, height - 56, 240, 20).build();
-            accept.active = !preparing && !completed && decisionsComplete();
-            addRenderableWidget(accept);
+            if (!completed) {
+                Button accept = Button.builder(
+                                Component.translatable("bugreport.screen.review.accept"),
+                                ignored -> prepareSelection())
+                        .bounds(width / 2 - 120, height - 56, 240, 20).build();
+                accept.active = !preparing && decisionsComplete();
+                addRenderableWidget(accept);
+            }
         }
         Button cancel = Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
                 .bounds(width / 2 - 58, height - 32, 116, 20).build();
@@ -287,6 +299,7 @@ final class SanitizationReviewScreen extends Screen {
             included.remove(artifact.artifactName());
             explicitlyReviewed.remove(artifact.artifactName());
         }
+        saveDecisionDraft();
         rebuildReviewWidgets();
     }
 
@@ -294,7 +307,16 @@ final class SanitizationReviewScreen extends Screen {
         if (!explicitlyReviewed.add(artifact.artifactName())) {
             explicitlyReviewed.remove(artifact.artifactName());
         }
+        saveDecisionDraft();
         rebuildReviewWidgets();
+    }
+
+    private void saveDecisionDraft() {
+        if (review != null) {
+            commands.saveReviewDecisionDraft(
+                    review,
+                    new BugReportCommandService.ReviewDecision(included, explicitlyReviewed));
+        }
     }
 
     private boolean decisionsComplete() {

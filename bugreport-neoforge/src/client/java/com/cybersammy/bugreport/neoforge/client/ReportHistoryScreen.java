@@ -3,6 +3,8 @@ package com.cybersammy.bugreport.neoforge.client;
 import com.cybersammy.bugreport.core.history.ReportHistoryEntry;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -11,6 +13,7 @@ import net.minecraft.network.chat.Component;
 /** Compact path-free list of persisted completed and failed delivery summaries. */
 final class ReportHistoryScreen extends Screen {
     private static final int PAGE_SIZE = 6;
+    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm");
     private final BugReportCommandService commands;
     private final Screen parent;
     private final List<ReportHistoryEntry> entries;
@@ -57,7 +60,10 @@ final class ReportHistoryScreen extends Screen {
             ReportHistoryEntry entry = entries.get(index);
             Component row = Component.translatable("bugreport.screen.history.entry",
                     entry.providerId(), entry.categoryId().map(Object::toString).orElse("-"),
-                    entry.status().name(), entry.revision());
+                    Component.translatable("bugreport.screen.history.status."
+                            + entry.status().name().toLowerCase(java.util.Locale.ROOT)),
+                    TIME.format(entry.updatedAt().atZone(ZoneId.systemDefault())),
+                    entry.sessionId().toString().substring(0, 8));
             graphics.drawString(font, row, width / 2 - 145, 48 + (index - first) * 22, 0xE0E0E0);
         }
     }

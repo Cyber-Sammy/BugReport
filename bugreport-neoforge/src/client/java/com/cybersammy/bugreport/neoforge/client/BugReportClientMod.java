@@ -91,7 +91,8 @@ public final class BugReportClientMod {
         BugReportCommandTree.register(event.getDispatcher(), commands,
                 new BugReportCommandTree.ProviderSelector() {
                     @Override public void open() {
-                        Minecraft.getInstance().setScreen(new ProviderCategoryScreen(commands));
+                        Minecraft.getInstance().setScreen(new ProviderCategoryScreen(
+                                commands, BugReportClientMod.this::openLiveSessionTarget));
                     }
 
                     @Override public BugReportCommandTree.SelectionResult open(
@@ -101,7 +102,10 @@ public final class BugReportClientMod {
                                 return BugReportCommandTree.SelectionResult.UNAVAILABLE;
                             }
                             Minecraft.getInstance().setScreen(
-                                    new ProviderCategoryScreen(commands, provider));
+                                    new ProviderCategoryScreen(
+                                            commands,
+                                            provider,
+                                            BugReportClientMod.this::openLiveSessionTarget));
                             return BugReportCommandTree.SelectionResult.OPENED;
                         }).orElse(BugReportCommandTree.SelectionResult.UNKNOWN);
                     }
@@ -119,17 +123,16 @@ public final class BugReportClientMod {
     }
 
     private List<BugReportCommandService.Message> openLatestLiveSession() {
-        return commands.latestResumableSessionId()
+        return commands.latestSessionIdForOpen()
                 .map(this::openLiveSession)
                 .orElseGet(() -> List.of(new BugReportCommandService.Message(
                         "bugreport.command.error.unknown_session")));
     }
 
     private List<BugReportCommandService.Message> openLiveSession(String sessionValue) {
-        BugReportCommandService.SessionResumeResult resumed =
-                commands.resumeSession(sessionValue);
-        if (resumed.status() != BugReportCommandService.SessionResumeStatus.READY) {
-            return List.of(new BugReportCommandService.Message(switch (resumed.status()) {
+        BugReportCommandService.SessionResumeStatus status = openLiveSessionTarget(sessionValue);
+        if (status != BugReportCommandService.SessionResumeStatus.READY) {
+            return List.of(new BugReportCommandService.Message(switch (status) {
                 case UNKNOWN_SESSION -> "bugreport.command.error.unknown_session";
                 case BUSY -> "bugreport.command.open.busy";
                 case UNAVAILABLE -> "bugreport.command.open.unavailable";
@@ -137,13 +140,18 @@ public final class BugReportClientMod {
                 case READY -> throw new IllegalStateException("Ready resume has no target");
             }));
         }
-        BugReportCommandService.SessionResumeTarget target = resumed.target().orElseThrow();
-        if (!openTarget(target)) {
-            return List.of(new BugReportCommandService.Message(
-                    "bugreport.command.open.unavailable"));
-        }
         return List.of(new BugReportCommandService.Message(
                 "bugreport.command.open.success", sessionValue));
+    }
+
+    private BugReportCommandService.SessionResumeStatus openLiveSessionTarget(String sessionValue) {
+        BugReportCommandService.SessionResumeResult resumed = commands.resumeSession(sessionValue);
+        if (resumed.status() != BugReportCommandService.SessionResumeStatus.READY) {
+            return resumed.status();
+        }
+        return openTarget(resumed.target().orElseThrow())
+                ? BugReportCommandService.SessionResumeStatus.READY
+                : BugReportCommandService.SessionResumeStatus.UNAVAILABLE;
     }
 
     private boolean openTarget(BugReportCommandService.SessionResumeTarget target) {
@@ -160,7 +168,10 @@ public final class BugReportClientMod {
             return attachForm(planning.request().sessionId(), planning.submission())
                     .map(form -> {
                         minecraft.setScreen(new CollectionPlanScreen(
-                                commands, planning.request(), form));
+                                commands,
+                                planning.request(),
+                                form,
+                                planning.reviewedPlan().orElse(null)));
                         return true;
                     })
                     .orElse(false);
@@ -192,7 +203,8 @@ public final class BugReportClientMod {
         return commands.form(sessionId.toString()).flatMap(form ->
                 commands.providerChoice(form.providerId()).map(provider -> {
                     ProviderCategoryScreen selector =
-                            new ProviderCategoryScreen(commands, provider);
+                            new ProviderCategoryScreen(
+                                    commands, provider, this::openLiveSessionTarget);
                     return selector.attachLiveForm(sessionId, provider, submission);
                 }));
     }

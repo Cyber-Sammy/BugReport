@@ -32,6 +32,7 @@ final class CollectionPlanScreen extends Screen {
     private final BugReportCommandService commands;
     private final BugReportCommandService.CollectionPlanRequest request;
     private final CategoryFormScreen formScreen;
+    private final ReviewedCollectionPlan resumedSelection;
     private volatile boolean visible;
     private boolean planningStarted;
     private CategorySourcePlan plan;
@@ -49,10 +50,19 @@ final class CollectionPlanScreen extends Screen {
             BugReportCommandService commands,
             BugReportCommandService.CollectionPlanRequest request,
             CategoryFormScreen formScreen) {
+        this(commands, request, formScreen, null);
+    }
+
+    CollectionPlanScreen(
+            BugReportCommandService commands,
+            BugReportCommandService.CollectionPlanRequest request,
+            CategoryFormScreen formScreen,
+            ReviewedCollectionPlan resumedSelection) {
         super(Component.translatable("bugreport.screen.plan.title"));
         this.commands = commands;
         this.request = request;
         this.formScreen = formScreen;
+        this.resumedSelection = resumedSelection;
     }
 
     @Override
@@ -61,7 +71,11 @@ final class CollectionPlanScreen extends Screen {
         rebuildPlanWidgets();
         if (!planningStarted) {
             planningStarted = true;
-            startPlanning(Minecraft.getInstance().gameDirectory.toPath());
+            if (resumedSelection == null) {
+                startPlanning(Minecraft.getInstance().gameDirectory.toPath());
+            } else {
+                presentPlan(resumedSelection.collectionPlan(), resumedSelection);
+            }
         }
     }
 
@@ -102,14 +116,18 @@ final class CollectionPlanScreen extends Screen {
     }
 
     private void presentPlan(CategoryCollectionPlan planned) {
+        presentPlan(planned, ReviewedCollectionPlan.defaults(planned));
+    }
+
+    private void presentPlan(
+            CategoryCollectionPlan planned, ReviewedCollectionPlan initialSelection) {
         if (!visible) {
             return;
         }
         collectionPlan = planned;
         plan = planned.sources();
-        ReviewedCollectionPlan defaults = ReviewedCollectionPlan.defaults(planned);
-        includedSourceIds = new LinkedHashSet<>(defaults.includedSourceIds());
-        includedGeneratorIds = new LinkedHashSet<>(defaults.includedGeneratorIds());
+        includedSourceIds = new LinkedHashSet<>(initialSelection.includedSourceIds());
+        includedGeneratorIds = new LinkedHashSet<>(initialSelection.includedGeneratorIds());
         planning = false;
         status = Component.translatable(
                 "bugreport.screen.plan.ready",

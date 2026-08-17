@@ -5,7 +5,6 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
-import net.minecraft.commands.SharedSuggestionProvider;
 import com.cybersammy.bugreport.api.identifier.ProviderId;
 
 /** Builds the client-independent Minecraft command tree used by the NeoForge client adapter. */
@@ -63,8 +62,23 @@ public final class BugReportCommandTree {
         root.then(Commands.literal("open")
                 .executes(context -> respond(context.getSource(), sessionOpener.openLatest()))
                 .then(Commands.argument("report-id", StringArgumentType.word())
-                        .suggests((context, builder) ->
-                                SharedSuggestionProvider.suggest(commands.resumableSessionIds(), builder))
+                        .suggests((context, builder) -> {
+                            commands.activeReportChoices().forEach(report -> builder.suggest(
+                                    report.sessionId().toString(),
+                                    net.minecraft.network.chat.Component.translatable(
+                                            "bugreport.command.open.suggestion",
+                                            net.minecraft.network.chat.Component.translatable(
+                                                    report.providerLabelKey().value()),
+                                            report.categoryLabelKey()
+                                                    .<net.minecraft.network.chat.Component>map(key ->
+                                                            net.minecraft.network.chat.Component.translatable(
+                                                                    key.value()))
+                                                    .orElseGet(() ->
+                                                            net.minecraft.network.chat.Component.translatable(
+                                                                    "bugreport.screen.active.no_category")),
+                                            report.sessionId().toString().substring(0, 8))));
+                            return builder.buildFuture();
+                        })
                         .executes(context -> respond(context.getSource(), sessionOpener.open(
                                 StringArgumentType.getString(context, "report-id"))))));
         root.then(Commands.literal("discard").then(Commands.argument("report-id", StringArgumentType.word())

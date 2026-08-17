@@ -663,8 +663,11 @@ final class CategoryFormScreen extends Screen {
                     width / 2, 70, 0xA0A0A0);
         } else {
             FieldSpecification field = fields.get(page);
-            Component label = Component.translatable(field.labelKey().value())
-                    .append(field.required() ? Component.literal(" *") : Component.empty());
+            Component label = Component.translatable(
+                    field.required()
+                            ? "bugreport.screen.form.field.required"
+                            : "bugreport.screen.form.field.optional",
+                    Component.translatable(field.labelKey().value()));
             graphics.drawCenteredString(font, label, width / 2, 42, 0xFFFFFF);
             field.descriptionKey().ifPresent(description -> graphics.drawCenteredString(
                     font, Component.translatable(description.value()), width / 2, 58, 0xA0A0A0));

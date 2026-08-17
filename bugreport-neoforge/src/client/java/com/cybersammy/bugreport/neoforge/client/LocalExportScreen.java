@@ -83,41 +83,46 @@ final class LocalExportScreen extends Screen {
             archiveFileName = fileName.getValue();
         }
         clearWidgets();
+        int fileNameTop = height - 104;
+        int actionTop = height - 80;
+        int openFolderTop = height - 56;
+        int doneTop = height - 32;
         if (export != null && !finished) {
             if (archiveFileName == null) {
                 archiveFileName = "report-" + export.sessionId() + ".bugreport.zip";
             }
-            fileName = new EditBox(font, width / 2 - 140, 102, 280, 20,
+            fileName = new EditBox(font, width / 2 - 140, fileNameTop, 280, 20,
                     Component.translatable("bugreport.screen.export.filename"));
             fileName.setMaxLength(140);
             fileName.setValue(archiveFileName);
             fileName.setEditable(!running);
             addRenderableWidget(fileName);
-            Button confirm = Button.builder(Component.translatable("bugreport.screen.export.confirm"),
-                            ignored -> startExport())
-                    .bounds(width / 2 - 100, 132, 200, 20).build();
-            confirm.active = !running;
-            addRenderableWidget(confirm);
-            if (running) {
+            if (!running) {
+                addRenderableWidget(Button.builder(
+                                Component.translatable("bugreport.screen.export.confirm"),
+                                ignored -> startExport())
+                        .bounds(width / 2 - 100, actionTop, 200, 20)
+                        .build());
+            } else {
                 addRenderableWidget(Button.builder(Component.translatable("gui.cancel"),
                                 ignored -> control.requestCancellation())
-                        .bounds(width / 2 - 58, 158, 116, 20).build());
+                        .bounds(width / 2 - 58, actionTop, 116, 20).build());
             }
         }
         if (finished && !successful) {
             Button retry = Button.builder(Component.translatable("bugreport.screen.export.retry"),
                             ignored -> retryExport())
-                    .bounds(width / 2 - 100, 132, 200, 20).build();
+                    .bounds(width / 2 - 100, actionTop, 200, 20).build();
             retry.active = !retrying;
             addRenderableWidget(retry);
         }
         Button openFolder = Button.builder(Component.translatable("bugreport.screen.export.open_folder"),
                         ignored -> openExportFolder())
-                .bounds(width / 2 - 100, 184, 200, 20).build();
+                .bounds(width / 2 - 100, openFolderTop, 200, 20).build();
         openFolder.active = !openingFolder;
         addRenderableWidget(openFolder);
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), ignored -> onClose())
-                .bounds(width / 2 - 58, height - 32, 116, 20).build());
+                .bounds(width / 2 - 58, doneTop, 116, 20).build());
     }
 
     private void startExport() {
@@ -226,8 +231,14 @@ final class LocalExportScreen extends Screen {
             graphics.drawCenteredString(font, Component.translatable("bugreport.screen.export.summary",
                     summary.providerId(), summary.categoryId(), summary.entryCount(), summary.totalBytes()),
                     width / 2, 78, 0xE0E0E0);
-            graphics.drawCenteredString(font, Component.translatable("bugreport.screen.export.destination"),
-                    width / 2, 210, 0xA0A0A0);
+            if (!finished) {
+                graphics.drawCenteredString(
+                        font,
+                        Component.translatable("bugreport.screen.export.destination"),
+                        width / 2,
+                        height - 120,
+                        0xA0A0A0);
+            }
         }
     }
 }
