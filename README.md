@@ -5,7 +5,8 @@ privacy-reviewed diagnostic reports for compatible Minecraft mods.
 
 [Modrinth](https://modrinth.com/mod/bugreportmod) ·
 [Source and documentation](https://github.com/Cyber-Sammy/BugReport) ·
-[Issue tracker](https://github.com/Cyber-Sammy/BugReport/issues)
+[Issue tracker](https://github.com/Cyber-Sammy/BugReport/issues) ·
+[Mod integrations](docs/INTEGRATIONS.md)
 
 Compatible mods describe themselves through a small embedded API. They continue
 to load when Bug Report is not installed; when it is installed, Bug Report
@@ -264,6 +265,11 @@ graphical client environment.
 ## Integrating Bug Report API into another mod
 
 The complete reference implementation is in `example-mod`.
+
+Public mods that integrate the API can be listed in the
+[supported mod integrations registry](docs/INTEGRATIONS.md). The registry
+distinguishes maintainer-verified integrations from community-reported ones and
+records the API and game versions against which each integration was tested.
 
 The integration has four parts:
 
