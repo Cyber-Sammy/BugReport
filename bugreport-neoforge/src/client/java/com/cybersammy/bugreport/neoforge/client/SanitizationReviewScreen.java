@@ -135,12 +135,14 @@ final class SanitizationReviewScreen extends Screen {
             ensureActiveSection(review.artifacts());
             addSectionTabs(sections);
             addArtifactControls(sectionArtifacts(review.artifacts(), activeSection));
-            Button accept = Button.builder(
-                            Component.translatable("bugreport.screen.review.accept"),
-                            ignored -> prepareSelection())
-                    .bounds(width / 2 - 120, height - 56, 240, 20).build();
-            accept.active = !preparing && !completed && decisionsComplete();
-            addRenderableWidget(accept);
+            if (!completed) {
+                Button accept = Button.builder(
+                                Component.translatable("bugreport.screen.review.accept"),
+                                ignored -> prepareSelection())
+                        .bounds(width / 2 - 120, height - 56, 240, 20).build();
+                accept.active = !preparing && decisionsComplete();
+                addRenderableWidget(accept);
+            }
         }
         Button cancel = Button.builder(Component.translatable("gui.cancel"), ignored -> cancel())
                 .bounds(width / 2 - 58, height - 32, 116, 20).build();
