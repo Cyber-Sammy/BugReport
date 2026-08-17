@@ -179,15 +179,18 @@ and the provider screen exposes a readable active-report picker. The command reo
 including the form, collection planning, artifact review, and local export confirmation.
 A still-running collection, sanitization, or delivery is reported as busy and can
 be opened after it reaches its next checkpoint.
-Persisted form drafts can also be reopened by ID after restart; no later
+Persisted form checkpoints can also be reopened by ID after restart. The
+checkpoint remains available throughout the non-terminal workflow, but no
 collection, workspace, review, or delivery authority is reconstructed from
-disk.
+disk: recovery conservatively returns to form editing and requires those steps
+to run again.
 Form edits are periodically saved off the render thread. Back waits for the
 latest typed draft to be persisted, while Cancel discards both the session and
 its canonical persisted draft and reports failure without cancelling when that
-durable deletion cannot be completed. A form draft is deleted before the
-session may enter `COLLECTION_PLANNED`; later collection, review, and delivery
-states therefore cannot leave an older resumable form projection. The provider
+durable deletion cannot be completed. Successful form confirmation atomically
+replaces the editable draft with a restart checkpoint for the exact validated
+submission. The checkpoint is retained through collection, review, and failed
+delivery, then removed before terminal completion or cancellation. The provider
 selector exposes a bounded recovery
 screen after restart. A recoverable entry is rebound to the exact current
 provider version and category before it can resume; malformed, disabled,

@@ -497,9 +497,16 @@ final class BugReportCommandServiceTest {
         Files.writeString(
                 gameDirectory.resolve("logs/client.log"),
                 "Authorization: Bearer secret_token_123456\n");
-        BugReportCommandService service = new BugReportCommandService(BugReportCommandServiceTest::registry);
+        Path draftRoot = gameDirectory.resolve("drafts");
+        BugReportCommandService service = new BugReportCommandService(
+                BugReportCommandServiceTest::registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
         String sessionId = (String) service.create("example_mod", "general")
                 .getFirst().arguments()[0];
+        assertEquals(
+                BugReportCommandService.DraftSaveStatus.SAVED,
+                service.saveFormDraft(sessionId, validSubmission()));
         var planRequest = service.confirmForm(sessionId, validSubmission())
                 .planRequest().orElseThrow();
         ReviewedCollectionPlan reviewed = ReviewedCollectionPlan.of(
@@ -662,6 +669,7 @@ final class BugReportCommandServiceTest {
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COMPLETED,
                 service.form(sessionId).orElseThrow().state());
+        assertFalse(Files.exists(draftRoot.resolve(sessionId + ".json")));
         assertEquals(
                 BugReportCommandService.SessionResumeStatus.TERMINAL,
                 service.resumeSession(sessionId).status());
@@ -881,7 +889,8 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
-    void restartRecoversTypedFormButNoCollectionOrDeliveryAuthority(@TempDir Path directory) {
+    void restartRecoversLateReportAsTypedFormWithoutRestoringRuntimeAuthority(
+            @TempDir Path directory) {
         FileReportDraftPersistence persistence =
                 new FileReportDraftPersistence(new FileDraftStore(directory.resolve("drafts")));
         BugReportCommandService first = new BugReportCommandService(
@@ -918,18 +927,32 @@ final class BugReportCommandServiceTest {
         assertEquals(
                 BugReportCommandService.FormConfirmationStatus.ACCEPTED,
                 restarted.confirmForm(sessionId, submission).status());
-        assertFalse(Files.exists(directory.resolve("drafts").resolve(sessionId + ".json")));
+        assertTrue(Files.exists(directory.resolve("drafts").resolve(sessionId + ".json")));
         BugReportCommandService afterPlanningRestart = new BugReportCommandService(
                 BugReportCommandServiceTest::registry,
                 BugReportCommandService.ReportHistoryRecorder.empty(),
                 new FileReportDraftPersistence(new FileDraftStore(directory.resolve("drafts"))));
-        assertTrue(afterPlanningRestart.draftRecovery().choices().isEmpty());
+        BugReportCommandService.DraftRecoveryChoice checkpoint =
+                afterPlanningRestart.draftRecovery().choices().getFirst();
+        assertEquals(
+                Optional.of(ReportSessionState.COLLECTION_PLANNED),
+                checkpoint.recordedState());
+        var safeResume = assertInstanceOf(
+                BugReportCommandService.FormResumeTarget.class,
+                afterPlanningRestart.resumeSession(sessionId).target().orElseThrow());
+        assertEquals(submission, safeResume.submission());
+        assertEquals(
+                ReportSessionState.FORM_IN_PROGRESS,
+                afterPlanningRestart.form(sessionId).orElseThrow().state());
+        assertTrue(afterPlanningRestart.beginCollection(sessionId).isEmpty());
+        assertTrue(afterPlanningRestart.beginLocalExport(sessionId).isEmpty());
     }
 
     @Test
-    void failedDraftDeletionBlocksPlanningAndExplicitDiscard(@TempDir Path directory) {
-        FailingDeleteDraftPersistence persistence =
-                new FailingDeleteDraftPersistence(
+    void failedCheckpointReplacementBlocksPlanningAndFailedDeleteBlocksDiscard(
+            @TempDir Path directory) {
+        FailingDraftPersistence persistence =
+                new FailingDraftPersistence(
                         new FileReportDraftPersistence(
                                 new FileDraftStore(directory.resolve("drafts"))));
         BugReportCommandService service = new BugReportCommandService(
@@ -941,7 +964,7 @@ final class BugReportCommandServiceTest {
         assertEquals(
                 BugReportCommandService.DraftSaveStatus.SAVED,
                 service.saveFormDraft(sessionId, validSubmission()));
-        persistence.failDeletes = true;
+        persistence.failSaves = true;
 
         assertEquals(
                 BugReportCommandService.FormConfirmationStatus.PERSISTENCE_FAILED,
@@ -949,6 +972,8 @@ final class BugReportCommandServiceTest {
         assertEquals(
                 ReportSessionState.FORM_IN_PROGRESS,
                 service.form(sessionId).orElseThrow().state());
+        persistence.failSaves = false;
+        persistence.failDeletes = true;
         assertEquals(
                 "bugreport.command.error.draft_discard_failed",
                 service.discard(sessionId).getFirst().translationKey());
@@ -1236,12 +1261,13 @@ final class BugReportCommandServiceTest {
                 .build();
     }
 
-    private static final class FailingDeleteDraftPersistence
+    private static final class FailingDraftPersistence
             implements BugReportCommandService.ReportDraftPersistence {
         private final BugReportCommandService.ReportDraftPersistence delegate;
+        private boolean failSaves;
         private boolean failDeletes;
 
-        private FailingDeleteDraftPersistence(
+        private FailingDraftPersistence(
                 BugReportCommandService.ReportDraftPersistence delegate) {
             this.delegate = delegate;
         }
@@ -1253,6 +1279,9 @@ final class BugReportCommandServiceTest {
 
         @Override
         public void save(ReportDraft draft) {
+            if (failSaves) {
+                throw new IllegalStateException("injected save failure");
+            }
             delegate.save(draft);
         }
 

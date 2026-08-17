@@ -453,18 +453,14 @@ public final class BugReportCommandService {
                         .isPresent()) {
             return FormConfirmationResult.persistenceFailed();
         }
-        if (drafts.available()) {
-            try {
-                drafts.delete(snapshot.id());
-            } catch (RuntimeException failure) {
-                return FormConfirmationResult.persistenceFailed();
-            }
-            persistedForms.remove(snapshot.id());
-            persistedDraftFiles.remove(snapshot.id());
+        if (drafts.available()
+                && !persistCollectionPlanningCheckpoint(snapshot, submission)) {
+            return FormConfirmationResult.persistenceFailed();
         }
 
         session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
         ReportSessionSnapshot planned = session.snapshot();
+        persistedForms.remove(planned.id());
         confirmedForms.put(planned.id(), submission);
         return FormConfirmationResult.accepted(new CollectionPlanRequest(
                 planned.id(),
@@ -721,7 +717,13 @@ public final class BugReportCommandService {
             case COMPLETE -> session.transitionTo(ReportSessionState.SANITIZING);
             case PARTIAL -> session.transitionTo(ReportSessionState.PARTIALLY_COLLECTED);
             case FAILED -> session.transitionTo(ReportSessionState.FAILED_COLLECTION);
-            case CANCELLED -> session.cancel(CancellationReason.USER_REQUESTED);
+            case CANCELLED -> {
+                if (deleteRestartCheckpoint(collecting.id())) {
+                    session.cancel(CancellationReason.USER_REQUESTED);
+                } else {
+                    session.transitionTo(ReportSessionState.FAILED_COLLECTION);
+                }
+            }
         }
         collectionResults.put(collecting.id(), terminal);
         collectionWorkspaces.put(collecting.id(), trustedWorkspace);
@@ -1059,6 +1061,13 @@ public final class BugReportCommandService {
                     || session.snapshot().state() != ReportSessionState.DELIVERING) {
                 return Optional.empty();
             }
+            if (result.status() == ReportTransportResult.Status.SUCCESS
+                    && !deleteRestartCheckpoint(request.sessionId())) {
+                session.transitionTo(ReportSessionState.FAILED_DELIVERY);
+                activeExports.remove(request.sessionId());
+                recordDeliveryHistory(session.snapshot(), null);
+                return Optional.empty();
+            }
             session.transitionTo(result.status() == ReportTransportResult.Status.SUCCESS
                     ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
             activeExports.remove(request.sessionId());
@@ -1225,6 +1234,43 @@ public final class BugReportCommandService {
         } catch (RuntimeException failure) {
             return false;
         }
+    }
+
+    private boolean persistCollectionPlanningCheckpoint(
+            ReportSessionSnapshot before, FormSubmission submission) {
+        try {
+            long persistedRevision = Math.addExact(before.revision(), 1);
+            ReportDraft checkpoint = new ReportDraft(
+                    before.id(),
+                    persistedRevision,
+                    before.providerSpecification().id(),
+                    before.providerSpecification().version(),
+                    before.selectedCategory().map(CategorySpecification::id),
+                    ReportSessionState.COLLECTION_PLANNED,
+                    submission);
+            DraftResolver.resolve(checkpoint, registry());
+            drafts.save(checkpoint);
+            persistedDraftFiles.add(before.id());
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    private boolean deleteRestartCheckpoint(ReportSessionId sessionId) {
+        if (!persistedDraftFiles.contains(sessionId)) {
+            return true;
+        }
+        try {
+            if (!drafts.delete(sessionId)) {
+                return false;
+            }
+        } catch (RuntimeException failure) {
+            return false;
+        }
+        persistedDraftFiles.remove(sessionId);
+        persistedForms.remove(sessionId);
+        return true;
     }
 
     private void scanDraftsIfNeeded() {
