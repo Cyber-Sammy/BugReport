@@ -6,7 +6,7 @@ license="Apache-2.0"
 modId="bugreport"
 version="${version}"
 displayName="Bug Report"
-description='''M0 provider discovery and side-boundary prototype.'''
+description='''Create structured, privacy-reviewed diagnostic reports for compatible Minecraft mods and export them as local ZIP archives.'''
 
 [[dependencies.bugreport]]
 modId="neoforge"

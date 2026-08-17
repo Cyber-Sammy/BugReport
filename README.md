@@ -10,11 +10,14 @@ discovers their providers deterministically through NeoForge mod metadata.
 ## Project status
 
 The M0 architecture and risk-closure milestone, the M1 contracts, registry,
-and build-foundation milestone, and the M2 secure headless reporting engine are
-complete. M3 client workflow work is in progress, with its command, provider,
-category, declarative form, and collection-plan boundaries available for
-gameplay testing, including combined file/generated collection progress,
-cancellation, sanitization, artifact review, and local ZIP export.
+and build-foundation milestone, the M2 secure headless reporting engine, and
+the M3 local-export MVP are complete. The current `0.1.0-mvp` release provides
+the complete physical-client workflow from provider/category selection through
+typed forms, bounded collection, sanitization, explicit review, restart-safe
+drafts, and user-confirmed local ZIP export.
+
+The release scope, privacy boundary, compatibility notes, and known limitations
+are summarized in [CHANGELOG.md](CHANGELOG.md).
 
 Implemented and executable:
 
@@ -151,7 +154,7 @@ ranges while constructing the task graph.
 The installable development JAR is produced at:
 
 ```text
-bugreport-neoforge/build/libs/bugreport-neoforge-0.0.1-spike.jar
+bugreport-neoforge/build/libs/bugreport-neoforge-0.1.0-mvp.jar
 ```
 
 Copy it into the `mods` directory of a Minecraft 1.21.1 NeoForge instance.

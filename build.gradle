@@ -74,6 +74,52 @@ def apiProjects = [
         project(':spike-fixtures:api-v100')
 ]
 
+def baselineApiVersion = providers.gradleProperty('api_baseline_version').get()
+def baselineApiArtifact = providers.gradleProperty('api_artifact').get()
+def baselineApiGroup = providers.gradleProperty('api_group').get()
+def baselineApiJar = layout.projectDirectory.file(
+        "config/api-baseline/${baselineApiArtifact}-${baselineApiVersion}.jar")
+def baselineApiPublicationDirectory = layout.buildDirectory.dir([
+        'spike-maven',
+        baselineApiGroup.replace('.', '/'),
+        baselineApiArtifact,
+        baselineApiVersion
+].join('/'))
+
+tasks.register('publishApiBaselineToSpikeRepository') {
+    group = 'verification'
+    description = 'Publishes the verified frozen API baseline to the isolated spike repository.'
+    dependsOn ':bugreport-api:verifyApiBaselineArtifact'
+    inputs.file(baselineApiJar)
+    outputs.files(
+            baselineApiPublicationDirectory.map {
+                it.file("${baselineApiArtifact}-${baselineApiVersion}.jar")
+            },
+            baselineApiPublicationDirectory.map {
+                it.file("${baselineApiArtifact}-${baselineApiVersion}.pom")
+            })
+
+    doLast {
+        def publicationDirectory = baselineApiPublicationDirectory.get().asFile
+        publicationDirectory.mkdirs()
+        copy {
+            from baselineApiJar
+            into publicationDirectory
+        }
+        new File(
+                publicationDirectory,
+                "${baselineApiArtifact}-${baselineApiVersion}.pom")
+                .setText("""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<project xmlns=\"http://maven.apache.org/POM/4.0.0\">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>${baselineApiGroup}</groupId>
+  <artifactId>${baselineApiArtifact}</artifactId>
+  <version>${baselineApiVersion}</version>
+</project>
+""", 'UTF-8')
+    }
+}
+
 def consumerProjects = [
         project(':bugreport-neoforge'),
         project(':example-mod'),
@@ -88,6 +134,7 @@ def consumerProjects = [
 tasks.register('publishSpikeApis') {
     group = 'verification'
     description = 'Publishes all API compatibility variants to the isolated spike repository.'
+    dependsOn tasks.named('publishApiBaselineToSpikeRepository')
     dependsOn apiProjects.collect {
         "${it.path}:publishMavenJavaPublicationToSpikeRepository"
     }
