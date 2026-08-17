@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 
 final class SourceSizeEstimatorTest {
     private static final FileTime OBSERVED_TIME = FileTime.from(Instant.EPOCH);
+    private static final Path OBSERVED_ROOT =
+            Path.of("").toAbsolutePath().resolve("synthetic-source-size-estimator-root");
 
     @Test
     void detectsAggregateOverflowWithoutAddingPastLongMaximum() {
@@ -52,7 +54,7 @@ final class SourceSizeEstimatorTest {
         return new ResolvedSourceFile(
                 LogicalRoot.GAME_LOGS,
                 RelativePath.of(name),
-                Path.of("C:/trusted/logs").resolve(name),
+                OBSERVED_ROOT.resolve(name),
                 size,
                 OBSERVED_TIME,
                 name);
