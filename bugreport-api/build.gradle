@@ -59,10 +59,21 @@ publishing {
                         distribution = 'repo'
                     }
                 }
+                developers {
+                    developer {
+                        id = 'Cyber-Sammy'
+                        name = 'Cyber-Sammy'
+                        url = 'https://github.com/Cyber-Sammy'
+                    }
+                }
                 scm {
                     connection = 'scm:git:https://github.com/Cyber-Sammy/BugReport.git'
                     developerConnection = 'scm:git:ssh://git@github.com/Cyber-Sammy/BugReport.git'
                     url = 'https://github.com/Cyber-Sammy/BugReport'
+                }
+                issueManagement {
+                    system = 'GitHub Issues'
+                    url = 'https://github.com/Cyber-Sammy/BugReport/issues'
                 }
             }
         }
@@ -75,6 +86,13 @@ publishing {
         maven {
             name = 'local'
             url = rootProject.layout.buildDirectory.dir('local-maven')
+        }
+        if (providers.gradleProperty('bugreport_public_maven_directory').isPresent()) {
+            maven {
+                name = 'public'
+                url = uri(providers.gradleProperty(
+                        'bugreport_public_maven_directory').get())
+            }
         }
     }
 }
@@ -119,7 +137,9 @@ tasks.register('verifyLocalPublication') {
         if (pom.groupId.text() != publishedGroup
                 || pom.artifactId.text() != publishedArtifact
                 || pom.version.text() != publishedVersion
-                || pom.licenses.license.name.text() != 'Apache License, Version 2.0') {
+                || pom.licenses.license.name.text() != 'Apache License, Version 2.0'
+                || pom.developers.developer.id.text() != 'Cyber-Sammy'
+                || pom.issueManagement.system.text() != 'GitHub Issues') {
             throw new GradleException("Unexpected local API POM metadata: ${pom}")
         }
     }

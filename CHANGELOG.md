@@ -35,6 +35,8 @@ First public MVP beta for Minecraft 1.21.1 on NeoForge 21.1.227 or a compatible
 
 - Runtime mod version: `0.1.0-mvp`.
 - Independently versioned loader-neutral provider API: `0.3.0`.
+- Public Gradle/Maven distribution of the API with binary, sources, Javadoc,
+  and POM artifacts attached to the GitHub release.
 - Provider fixtures cover current and supported older embedded API contracts.
 - Compatible provider mods continue to load when Bug Report is absent.
 - Persisted draft, configuration, history, and manifest formats are versioned,

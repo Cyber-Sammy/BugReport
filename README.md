@@ -307,15 +307,39 @@ If several mods embed compatible API versions, NeoForge Jar-in-Jar selects one
 compatible library version for the process. Each mod still ships only its own
 usual mod JAR; users do not manually install or reconcile separate API files.
 
-For third-party adoption, the API additionally needs a developer-facing Maven
-publication (or an API artifact attached to a GitHub release). That publication
-is a build dependency for mod authors, not another Modrinth dependency for
-players.
+For third-party adoption, the API is also published as a developer-facing Maven
+artifact and attached to each GitHub release. That publication is a build
+dependency for mod authors, not another Modrinth dependency for players.
 
 ### 1. Make the API available to Gradle
 
-The API is not published to a public Maven repository yet. Build the local
-repository first:
+Add the public Bug Report Maven repository to the integrating mod:
+
+```groovy
+repositories {
+    maven {
+        name = 'bugReport'
+        url = uri(
+                'https://raw.githubusercontent.com/'
+                        + 'Cyber-Sammy/BugReport/maven-repository/repository')
+        content {
+            includeGroup 'com.cybersammy.bugreport'
+        }
+    }
+}
+```
+
+No manual API download is required. Gradle resolves the API from this
+repository and the Jar-in-Jar dependency in the next step embeds it into the
+integrating mod's normal JAR.
+
+Binary, sources, Javadoc, and POM artifacts are also attached to the
+[corresponding GitHub release](https://github.com/Cyber-Sammy/BugReport/releases)
+for offline inspection. Those files are developer artifacts; players should
+install only `bugreport-neoforge-<version>.jar` from Modrinth.
+
+For local development against an unpublished API change, build the isolated
+local repository:
 
 ```powershell
 .\gradlew.bat :bugreport-api:publishMavenJavaPublicationToLocalRepository
@@ -327,8 +351,7 @@ This creates:
 build/local-maven
 ```
 
-Add that repository to the integrating mod. For an external project, point the
-path at the Bug Report checkout:
+Then point the integrating mod at the Bug Report checkout:
 
 ```groovy
 repositories {
@@ -342,12 +365,19 @@ repositories {
 }
 ```
 
-This local path is a development setup only. Do not publish a consumer build
-that depends on the developer's filesystem path.
+This local path is a development setup only. Released consumer builds should
+use the public repository and must not depend on the developer's filesystem
+path.
 
 The separate `publishSpikeApis` task publishes API compatibility fixtures to
 `build/spike-maven`; that repository exists for this project's executable
 version-negotiation tests and is not the normal integration repository.
+
+Publishing a GitHub release runs the `Publish Bug Report API` workflow. It
+verifies the Maven publication, appends the exact API version to the dedicated
+`maven-repository` branch, and attaches the binary, sources, Javadoc, and POM to
+that release. Published API versions are immutable: changing their bytes
+without increasing `api_version` makes the workflow fail closed.
 
 ### 2. Embed the API with Jar-in-Jar
 

@@ -1,0 +1,110 @@
+name: Publish Bug Report API
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-api
+  cancel-in-progress: false
+
+jobs:
+  publish-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the released source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-read-only: true
+
+      - name: Verify wrapper
+        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Build and verify the API publication
+        run: ./gradlew :bugreport-api:verifyLocalPublication --stacktrace
+
+      - name: Capture publication coordinates
+        id: coordinates
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_group="$(sed -n 's/^api_group=//p' gradle.properties)"
+          api_artifact="$(sed -n 's/^api_artifact=//p' gradle.properties)"
+          api_version="$(sed -n 's/^api_version=//p' gradle.properties)"
+          test -n "$api_group"
+          test -n "$api_artifact"
+          test -n "$api_version"
+          echo "group_path=${api_group//./\/}" >> "$GITHUB_OUTPUT"
+          echo "artifact=$api_artifact" >> "$GITHUB_OUTPUT"
+          echo "version=$api_version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the immutable API version to the public Maven branch
+        env:
+          GROUP_PATH: ${{ steps.coordinates.outputs.group_path }}
+          API_ARTIFACT: ${{ steps.coordinates.outputs.artifact }}
+          API_VERSION: ${{ steps.coordinates.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          worktree="$RUNNER_TEMP/maven-repository"
+
+          if git ls-remote --exit-code --heads origin maven-repository >/dev/null 2>&1; then
+            git fetch origin maven-repository
+            git worktree add -B maven-repository "$worktree" origin/maven-repository
+          else
+            git worktree add --detach "$worktree" HEAD
+            git -C "$worktree" checkout --orphan maven-repository
+            git -C "$worktree" rm -rf .
+          fi
+
+          target="$worktree/repository/${GROUP_PATH}/${API_ARTIFACT}/${API_VERSION}"
+          candidate="build/local-maven/${GROUP_PATH}/${API_ARTIFACT}/${API_VERSION}"
+          if [[ -d "$target" ]]; then
+            diff -qr "$candidate" "$target"
+            echo "${API_ARTIFACT}:${API_VERSION} is already published unchanged."
+            exit 0
+          fi
+
+          ./gradlew :bugreport-api:publishMavenJavaPublicationToPublicRepository \
+            -Pbugreport_public_maven_directory="$worktree/repository" \
+            --stacktrace
+
+          git -C "$worktree" add repository
+          git -C "$worktree" config user.name 'github-actions[bot]'
+          git -C "$worktree" config user.email \
+            '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$worktree" commit -m "publish: ${API_ARTIFACT} ${API_VERSION}"
+          git -C "$worktree" push origin HEAD:maven-repository
+
+      - name: Attach developer artifacts to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GROUP_PATH: ${{ steps.coordinates.outputs.group_path }}
+          API_ARTIFACT: ${{ steps.coordinates.outputs.artifact }}
+          API_VERSION: ${{ steps.coordinates.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          publication="build/local-maven/${GROUP_PATH}/${API_ARTIFACT}/${API_VERSION}"
+          gh release upload "$RELEASE_TAG" --clobber \
+            "$publication/${API_ARTIFACT}-${API_VERSION}.jar" \
+            "$publication/${API_ARTIFACT}-${API_VERSION}-sources.jar" \
+            "$publication/${API_ARTIFACT}-${API_VERSION}-javadoc.jar" \
+            "$publication/${API_ARTIFACT}-${API_VERSION}.pom"
