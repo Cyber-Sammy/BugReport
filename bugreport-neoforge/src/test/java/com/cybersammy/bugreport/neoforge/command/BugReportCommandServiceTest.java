@@ -498,10 +498,12 @@ final class BugReportCommandServiceTest {
                 gameDirectory.resolve("logs/client.log"),
                 "Authorization: Bearer secret_token_123456\n");
         Path draftRoot = gameDirectory.resolve("drafts");
+        FailingDraftPersistence draftPersistence = new FailingDraftPersistence(
+                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
         BugReportCommandService service = new BugReportCommandService(
                 BugReportCommandServiceTest::registry,
                 BugReportCommandService.ReportHistoryRecorder.empty(),
-                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
+                draftPersistence);
         String sessionId = (String) service.create("example_mod", "general")
                 .getFirst().arguments()[0];
         assertEquals(
@@ -661,6 +663,7 @@ final class BugReportCommandServiceTest {
         assertNotSame(exportPreparation, retryPreparation);
         var retryExport = service.prepareLocalExport(retryPreparation).orElseThrow();
         assertNotSame(export, retryExport);
+        draftPersistence.failDeletes = true;
         assertEquals(com.cybersammy.bugreport.core.transport.ReportTransportResult.Status.SUCCESS,
                 service.executeLocalExport(
                                 retryExport, gameDirectory, "report.bugreport.zip",
@@ -669,10 +672,19 @@ final class BugReportCommandServiceTest {
         assertTrue(Files.isRegularFile(gameDirectory.resolve("bugreport-exports/report.bugreport.zip")));
         assertEquals(com.cybersammy.bugreport.core.session.ReportSessionState.COMPLETED,
                 service.form(sessionId).orElseThrow().state());
-        assertFalse(Files.exists(draftRoot.resolve(sessionId + ".json")));
+        assertTrue(Files.exists(draftRoot.resolve(sessionId + ".json")));
         assertEquals(
                 BugReportCommandService.SessionResumeStatus.TERMINAL,
                 service.resumeSession(sessionId).status());
+
+        BugReportCommandService restarted = new BugReportCommandService(
+                BugReportCommandServiceTest::registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
+        assertTrue(restarted.draftRecovery().choices().isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.UNKNOWN_SESSION,
+                restarted.resumeSession(sessionId).status());
     }
 
     @Test
@@ -946,6 +958,71 @@ final class BugReportCommandServiceTest {
                 afterPlanningRestart.form(sessionId).orElseThrow().state());
         assertTrue(afterPlanningRestart.beginCollection(sessionId).isEmpty());
         assertTrue(afterPlanningRestart.beginLocalExport(sessionId).isEmpty());
+    }
+
+    @Test
+    void cancelledCollectionRemainsTerminalWhenTombstoneCleanupFails(
+            @TempDir Path gameDirectory) throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        Path draftRoot = gameDirectory.resolve("drafts");
+        FailingDraftPersistence persistence = new FailingDraftPersistence(
+                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
+        ProviderRegistrySnapshot registry = generatedRegistry(new java.util.concurrent.atomic.AtomicBoolean());
+        BugReportCommandService service = new BugReportCommandService(
+                () -> registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                persistence);
+        String sessionId = (String) service.create("generated_mod", "general")
+                .getFirst().arguments()[0];
+        assertEquals(
+                BugReportCommandService.DraftSaveStatus.SAVED,
+                service.saveFormDraft(sessionId, FormSubmission.empty()));
+        var planRequest = service.confirmForm(sessionId, FormSubmission.empty())
+                .planRequest().orElseThrow();
+        var roots = ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath());
+        var plan = new com.cybersammy.bugreport.core.source.CategoryCollectionPlanner(
+                        registry, roots, SupportedSide.PHYSICAL_CLIENT)
+                .plan(ProviderId.parse("generated_mod"), CategoryId.of("general"));
+        var reviewed = ReviewedCollectionPlan.of(
+                plan,
+                Set.of(),
+                Set.of(com.cybersammy.bugreport.api.identifier.DiagnosticGeneratorId.of("runtime")));
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+        var execution = service.beginCollection(sessionId).orElseThrow();
+        var workspace = new FileReportWorkspaceStore(
+                        gameDirectory.resolve("workspaces").toAbsolutePath())
+                .create(execution.sessionId());
+        var control = new com.cybersammy.bugreport.core.workspace.CategoryCollectionRunControl();
+        assertTrue(control.requestCancellation());
+        var cancelled = com.cybersammy.bugreport.core.workspace.CategoryCollectionCoordinator.collect(
+                registry,
+                reviewed,
+                roots,
+                SupportedSide.PHYSICAL_CLIENT,
+                workspace,
+                control,
+                command -> false);
+        assertEquals(
+                com.cybersammy.bugreport.core.workspace.CategoryCollectionResult.Status.CANCELLED,
+                cancelled.status());
+
+        persistence.failDeletes = true;
+        assertTrue(service.acceptCollectionResult(execution, cancelled, workspace));
+        assertEquals(
+                ReportSessionState.CANCELLED,
+                service.form(sessionId).orElseThrow().state());
+        assertTrue(Files.exists(draftRoot.resolve(sessionId + ".json")));
+
+        BugReportCommandService restarted = new BugReportCommandService(
+                () -> registry,
+                BugReportCommandService.ReportHistoryRecorder.empty(),
+                new FileReportDraftPersistence(new FileDraftStore(draftRoot)));
+        assertTrue(restarted.draftRecovery().choices().isEmpty());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.UNKNOWN_SESSION,
+                restarted.resumeSession(sessionId).status());
     }
 
     @Test

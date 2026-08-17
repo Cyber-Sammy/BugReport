@@ -718,11 +718,12 @@ public final class BugReportCommandService {
             case PARTIAL -> session.transitionTo(ReportSessionState.PARTIALLY_COLLECTED);
             case FAILED -> session.transitionTo(ReportSessionState.FAILED_COLLECTION);
             case CANCELLED -> {
-                if (deleteRestartCheckpoint(collecting.id())) {
-                    session.cancel(CancellationReason.USER_REQUESTED);
-                } else {
+                if (!persistTerminalTombstone(collecting, ReportSessionState.CANCELLED)) {
                     session.transitionTo(ReportSessionState.FAILED_COLLECTION);
+                    return false;
                 }
+                session.cancel(CancellationReason.USER_REQUESTED);
+                deleteRestartCheckpoint(collecting.id());
             }
         }
         collectionResults.put(collecting.id(), terminal);
@@ -1061,17 +1062,22 @@ public final class BugReportCommandService {
                     || session.snapshot().state() != ReportSessionState.DELIVERING) {
                 return Optional.empty();
             }
-            if (result.status() == ReportTransportResult.Status.SUCCESS
-                    && !deleteRestartCheckpoint(request.sessionId())) {
+            if (result.status() == ReportTransportResult.Status.SUCCESS) {
+                boolean tombstonePersisted =
+                        persistTerminalTombstone(
+                                session.snapshot(), ReportSessionState.COMPLETED);
+                if (!tombstonePersisted) {
+                    deleteRestartCheckpoint(request.sessionId());
+                }
+                session.transitionTo(ReportSessionState.COMPLETED);
+            } else {
                 session.transitionTo(ReportSessionState.FAILED_DELIVERY);
-                activeExports.remove(request.sessionId());
-                recordDeliveryHistory(session.snapshot(), null);
-                return Optional.empty();
             }
-            session.transitionTo(result.status() == ReportTransportResult.Status.SUCCESS
-                    ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
             activeExports.remove(request.sessionId());
             recordDeliveryHistory(session.snapshot(), result);
+            if (result.status() == ReportTransportResult.Status.SUCCESS) {
+                deleteRestartCheckpoint(request.sessionId());
+            }
             return Optional.of(result);
         }
     }
@@ -1261,16 +1267,49 @@ public final class BugReportCommandService {
         if (!persistedDraftFiles.contains(sessionId)) {
             return true;
         }
-        try {
-            if (!drafts.delete(sessionId)) {
-                return false;
-            }
-        } catch (RuntimeException failure) {
+        if (!deleteStoredDraftFile(sessionId)) {
             return false;
         }
         persistedDraftFiles.remove(sessionId);
         persistedForms.remove(sessionId);
         return true;
+    }
+
+    private boolean deleteStoredDraftFile(ReportSessionId sessionId) {
+        try {
+            return drafts.delete(sessionId);
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    private boolean persistTerminalTombstone(
+            ReportSessionSnapshot before, ReportSessionState terminalState) {
+        if (!terminalState.terminal()) {
+            throw new IllegalArgumentException("Restart tombstone state must be terminal");
+        }
+        if (!drafts.available() || !persistedDraftFiles.contains(before.id())) {
+            return true;
+        }
+        FormSubmission submission = confirmedForms.get(before.id());
+        if (submission == null) {
+            return false;
+        }
+        try {
+            ReportDraft tombstone = new ReportDraft(
+                    before.id(),
+                    Math.addExact(before.revision(), 1),
+                    before.providerSpecification().id(),
+                    before.providerSpecification().version(),
+                    before.selectedCategory().map(CategorySpecification::id),
+                    terminalState,
+                    submission);
+            DraftResolver.resolve(tombstone, registry());
+            drafts.save(tombstone);
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
     }
 
     private void scanDraftsIfNeeded() {
@@ -1286,6 +1325,7 @@ public final class BugReportCommandService {
             return;
         }
         draftScanFailed = batch.scanLimitReached();
+        Set<ReportSessionId> completedHistory = completedHistorySessionIds();
         ReportSessionFactory factory = new ReportSessionFactory(registry());
         for (DraftLoadOutcome outcome : batch.outcomes()) {
             if (outcome instanceof DraftLoadOutcome.Rejected rejected) {
@@ -1297,6 +1337,21 @@ public final class BugReportCommandService {
             }
             DraftLoadOutcome.Loaded loaded = (DraftLoadOutcome.Loaded) outcome;
             ReportDraft draft = loaded.decoded().draft();
+            if (draft.recordedState().terminal()
+                    || completedHistory.contains(loaded.sessionId())) {
+                if (!deleteStoredDraftFile(loaded.sessionId())) {
+                    rejectedDrafts.put(
+                            loaded.sessionId(),
+                            DraftRecoveryChoice.rejected(
+                                    loaded.sessionId(),
+                                    draft.providerId(),
+                                    draft.recordedState().terminal()
+                                            ? draft.recordedState()
+                                            : ReportSessionState.COMPLETED,
+                                    DraftRecoveryStatus.TERMINAL_DRAFT));
+                }
+                continue;
+            }
             try {
                 RecoveredReportSession recovered = factory.recover(draft);
                 if (recovered.session().snapshot().state()
@@ -1328,6 +1383,17 @@ public final class BugReportCommandService {
                                 draft.recordedState(),
                                 recoveryStatus(failure.code())));
             }
+        }
+    }
+
+    private Set<ReportSessionId> completedHistorySessionIds() {
+        try {
+            return history.entries().stream()
+                    .filter(entry -> entry.status() == ReportHistoryStatus.COMPLETED)
+                    .map(ReportHistoryEntry::sessionId)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        } catch (RuntimeException failure) {
+            return Set.of();
         }
     }
 
