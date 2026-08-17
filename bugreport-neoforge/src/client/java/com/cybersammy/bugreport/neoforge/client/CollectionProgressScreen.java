@@ -97,7 +97,11 @@ final class CollectionProgressScreen extends Screen {
     }
 
     private void presentResult(CategoryCollectionResult result, boolean accepted) {
-        if (!visible || !accepted) {
+        if (!visible) {
+            return;
+        }
+        if (!accepted) {
+            presentFailure();
             return;
         }
         terminal = true;

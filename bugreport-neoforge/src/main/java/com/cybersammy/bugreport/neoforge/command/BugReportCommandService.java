@@ -453,18 +453,14 @@ public final class BugReportCommandService {
                         .isPresent()) {
             return FormConfirmationResult.persistenceFailed();
         }
-        if (drafts.available()) {
-            try {
-                drafts.delete(snapshot.id());
-            } catch (RuntimeException failure) {
-                return FormConfirmationResult.persistenceFailed();
-            }
-            persistedForms.remove(snapshot.id());
-            persistedDraftFiles.remove(snapshot.id());
+        if (drafts.available()
+                && !persistCollectionPlanningCheckpoint(snapshot, submission)) {
+            return FormConfirmationResult.persistenceFailed();
         }
 
         session.transitionTo(ReportSessionState.COLLECTION_PLANNED);
         ReportSessionSnapshot planned = session.snapshot();
+        persistedForms.remove(planned.id());
         confirmedForms.put(planned.id(), submission);
         return FormConfirmationResult.accepted(new CollectionPlanRequest(
                 planned.id(),
@@ -721,7 +717,14 @@ public final class BugReportCommandService {
             case COMPLETE -> session.transitionTo(ReportSessionState.SANITIZING);
             case PARTIAL -> session.transitionTo(ReportSessionState.PARTIALLY_COLLECTED);
             case FAILED -> session.transitionTo(ReportSessionState.FAILED_COLLECTION);
-            case CANCELLED -> session.cancel(CancellationReason.USER_REQUESTED);
+            case CANCELLED -> {
+                if (!persistRestartTombstone(collecting, ReportSessionState.CANCELLED)) {
+                    session.transitionTo(ReportSessionState.FAILED_COLLECTION);
+                    return false;
+                }
+                session.cancel(CancellationReason.USER_REQUESTED);
+                deleteRestartCheckpoint(collecting.id());
+            }
         }
         collectionResults.put(collecting.id(), terminal);
         collectionWorkspaces.put(collecting.id(), trustedWorkspace);
@@ -1039,7 +1042,16 @@ public final class BugReportCommandService {
             if (!isActiveExport(request)) {
                 return Optional.empty();
             }
-            sessions.get(request.sessionId()).transitionTo(ReportSessionState.DELIVERING);
+            ReportSession session = sessions.get(request.sessionId());
+            ReportSessionSnapshot ready = session.snapshot();
+            if (!persistRestartTombstone(ready, ReportSessionState.DELIVERING)) {
+                session.transitionTo(ReportSessionState.DELIVERING);
+                session.transitionTo(ReportSessionState.FAILED_DELIVERY);
+                activeExports.remove(request.sessionId());
+                recordDeliveryHistory(session.snapshot(), null);
+                return Optional.empty();
+            }
+            session.transitionTo(ReportSessionState.DELIVERING);
         }
         ReportTransportResult result;
         try {
@@ -1059,10 +1071,17 @@ public final class BugReportCommandService {
                     || session.snapshot().state() != ReportSessionState.DELIVERING) {
                 return Optional.empty();
             }
-            session.transitionTo(result.status() == ReportTransportResult.Status.SUCCESS
-                    ? ReportSessionState.COMPLETED : ReportSessionState.FAILED_DELIVERY);
+            if (result.status() == ReportTransportResult.Status.SUCCESS) {
+                persistRestartTombstone(session.snapshot(), ReportSessionState.COMPLETED);
+                session.transitionTo(ReportSessionState.COMPLETED);
+            } else {
+                session.transitionTo(ReportSessionState.FAILED_DELIVERY);
+            }
             activeExports.remove(request.sessionId());
             recordDeliveryHistory(session.snapshot(), result);
+            if (result.status() == ReportTransportResult.Status.SUCCESS) {
+                deleteRestartCheckpoint(request.sessionId());
+            }
             return Optional.of(result);
         }
     }
@@ -1227,6 +1246,76 @@ public final class BugReportCommandService {
         }
     }
 
+    private boolean persistCollectionPlanningCheckpoint(
+            ReportSessionSnapshot before, FormSubmission submission) {
+        try {
+            long persistedRevision = Math.addExact(before.revision(), 1);
+            ReportDraft checkpoint = new ReportDraft(
+                    before.id(),
+                    persistedRevision,
+                    before.providerSpecification().id(),
+                    before.providerSpecification().version(),
+                    before.selectedCategory().map(CategorySpecification::id),
+                    ReportSessionState.COLLECTION_PLANNED,
+                    submission);
+            DraftResolver.resolve(checkpoint, registry());
+            drafts.save(checkpoint);
+            persistedDraftFiles.add(before.id());
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    private boolean deleteRestartCheckpoint(ReportSessionId sessionId) {
+        if (!persistedDraftFiles.contains(sessionId)) {
+            return true;
+        }
+        if (!deleteStoredDraftFile(sessionId)) {
+            return false;
+        }
+        persistedDraftFiles.remove(sessionId);
+        persistedForms.remove(sessionId);
+        return true;
+    }
+
+    private boolean deleteStoredDraftFile(ReportSessionId sessionId) {
+        try {
+            return drafts.delete(sessionId);
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    private boolean persistRestartTombstone(
+            ReportSessionSnapshot before, ReportSessionState recordedState) {
+        if (!isNonRecoverableRestartState(recordedState)) {
+            throw new IllegalArgumentException("Restart tombstone state must be non-recoverable");
+        }
+        if (!drafts.available() || !persistedDraftFiles.contains(before.id())) {
+            return true;
+        }
+        FormSubmission submission = confirmedForms.get(before.id());
+        if (submission == null) {
+            return false;
+        }
+        try {
+            ReportDraft tombstone = new ReportDraft(
+                    before.id(),
+                    Math.addExact(before.revision(), 1),
+                    before.providerSpecification().id(),
+                    before.providerSpecification().version(),
+                    before.selectedCategory().map(CategorySpecification::id),
+                    recordedState,
+                    submission);
+            DraftResolver.resolve(tombstone, registry());
+            drafts.save(tombstone);
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
     private void scanDraftsIfNeeded() {
         if (draftsScanned || !drafts.available()) {
             return;
@@ -1240,6 +1329,7 @@ public final class BugReportCommandService {
             return;
         }
         draftScanFailed = batch.scanLimitReached();
+        Set<ReportSessionId> completedHistory = completedHistorySessionIds();
         ReportSessionFactory factory = new ReportSessionFactory(registry());
         for (DraftLoadOutcome outcome : batch.outcomes()) {
             if (outcome instanceof DraftLoadOutcome.Rejected rejected) {
@@ -1251,6 +1341,25 @@ public final class BugReportCommandService {
             }
             DraftLoadOutcome.Loaded loaded = (DraftLoadOutcome.Loaded) outcome;
             ReportDraft draft = loaded.decoded().draft();
+            boolean completedByHistory = completedHistory.contains(loaded.sessionId());
+            if (isNonRecoverableRestartState(draft.recordedState()) || completedByHistory) {
+                if (!deleteStoredDraftFile(loaded.sessionId())) {
+                    ReportSessionState recordedState = completedByHistory
+                            ? ReportSessionState.COMPLETED
+                            : draft.recordedState();
+                    DraftRecoveryStatus status = recordedState.terminal()
+                            ? DraftRecoveryStatus.TERMINAL_DRAFT
+                            : DraftRecoveryStatus.NON_RECOVERABLE_CHECKPOINT;
+                    rejectedDrafts.put(
+                            loaded.sessionId(),
+                            DraftRecoveryChoice.rejected(
+                                    loaded.sessionId(),
+                                    draft.providerId(),
+                                    recordedState,
+                                    status));
+                }
+                continue;
+            }
             try {
                 RecoveredReportSession recovered = factory.recover(draft);
                 if (recovered.session().snapshot().state()
@@ -1283,6 +1392,21 @@ public final class BugReportCommandService {
                                 recoveryStatus(failure.code())));
             }
         }
+    }
+
+    private Set<ReportSessionId> completedHistorySessionIds() {
+        try {
+            return history.entries().stream()
+                    .filter(entry -> entry.status() == ReportHistoryStatus.COMPLETED)
+                    .map(ReportHistoryEntry::sessionId)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        } catch (RuntimeException failure) {
+            return Set.of();
+        }
+    }
+
+    private static boolean isNonRecoverableRestartState(ReportSessionState state) {
+        return state.terminal() || state == ReportSessionState.DELIVERING;
     }
 
     private static DraftRecoveryChoice recoveryChoice(RecoveredReportSession recovered) {
@@ -1982,6 +2106,7 @@ public final class BugReportCommandService {
         CATEGORY_MISSING,
         INVALID_FORM_STRUCTURE,
         TERMINAL_DRAFT,
+        NON_RECOVERABLE_CHECKPOINT,
         REVISION_EXHAUSTED,
         NO_SELECTED_CATEGORY
     }
