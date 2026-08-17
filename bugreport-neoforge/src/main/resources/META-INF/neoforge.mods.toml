@@ -1,12 +1,24 @@
 modLoader="javafml"
 loaderVersion="[4,)"
 license="Apache-2.0"
+issueTrackerURL="https://github.com/Cyber-Sammy/BugReport/issues"
 
 [[mods]]
 modId="bugreport"
 version="${version}"
 displayName="Bug Report"
-description='''Create structured, privacy-reviewed diagnostic reports for compatible Minecraft mods and export them as local ZIP archives.'''
+authors="Cyber-Sammy"
+displayURL="https://modrinth.com/mod/bugreportmod"
+modUrl="https://modrinth.com/mod/bugreportmod"
+logoFile="bugreport_icon.png"
+logoBlur=false
+description='''Bug Report gives players a guided, privacy-conscious way to collect useful diagnostics for compatible Minecraft mods.
+
+Integrated mods define their own report categories, form fields, logs, generated diagnostics, and screenshots. Before anything is exported, the player chooses the sources, reviews sanitized text and sensitive images, and explicitly confirms the final package.
+
+Reports are saved locally as portable .bugreport.zip archives. Bug Report does not upload or transmit report data automatically.
+
+Documentation and integration guide: https://github.com/Cyber-Sammy/BugReport'''
 
 [[dependencies.bugreport]]
 modId="neoforge"

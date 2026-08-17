@@ -3,6 +3,10 @@
 Bug Report is a NeoForge mod and integration API for creating structured,
 privacy-reviewed diagnostic reports for compatible Minecraft mods.
 
+[Modrinth](https://modrinth.com/mod/bugreportmod) ·
+[Source and documentation](https://github.com/Cyber-Sammy/BugReport) ·
+[Issue tracker](https://github.com/Cyber-Sammy/BugReport/issues)
+
 Compatible mods describe themselves through a small embedded API. They continue
 to load when Bug Report is not installed; when it is installed, Bug Report
 discovers their providers deterministically through NeoForge mod metadata.
@@ -261,6 +265,53 @@ graphical client environment.
 
 The complete reference implementation is in `example-mod`.
 
+The integration has four parts:
+
+1. embed the loader-neutral `bugreport-api` with NeoForge Jar-in-Jar;
+2. implement one `BugReportProvider` with an immutable
+   `ProviderSpecification`;
+3. model each user-selectable report type as a `CategorySpecification`, then
+   give it the fields and diagnostic references it needs;
+4. declare the provider class in the owning mod's NeoForge metadata.
+
+The provider is declarative. It describes the choices Bug Report may present,
+but it cannot open screens, copy arbitrary files, publish a report, or bypass
+the player's source selection, review, and export confirmation.
+
+### What players and integrating mods install
+
+Bug Report has one player-facing release artifact:
+
+```text
+bugreport-neoforge-<version>.jar
+```
+
+Players install that JAR when they want the reporting UI and local export
+engine. `bugreport-api` is not a second mod that players download. It is a small
+loader-neutral library embedded into each integrating mod's normal JAR through
+NeoForge Jar-in-Jar:
+
+```text
+my-mod.jar
+└── META-INF/jarjar/bugreport-api-<api-version>.jar
+```
+
+The integrating mod compiles its provider against the embedded API and declares
+the provider class in its own `neoforge.mods.toml`. It must not require the
+`bugreport` runtime mod. Without Bug Report installed, the integrating mod and
+its embedded API still load normally, but no reporting UI discovers or invokes
+the provider. With Bug Report installed, Core discovers the declaration and
+validates the provider specification.
+
+If several mods embed compatible API versions, NeoForge Jar-in-Jar selects one
+compatible library version for the process. Each mod still ships only its own
+usual mod JAR; users do not manually install or reconcile separate API files.
+
+For third-party adoption, the API additionally needs a developer-facing Maven
+publication (or an API artifact attached to a GitHub release). That publication
+is a build dependency for mod authors, not another Modrinth dependency for
+players.
+
 ### 1. Make the API available to Gradle
 
 The API is not published to a public Maven repository yet. Build the local
@@ -430,6 +481,152 @@ generated diagnostics, and support destinations by typed ID. The builder
 rejects duplicate IDs, unresolved references, cross-provider destination and
 capability IDs, unsupported physical sides, prohibited privacy declarations,
 and invalid field/constraint combinations.
+
+### 5. Define the report types
+
+A report type shown to the player is a category. Give every category a stable
+`CategoryId`, localized label and optional description, then add it to the
+provider. Use separate categories when the questions or diagnostics differ;
+do not add one category per transient game state.
+
+```java
+CategorySpecification gameplay = CategorySpecification.builder(
+                CategoryId.of("gameplay"),
+                key("category.gameplay.label"))
+        .descriptionKey(key("category.gameplay.description"))
+        .addField(StandardFields.summary())
+        .addField(StandardFields.description())
+        .addField(StandardFields.reproductionSteps())
+        .addField(StandardFields.expectedBehavior())
+        .addField(StandardFields.actualBehavior())
+        .addField(StandardFields.severity())
+        .addField(StandardFields.sideContext())
+        .build();
+
+CategorySpecification crash = CategorySpecification.builder(
+                CategoryId.of("crash"),
+                key("category.crash.label"))
+        .descriptionKey(key("category.crash.description"))
+        .addField(StandardFields.summary())
+        .addField(StandardFields.reproductionSteps())
+        .useSource(LATEST_LOG_ID)
+        .useSource(LATEST_CRASH_REPORT_ID)
+        .build();
+
+ProviderSpecification specification = ProviderSpecification.builder(
+                PROVIDER_ID,
+                ProviderVersion.parse("1.0.0"),
+                key("provider.label"))
+        .supportSide(SupportedSide.PHYSICAL_CLIENT)
+        .addSource(latestLog)
+        .addSource(latestCrashReport)
+        .addCategory(gameplay)
+        .addCategory(crash)
+        .build();
+```
+
+Sources, generated diagnostics, and destinations are declared once on the
+provider and enabled for a category by `useSource`, `useGenerator`, and
+`useDestination`. A category cannot reference an undeclared ID. A provider
+must contain at least one category, and every child must support a subset of
+the provider's physical sides.
+
+### 6. Choose the form fields
+
+Prefer the localized, bounded `StandardFields` catalog for common issue data:
+
+| Standard field | UI/value semantics | Required |
+| --- | --- | --- |
+| `summary()` | one-line summary, 1–256 characters | yes |
+| `description()` | multiline description, 1–8,000 characters | yes |
+| `reproductionSteps()` | up to 32 ordered steps | no |
+| `expectedBehavior()` | multiline expected result | no |
+| `actualBehavior()` | multiline observed result | no |
+| `severity()` | Bug Report-owned severity choice | yes |
+| `sideContext()` | Bug Report-owned side/gameplay context | yes |
+
+Provider-specific fields use `FieldSpecification.builder(...)`. The supported
+`FieldKind` values are:
+
+| Kind | Accepted declaration |
+| --- | --- |
+| `SINGLE_LINE_TEXT`, `MULTILINE_TEXT` | free text with optional character bounds |
+| `REPRODUCTION_STEPS` | ordered text items with character and item-count bounds |
+| `CHECKBOX` | boolean value; `false` remains a real submitted value |
+| `SINGLE_SELECT` | exactly one provider-declared option |
+| `MULTI_SELECT` | provider-declared options with optional item-count bounds |
+| `INTEGER` | arbitrary-precision whole number with optional inclusive bounds |
+| `DECIMAL` | arbitrary-precision decimal with optional inclusive bounds |
+| `EXPECTED_BEHAVIOR`, `ACTUAL_BEHAVIOR` | semantically labelled multiline text |
+| `SEVERITY`, `SIDE_CONTEXT` | product-owned choices; do not declare options |
+| `READ_ONLY_INFORMATION` | localized explanatory text; never submitted or required |
+
+For example, a required selection and an optional bounded number can be
+declared as follows:
+
+```java
+FieldSpecification affectedSystem = FieldSpecification.builder(
+                FieldId.of("affected_system"),
+                FieldKind.SINGLE_SELECT,
+                key("field.affected_system.label"),
+                PrivacyClassification.LOW)
+        .descriptionKey(key("field.affected_system.description"))
+        .required(true)
+        .addOption(new FieldOption(
+                FieldOptionId.of("world_generation"),
+                key("field.affected_system.world_generation")))
+        .addOption(new FieldOption(
+                FieldOptionId.of("rendering"),
+                key("field.affected_system.rendering")))
+        .build();
+
+FieldSpecification affectedChunks = FieldSpecification.builder(
+                FieldId.of("affected_chunks"),
+                FieldKind.INTEGER,
+                key("field.affected_chunks.label"),
+                PrivacyClassification.LOW)
+        .required(false)
+        .constraints(FieldConstraints.builder()
+                .minimumNumber(BigDecimal.ONE)
+                .maximumNumber(BigDecimal.valueOf(10_000))
+                .build())
+        .build();
+
+CategorySpecification performance = CategorySpecification.builder(
+                CategoryId.of("performance"),
+                key("category.performance.label"))
+        .addField(StandardFields.summary())
+        .addField(affectedSystem)
+        .addField(affectedChunks)
+        .build();
+```
+
+Selection fields require between two and 64 declared `FieldOption` values;
+the submitted IDs are revalidated against that exact set. Length constraints
+apply to text (and to each reproduction step), item constraints apply to
+reproduction steps or multi-select, and numeric constraints apply only to
+integer/decimal fields. Free-form text requires at least `PERSONAL` privacy;
+`PROHIBITED` fields are rejected rather than presented to the player.
+
+Every label and description is a localization key owned by the integrating
+mod. Put the corresponding values in
+`assets/<your_mod_id>/lang/en_us.json` (and other supported locales):
+
+```json
+{
+  "my_mod.bugreport.provider.label": "My Mod",
+  "my_mod.bugreport.category.gameplay.label": "Gameplay problem",
+  "my_mod.bugreport.category.gameplay.description": "Report behavior observed while playing.",
+  "my_mod.bugreport.field.affected_system.label": "Affected system",
+  "my_mod.bugreport.field.affected_system.description": "Choose the closest subsystem.",
+  "my_mod.bugreport.field.affected_system.world_generation": "World generation",
+  "my_mod.bugreport.field.affected_system.rendering": "Rendering"
+}
+```
+
+Bug Report builds the form from this specification, produces typed field
+values, and performs the authoritative schema/required/options/range validation
+in Core. UI validation is never a substitute for the immutable declaration.
 
 ### Bounded world-state diagnostics
 
@@ -961,7 +1158,7 @@ underscores and starts with a letter. The optional local component contains
 Unicode, punctuation, extra separators, and IDs owned by another mod; it does
 not silently normalize them.
 
-### 5. Declare the provider in NeoForge metadata
+### 7. Declare the provider in NeoForge metadata
 
 Add the provider class name to the declaring mod's block in
 `META-INF/neoforge.mods.toml`:
@@ -987,7 +1184,7 @@ tasks.named('jar', Jar) {
 }
 ```
 
-### 6. Verify optional integration
+### 8. Verify optional integration
 
 Test at least these installations:
 
