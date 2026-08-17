@@ -88,6 +88,8 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, PersistedFormDraft> persistedForms = new LinkedHashMap<>();
     private final Set<ReportSessionId> persistedDraftFiles = new LinkedHashSet<>();
     private final Map<ReportSessionId, ReviewedCollectionPlan> collectionPlans = new LinkedHashMap<>();
+    private final Map<ReportSessionId, ScreenshotSelectionDraft> screenshotSelectionDrafts =
+            new LinkedHashMap<>();
     private final Map<ReportSessionId, CategoryCollectionResult> collectionResults =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, ReportWorkspace> collectionWorkspaces = new LinkedHashMap<>();
@@ -98,6 +100,8 @@ public final class BugReportCommandService {
     private final Map<ReportSessionId, SanitizationExecutionRequest> activeSanitizations =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, WorkspaceReviewRequest> activeReviews =
+            new LinkedHashMap<>();
+    private final Map<ReportSessionId, ReviewDecision> reviewDecisionDrafts =
             new LinkedHashMap<>();
     private final Map<ReportSessionId, LocalExportPreparationRequest> activeExportPreparations =
             new LinkedHashMap<>();
@@ -236,9 +240,54 @@ public final class BugReportCommandService {
         return resumableSessionIds().stream().findFirst();
     }
 
+    /**
+     * Returns the best live report for an open command.
+     *
+     * <p>A safely resumable report is preferred. If none exists, the newest non-terminal report is
+     * returned so the caller can report its precise BUSY or UNAVAILABLE state instead of claiming
+     * that the session does not exist.
+     */
+    public synchronized Optional<String> latestSessionIdForOpen() {
+        Optional<String> resumable = latestResumableSessionId();
+        if (resumable.isPresent()) {
+            return resumable;
+        }
+        List<ReportSessionId> ids = List.copyOf(sessions.keySet());
+        for (int index = ids.size() - 1; index >= 0; index--) {
+            ReportSession session = sessions.get(ids.get(index));
+            if (session != null && !session.snapshot().state().terminal()) {
+                return Optional.of(ids.get(index).toString());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Returns privacy-minimized, human-readable identities for live reports newest-first. */
+    public synchronized List<ActiveReportChoice> activeReportChoices() {
+        List<ReportSessionId> ids = List.copyOf(sessions.keySet());
+        java.util.ArrayList<ActiveReportChoice> choices = new java.util.ArrayList<>(ids.size());
+        for (int index = ids.size() - 1; index >= 0; index--) {
+            ReportSession session = sessions.get(ids.get(index));
+            if (session == null) {
+                continue;
+            }
+            ReportSessionSnapshot snapshot = session.snapshot();
+            if (snapshot.state().terminal()) {
+                continue;
+            }
+            choices.add(new ActiveReportChoice(
+                    snapshot.id(),
+                    snapshot.providerSpecification().labelKey(),
+                    snapshot.selectedCategory().map(CategorySpecification::labelKey),
+                    snapshot.state(),
+                    snapshot.auditTrail().events().getFirst().occurredAt()));
+        }
+        return List.copyOf(choices);
+    }
+
     /** Describes the latest active report for command adapters without a resumable UI. */
     public synchronized List<Message> openLatest() {
-        return latestResumableSessionId()
+        return latestSessionIdForOpen()
                 .map(this::open)
                 .orElseGet(() -> List.of(new Message("bugreport.command.error.unknown_session")));
     }
@@ -299,7 +348,8 @@ public final class BugReportCommandService {
                 snapshot.providerSpecification().id(),
                 snapshot.providerSpecification().version(),
                 category.id());
-        return SessionResumeResult.ready(new CollectionPlanResumeTarget(request, submission));
+        return SessionResumeResult.ready(new CollectionPlanResumeTarget(
+                request, submission, Optional.ofNullable(collectionPlans.get(snapshot.id()))));
     }
 
     private SessionResumeResult sanitizationResume(ReportSessionId sessionId) {
@@ -444,6 +494,17 @@ public final class BugReportCommandService {
                 || !matchesDeclaredGenerators(snapshot, reviewedPlan)) {
             return false;
         }
+        ReviewedCollectionPlan previous = collectionPlans.get(snapshot.id());
+        ScreenshotSelectionDraft screenshotDraft = screenshotSelectionDrafts.get(snapshot.id());
+        if (sameCollectionSelection(previous, reviewedPlan)
+                && screenshotDraft != null
+                && screenshotDraft.reviewedPlan() == previous) {
+            screenshotSelectionDrafts.put(
+                    snapshot.id(),
+                    new ScreenshotSelectionDraft(reviewedPlan, screenshotDraft.selectedImages()));
+        } else {
+            screenshotSelectionDrafts.remove(snapshot.id());
+        }
         collectionPlans.put(snapshot.id(), reviewedPlan);
         return true;
     }
@@ -461,6 +522,7 @@ public final class BugReportCommandService {
         ReportSessionId sessionId = request.sessionId();
         session.transitionTo(ReportSessionState.FORM_IN_PROGRESS);
         collectionPlans.remove(sessionId);
+        screenshotSelectionDrafts.remove(sessionId);
         confirmedForms.remove(sessionId);
         activeScreenshotCaptures.remove(sessionId);
         return true;
@@ -478,6 +540,44 @@ public final class BugReportCommandService {
         ReportSession session = session(sessionValue);
         return session == null ? Optional.empty()
                 : Optional.ofNullable(collectionPlans.get(session.snapshot().id()));
+    }
+
+    /** Returns non-authoritative screenshot-picker state for the exact accepted plan. */
+    synchronized List<ScreenshotCollectionRequest.SelectedImage> screenshotSelectionDraft(
+            String sessionValue, ReviewedCollectionPlan reviewedPlan) {
+        ReportSession session = session(sessionValue);
+        if (session == null || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED) {
+            return List.of();
+        }
+        ReportSessionId id = session.snapshot().id();
+        ScreenshotSelectionDraft draft = screenshotSelectionDrafts.get(id);
+        return collectionPlans.get(id) == reviewedPlan
+                        && draft != null
+                        && draft.reviewedPlan() == reviewedPlan
+                ? draft.selectedImages()
+                : List.of();
+    }
+
+    /** Saves picker state only; collection still requires a newly validated execution request. */
+    synchronized boolean saveScreenshotSelectionDraft(
+            String sessionValue,
+            ReviewedCollectionPlan reviewedPlan,
+            List<ScreenshotCollectionRequest.SelectedImage> selectedImages) {
+        ReportSession session = session(sessionValue);
+        List<ScreenshotCollectionRequest.SelectedImage> selected = List.copyOf(
+                Objects.requireNonNull(selectedImages, "selectedImages"));
+        if (session == null
+                || session.snapshot().state() != ReportSessionState.COLLECTION_PLANNED
+                || collectionPlans.get(session.snapshot().id()) != reviewedPlan
+                || selected.size() > ScreenshotCollectionRequest.PRODUCT_MAX_SELECTED_IMAGES
+                || selected.stream().anyMatch(Objects::isNull)
+                || selected.stream().map(image -> image.relativePath().value()).distinct().count()
+                        != selected.size()) {
+            return false;
+        }
+        screenshotSelectionDrafts.put(
+                session.snapshot().id(), new ScreenshotSelectionDraft(reviewedPlan, selected));
+        return true;
     }
 
     /** Begins collection only from a currently accepted user-reviewed source selection. */
@@ -531,6 +631,7 @@ public final class BugReportCommandService {
             return Optional.empty();
         }
         activeScreenshotCaptures.remove(planned.id());
+        screenshotSelectionDrafts.remove(planned.id());
         session.transitionTo(ReportSessionState.COLLECTING);
         ReportSessionSnapshot collecting = session.snapshot();
         return Optional.of(new CollectionExecutionRequest(
@@ -737,6 +838,7 @@ public final class BugReportCommandService {
                 WorkspaceReviewRequest reviewRequest = new WorkspaceReviewRequest(
                         review.id(), review.revision(), review, evidence);
                 activeReviews.put(review.id(), reviewRequest);
+                reviewDecisionDrafts.remove(review.id());
                 return Optional.of(reviewRequest);
             }
         }
@@ -792,6 +894,42 @@ public final class BugReportCommandService {
         }
     }
 
+    /** Returns the non-authoritative UI decision draft for one exact active review. */
+    public synchronized Optional<ReviewDecision> reviewDecisionDraft(
+            WorkspaceReviewRequest request) {
+        Objects.requireNonNull(request, "request");
+        ReportSession session = sessions.get(request.sessionId());
+        if (session == null
+                || activeReviews.get(request.sessionId()) != request
+                || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                || session.snapshot().revision() != request.reviewRevision()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(reviewDecisionDrafts.get(request.sessionId()));
+    }
+
+    /** Saves review controls as UI state without issuing prepared-package authority. */
+    public synchronized boolean saveReviewDecisionDraft(
+            WorkspaceReviewRequest request, ReviewDecision decision) {
+        Objects.requireNonNull(request, "request");
+        ReviewDecision candidate = Objects.requireNonNull(decision, "decision");
+        ReportSession session = sessions.get(request.sessionId());
+        Set<String> artifactNames = request.artifacts().stream()
+                .map(WorkspaceReviewCoordinator.ArtifactReview::artifactName)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (session == null
+                || activeReviews.get(request.sessionId()) != request
+                || session.snapshot().state() != ReportSessionState.REVIEW_REQUIRED
+                || session.snapshot().revision() != request.reviewRevision()
+                || !artifactNames.containsAll(candidate.includedArtifacts())
+                || !candidate.includedArtifacts()
+                        .containsAll(candidate.explicitlyReviewedArtifacts())) {
+            return false;
+        }
+        reviewDecisionDrafts.put(request.sessionId(), candidate);
+        return true;
+    }
+
     /** Converts UI decision data into package authority for the exact service-issued review. */
     public Optional<PreparedWorkspaceSnapshot> confirmReview(
             WorkspaceReviewRequest request, ReviewDecision decision) {
@@ -828,6 +966,7 @@ public final class BugReportCommandService {
             session.transitionTo(ReportSessionState.READY);
             preparedSnapshots.put(session.snapshot().id(), authority.snapshot());
             activeReviews.remove(session.snapshot().id());
+            reviewDecisionDrafts.remove(session.snapshot().id());
             return Optional.of(authority.snapshot());
         }
     }
@@ -1046,12 +1185,14 @@ public final class BugReportCommandService {
         confirmedForms.remove(id);
         persistedForms.remove(id);
         collectionPlans.remove(id);
+        screenshotSelectionDrafts.remove(id);
         collectionResults.remove(id);
         collectionWorkspaces.remove(id);
         sanitizationBatches.remove(id);
         preparedSnapshots.remove(id);
         activeSanitizations.remove(id);
         activeReviews.remove(id);
+        reviewDecisionDrafts.remove(id);
         activeExportPreparations.remove(id);
         activeExports.remove(id);
         activeScreenshotCaptures.remove(id);
@@ -1236,6 +1377,14 @@ public final class BugReportCommandService {
                         .anyMatch(category -> category.id().equals(request.categoryId()));
     }
 
+    private static boolean sameCollectionSelection(
+            ReviewedCollectionPlan previous, ReviewedCollectionPlan candidate) {
+        return previous != null
+                && previous.collectionPlan() == candidate.collectionPlan()
+                && previous.includedSourceIds().equals(candidate.includedSourceIds())
+                && previous.includedGeneratorIds().equals(candidate.includedGeneratorIds());
+    }
+
     private static boolean matchesPlan(
             CollectionExecutionRequest request, CategoryCollectionResult result) {
         CategorySourcePlan plan = request.reviewedPlan().plan();
@@ -1417,6 +1566,25 @@ public final class BugReportCommandService {
 
     public record CategoryChoice(CategoryId id, LocalizationKey labelKey) {}
 
+    /** Privacy-minimized display identity for one non-terminal in-memory report. */
+    public record ActiveReportChoice(
+            ReportSessionId sessionId,
+            LocalizationKey providerLabelKey,
+            Optional<LocalizationKey> categoryLabelKey,
+            ReportSessionState state,
+            Instant createdAt) {
+        public ActiveReportChoice {
+            Objects.requireNonNull(sessionId, "sessionId");
+            Objects.requireNonNull(providerLabelKey, "providerLabelKey");
+            Objects.requireNonNull(categoryLabelKey, "categoryLabelKey");
+            Objects.requireNonNull(state, "state");
+            Objects.requireNonNull(createdAt, "createdAt");
+            if (state.terminal()) {
+                throw new IllegalArgumentException("Active report choice cannot be terminal");
+            }
+        }
+    }
+
     /** Trusted immutable view used by the first-party form adapter. */
     public record FormView(
             ReportSessionId sessionId,
@@ -1577,11 +1745,14 @@ public final class BugReportCommandService {
     }
 
     public record CollectionPlanResumeTarget(
-            CollectionPlanRequest request, FormSubmission submission)
+            CollectionPlanRequest request,
+            FormSubmission submission,
+            Optional<ReviewedCollectionPlan> reviewedPlan)
             implements SessionResumeTarget {
         public CollectionPlanResumeTarget {
             Objects.requireNonNull(request, "request");
             Objects.requireNonNull(submission, "submission");
+            Objects.requireNonNull(reviewedPlan, "reviewedPlan");
         }
     }
 
@@ -2008,6 +2179,15 @@ public final class BugReportCommandService {
                     || explicitlyReviewedArtifacts.stream().anyMatch(Objects::isNull)) {
                 throw new IllegalArgumentException("Review decision must not contain null");
             }
+        }
+    }
+
+    private record ScreenshotSelectionDraft(
+            ReviewedCollectionPlan reviewedPlan,
+            List<ScreenshotCollectionRequest.SelectedImage> selectedImages) {
+        private ScreenshotSelectionDraft {
+            Objects.requireNonNull(reviewedPlan, "reviewedPlan");
+            selectedImages = List.copyOf(Objects.requireNonNull(selectedImages, "selectedImages"));
         }
     }
 }

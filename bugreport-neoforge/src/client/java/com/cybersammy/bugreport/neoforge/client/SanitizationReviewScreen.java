@@ -99,12 +99,22 @@ final class SanitizationReviewScreen extends Screen {
     private void installReview(BugReportCommandService.WorkspaceReviewRequest request) {
         review = request;
         included.clear();
-        for (WorkspaceReviewCoordinator.ArtifactReview artifact : request.artifacts()) {
-            if (artifact.status() != WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED
-                    && artifact.inclusionDefault() == InclusionDefault.INCLUDED) {
-                included.add(artifact.artifactName());
-            }
-        }
+        explicitlyReviewed.clear();
+        commands.reviewDecisionDraft(request).ifPresentOrElse(
+                decision -> {
+                    included.addAll(decision.includedArtifacts());
+                    explicitlyReviewed.addAll(decision.explicitlyReviewedArtifacts());
+                },
+                () -> {
+                    for (WorkspaceReviewCoordinator.ArtifactReview artifact : request.artifacts()) {
+                        if (artifact.status()
+                                        != WorkspaceReviewCoordinator.ArtifactReviewStatus.FAILED
+                                && artifact.inclusionDefault() == InclusionDefault.INCLUDED) {
+                            included.add(artifact.artifactName());
+                        }
+                    }
+                    saveDecisionDraft();
+                });
         status = Component.translatable(
                 "bugreport.screen.review.ready", request.artifacts().size());
         ensureActiveSection(request.artifacts());
@@ -287,6 +297,7 @@ final class SanitizationReviewScreen extends Screen {
             included.remove(artifact.artifactName());
             explicitlyReviewed.remove(artifact.artifactName());
         }
+        saveDecisionDraft();
         rebuildReviewWidgets();
     }
 
@@ -294,7 +305,16 @@ final class SanitizationReviewScreen extends Screen {
         if (!explicitlyReviewed.add(artifact.artifactName())) {
             explicitlyReviewed.remove(artifact.artifactName());
         }
+        saveDecisionDraft();
         rebuildReviewWidgets();
+    }
+
+    private void saveDecisionDraft() {
+        if (review != null) {
+            commands.saveReviewDecisionDraft(
+                    review,
+                    new BugReportCommandService.ReviewDecision(included, explicitlyReviewed));
+        }
     }
 
     private boolean decisionsComplete() {

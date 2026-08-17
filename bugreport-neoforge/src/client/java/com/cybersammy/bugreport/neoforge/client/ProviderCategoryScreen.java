@@ -5,6 +5,8 @@ import com.cybersammy.bugreport.core.form.FormSubmission;
 import com.cybersammy.bugreport.core.session.ReportSessionId;
 import com.cybersammy.bugreport.neoforge.command.BugReportCommandService;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -14,20 +16,26 @@ import net.minecraft.network.chat.Component;
 /** Minimal client flow for selecting a registered provider and declared category. */
 final class ProviderCategoryScreen extends Screen {
     private final BugReportCommandService commands;
+    private final Function<String, BugReportCommandService.SessionResumeStatus> sessionOpener;
     private BugReportCommandService.ProviderChoice selectedProvider;
     private Component status;
     private CategoryFormScreen activeForm;
     private BugReportCommandService.DraftRecoveryOverview recoveryOverview;
     private boolean recoveryLoading;
 
-    ProviderCategoryScreen(BugReportCommandService commands) {
+    ProviderCategoryScreen(
+            BugReportCommandService commands,
+            Function<String, BugReportCommandService.SessionResumeStatus> sessionOpener) {
         super(Component.translatable("bugreport.screen.select_provider.title"));
-        this.commands = commands;
+        this.commands = Objects.requireNonNull(commands, "commands");
+        this.sessionOpener = Objects.requireNonNull(sessionOpener, "sessionOpener");
     }
 
-    ProviderCategoryScreen(BugReportCommandService commands,
-            BugReportCommandService.ProviderChoice selectedProvider) {
-        this(commands);
+    ProviderCategoryScreen(
+            BugReportCommandService commands,
+            BugReportCommandService.ProviderChoice selectedProvider,
+            Function<String, BugReportCommandService.SessionResumeStatus> sessionOpener) {
+        this(commands, sessionOpener);
         this.selectedProvider = selectedProvider;
     }
 
@@ -75,16 +83,27 @@ final class ProviderCategoryScreen extends Screen {
         }
         if (selectedProvider == null) {
             loadRecoveryOverview();
+            List<BugReportCommandService.ActiveReportChoice> activeReports =
+                    commands.activeReportChoices();
+            Button active = Button.builder(
+                            Component.translatable(
+                                    "bugreport.screen.active.open", activeReports.size()),
+                            ignored -> minecraft.setScreen(
+                                    new ActiveReportsScreen(commands, this, sessionOpener)))
+                    .bounds(left, height - 80, 240, 20)
+                    .build();
+            active.active = !activeReports.isEmpty();
+            addRenderableWidget(active);
             int recoveryCount = recoveryOverview == null
                     ? 0
                     : recoveryOverview.choices().size();
-            if (recoveryCount > 0) {
-                addRenderableWidget(Button.builder(
-                                Component.translatable(
-                                        "bugreport.screen.recovery.open", recoveryCount),
-                                ignored -> minecraft.setScreen(new DraftRecoveryScreen(commands, this)))
-                        .bounds(left, height - 56, 240, 20).build());
-            }
+            Button recovery = Button.builder(
+                            Component.translatable(
+                                    "bugreport.screen.recovery.open", recoveryCount),
+                            ignored -> minecraft.setScreen(new DraftRecoveryScreen(commands, this)))
+                    .bounds(left, height - 56, 240, 20).build();
+            recovery.active = !recoveryLoading && recoveryCount > 0;
+            addRenderableWidget(recovery);
             addRenderableWidget(Button.builder(Component.translatable("bugreport.screen.history.open"),
                             ignored -> minecraft.setScreen(new ReportHistoryScreen(commands, this)))
                     .bounds(left, height - 32, 116, 20).build());
@@ -186,7 +205,12 @@ final class ProviderCategoryScreen extends Screen {
                 : Component.translatable("bugreport.screen.select_category.title",
                         Component.translatable(selectedProvider.labelKey().value())), width / 2, 20, 0xFFFFFF);
         if (status != null) {
-            graphics.drawCenteredString(font, status, width / 2, height - 56, 0xFFFFFF);
+            graphics.drawCenteredString(
+                    font,
+                    status,
+                    width / 2,
+                    selectedProvider == null ? height - 96 : height - 56,
+                    0xFFFFFF);
         }
     }
 }

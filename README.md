@@ -172,8 +172,10 @@ opens a paged form generated from the provider specification. It supports text,
 reproduction steps, booleans, declared selections, arbitrary-precision numbers,
 severity, side context, and read-only information; validation remains in Core.
 `/bugreport open` reopens the most recently created currently resumable in-memory report;
-an optional exact report ID selects another active report. Active report IDs are
-offered as command suggestions. The command reopens the current safe UI checkpoint,
+when every live report is temporarily busy, it identifies the newest one as busy instead
+of claiming that no session exists. An optional exact report ID selects another active
+report. Active report IDs are offered with readable provider/category suggestion labels,
+and the provider screen exposes a readable active-report picker. The command reopens the current safe UI checkpoint,
 including the form, collection planning, artifact review, and local export confirmation.
 A still-running collection, sanitization, or delivery is reported as busy and can
 be opened after it reaches its next checkpoint.
@@ -202,6 +204,8 @@ Complete and partial results can then enter the sanitization/review screen.
 Supported text is sanitized in the private workspace off the render thread;
 failed artifacts remain unselectable, and binary artifacts or unresolved
 findings require a separate explicit confirmation before inclusion. The review
+and screenshot pickers retain their non-authoritative UI choices across an in-process
+close/reopen while Core revalidates the exact plan and review authority before use. The review
 shows metadata before its state controls and can explicitly open checksum-verified
 original and sanitized text versions in the platform application; binary artifacts
 have one exact reviewed version. Private retained originals are deleted before

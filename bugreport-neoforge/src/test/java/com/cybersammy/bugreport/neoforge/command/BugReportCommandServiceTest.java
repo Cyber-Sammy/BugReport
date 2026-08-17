@@ -58,6 +58,7 @@ import java.math.BigInteger;
 import java.nio.file.Path;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -148,6 +149,46 @@ final class BugReportCommandServiceTest {
                 .translationKey());
         assertFalse(service.acceptScreenshotCapture(revoked));
     }
+
+    @Test
+    void screenshotPickerDraftSurvivesEquivalentPlanResumeAndIsNotAuthority(
+            @TempDir Path gameDirectory) throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        ProviderRegistrySnapshot registry = screenshotRegistry();
+        BugReportCommandService service = new BugReportCommandService(() -> registry);
+        String sessionId = (String) service.create("screenshot_mod", "general")
+                .getFirst().arguments()[0];
+        var planRequest = service.confirmForm(sessionId, FormSubmission.empty())
+                .planRequest().orElseThrow();
+        var plan = new com.cybersammy.bugreport.core.source.CategoryCollectionPlanner(
+                        registry,
+                        ApprovedSourceRoots.forGameDirectory(gameDirectory.toAbsolutePath()),
+                        SupportedSide.PHYSICAL_CLIENT)
+                .plan(ProviderId.parse("screenshot_mod"), CategoryId.of("general"));
+        var reviewed = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("screenshot")), Set.of());
+        assertTrue(service.acceptCollectionPlan(planRequest, reviewed));
+        var image = new ScreenshotCollectionRequest.SelectedImage(
+                RelativePath.of("selected.png"), 42, Instant.EPOCH, "0".repeat(64));
+
+        assertTrue(service.saveScreenshotSelectionDraft(sessionId, reviewed, List.of(image)));
+        assertEquals(List.of(image), service.screenshotSelectionDraft(sessionId, reviewed));
+        var resumed = assertInstanceOf(
+                BugReportCommandService.CollectionPlanResumeTarget.class,
+                service.resumeSession(sessionId).target().orElseThrow());
+        assertSame(reviewed, resumed.reviewedPlan().orElseThrow());
+
+        var equivalent = ReviewedCollectionPlan.of(
+                plan, Set.of(DiagnosticSourceId.of("screenshot")), Set.of());
+        assertTrue(service.acceptCollectionPlan(planRequest, equivalent));
+        assertEquals(List.of(image), service.screenshotSelectionDraft(sessionId, equivalent));
+        assertTrue(service.beginCollectionWithScreenshots(
+                        sessionId, ScreenshotCollectionRequest.from(equivalent, List.of(image)))
+                .isPresent());
+        assertTrue(service.screenshotSelectionDraft(sessionId, equivalent).isEmpty());
+    }
     private final BugReportCommandService commands =
             new BugReportCommandService(ProviderRegistrySnapshot::empty);
 
@@ -222,6 +263,29 @@ final class BugReportCommandServiceTest {
     }
 
     @Test
+    void latestOpenReportsAnExistingBusySessionInsteadOfUnknown(
+            @TempDir Path gameDirectory) throws Exception {
+        Files.createDirectories(gameDirectory.resolve("logs"));
+        Files.createDirectories(gameDirectory.resolve("crash-reports"));
+        Files.createDirectories(gameDirectory.resolve("config"));
+        BugReportCommandService service =
+                new BugReportCommandService(BugReportCommandServiceTest::registry);
+        String sessionId = (String) service.create("example_mod", "general")
+                .getFirst().arguments()[0];
+        var request = service.confirmForm(sessionId, validSubmission()).planRequest().orElseThrow();
+        var reviewed = ReviewedCollectionPlan.of(emptyCategoryPlan(gameDirectory), Set.of());
+        assertTrue(service.acceptCollectionPlan(request, reviewed));
+        assertTrue(service.beginCollection(sessionId).isPresent());
+
+        assertTrue(service.latestResumableSessionId().isEmpty());
+        assertEquals(Optional.of(sessionId), service.latestSessionIdForOpen());
+        assertEquals(
+                BugReportCommandService.SessionResumeStatus.BUSY,
+                service.resumeSession(sessionId).status());
+        assertEquals(sessionId, service.openLatest().getFirst().arguments()[0]);
+    }
+
+    @Test
     void liveFormAndConfirmedPlanningCanBeReopenedWithTypedState() {
         BugReportCommandService service =
                 new BugReportCommandService(BugReportCommandServiceTest::registry);
@@ -244,6 +308,7 @@ final class BugReportCommandServiceTest {
                 planResume.target().orElseThrow());
         assertEquals(validSubmission(), planning.submission());
         assertEquals(confirmation.planRequest().orElseThrow(), planning.request());
+        assertTrue(planning.reviewedPlan().isEmpty());
     }
 
     @Test
@@ -480,6 +545,19 @@ final class BugReportCommandServiceTest {
         assertSame(review, reviewResume.request());
         Set<String> includedArtifacts = Set.of(
                 review.batch().artifacts().getFirst().artifactName());
+        var reviewDraft = new BugReportCommandService.ReviewDecision(
+                includedArtifacts, Set.of());
+        assertTrue(service.saveReviewDecisionDraft(review, reviewDraft));
+        assertEquals(reviewDraft, service.reviewDecisionDraft(review).orElseThrow());
+        assertFalse(service.saveReviewDecisionDraft(
+                review,
+                new BugReportCommandService.ReviewDecision(Set.of("unknown-artifact"), Set.of())));
+        assertSame(
+                review,
+                assertInstanceOf(
+                                BugReportCommandService.ReviewResumeTarget.class,
+                                service.resumeSession(sessionId).target().orElseThrow())
+                        .request());
         var reviewConstructor = BugReportCommandService.WorkspaceReviewRequest.class
                 .getDeclaredConstructor(
                         com.cybersammy.bugreport.core.session.ReportSessionId.class,
@@ -525,6 +603,7 @@ final class BugReportCommandServiceTest {
                 review,
                 new BugReportCommandService.ReviewDecision(includedArtifacts, Set.of()))
                 .orElseThrow();
+        assertTrue(service.reviewDecisionDraft(review).isEmpty());
         assertFalse(Files.exists(originalReviewFile.path()));
 
         assertSame(prepared, service.preparedSnapshot(sessionId).orElseThrow());

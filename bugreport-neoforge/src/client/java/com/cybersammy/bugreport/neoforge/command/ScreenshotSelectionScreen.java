@@ -89,6 +89,8 @@ public final class ScreenshotSelectionScreen extends Screen {
                 .toAbsolutePath()
                 .normalize()
                 .resolve("screenshots");
+        commands.screenshotSelectionDraft(sessionId.toString(), reviewed)
+                .forEach(image -> selected.put(image.relativePath(), image));
     }
 
     @Override
@@ -257,6 +259,7 @@ public final class ScreenshotSelectionScreen extends Screen {
     private void toggle(Candidate candidate) {
         RelativePath path = candidate.path();
         if (selected.remove(path) != null) {
+            saveSelectionDraft();
             rebuildWidgets();
             return;
         }
@@ -312,6 +315,7 @@ public final class ScreenshotSelectionScreen extends Screen {
             return;
         }
         selected.put(relativePath, result.selection());
+        saveSelectionDraft();
         releasePreview();
         previewWidth = result.image().getWidth();
         previewHeight = result.image().getHeight();
@@ -320,6 +324,13 @@ public final class ScreenshotSelectionScreen extends Screen {
         status = Component.translatable(
                 "bugreport.screen.screenshot.selected", selected.size());
         rebuildWidgets();
+    }
+
+    private void saveSelectionDraft() {
+        if (!commands.saveScreenshotSelectionDraft(
+                sessionId.toString(), reviewed, List.copyOf(selected.values()))) {
+            status = Component.translatable("bugreport.screen.screenshot.invalid");
+        }
     }
 
     private void timeoutPreviewObservation(long generation, RelativePath relativePath) {
