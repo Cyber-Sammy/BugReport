@@ -11,7 +11,7 @@ description='''Create structured, privacy-reviewed diagnostic reports for compat
 [[dependencies.bugreport]]
 modId="neoforge"
 type="required"
-versionRange="[21.1.227,)"
+versionRange="[21.1.227,21.2)"
 ordering="NONE"
 side="BOTH"
 
